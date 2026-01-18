@@ -1,0 +1,246 @@
+#cloud-config
+# SeaweedFS Cloud-Init Configuration
+# Purpose: Single-node distributed object storage with S3 API
+# Network: VLAN 12 (10.12.0.0/24) - dedicated storage network
+# Backend: LevelDB (embedded, no external database required)
+
+package_update: true
+package_upgrade: false
+locale: en_US.UTF-8
+timezone: Europe/Berlin
+
+# German keyboard layout configuration
+keyboard:
+  layout: de
+  variant: ''
+
+# Create ansible user with sudo privileges
+users:
+  - name: ansible
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDIDQZk48Wi1T+bAnWBUa22c2yhION4hY3rHGwi6c7COdZw+uTxWq03Kdu+J6xzj7ikbyIG3ifBPjgO2fwzveteTRc0U8uIRy9k7N+Y9C9WnLp8+T7ustePoqN6rqbOR7fZIFVFP+iiEAh29RtBkh+tTsNDxxJ29hxO1axS8xxdAon8zLVJZZP8ikAI6hwNUQEBsq8JgJR1ViVSUHolFLLYdtGK/GT9fWG9RlVgwiF7hjB/D4eylL+nZkNCFZWjtOklY4D8tpthV1n6MVEEVv93aof2YvH6Mgx7kZPZNwvzWaijbxAGbxPIiASfi+x2iF7Xbab9LituFBSa35uhymQ0dOfBnvLcSR4tkphW5hQ9GtFPeEusLnunjJH84sAzE9ySDw25NlrjKyNegubHRsIjPHt0YysCx/ZbrmgGeYuR8Ch7x27FU7jUZh4qxRrwy24CMpMrQ+QQZetUg9LoOeAuC9mqGd8C7GLGfsXksqM3Db1XrzSBR2sQ+sYO/NSGIo9UyvBf30PzPAZARN3FjUor+y0ffPmJzrs0CgW/TcYxEjTvBA78WQQ/LKEWAm/bmJilwqGk1XzRFOwYwhjfkEw/0TQuiMOtYObz3Q5YMHVRSKM5mQlPpRw1uAB8nIUGwfWjr+ykPjd+ZGP9/tWhzDydhfRBUzt/sbTBpvUK0pR5gw== thorsten@hornung-bn.de
+
+# Enable root SSH access with same key
+ssh_authorized_keys:
+  - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDIDQZk48Wi1T+bAnWBUa22c2yhION4hY3rHGwi6c7COdZw+uTxWq03Kdu+J6xzj7ikbyIG3ifBPjgO2fwzveteTRc0U8uIRy9k7N+Y9C9WnLp8+T7ustePoqN6rqbOR7fZIFVFP+iiEAh29RtBkh+tTsNDxxJ29hxO1axS8xxdAon8zLVJZZP8ikAI6hwNUQEBsq8JgJR1ViVSUHolFLLYdtGK/GT9fWG9RlVgwiF7hjB/D4eylL+nZkNCFZWjtOklY4D8tpthV1n6MVEEVv93aof2YvH6Mgx7kZPZNwvzWaijbxAGbxPIiASfi+x2iF7Xbab9LituFBSa35uhymQ0dOfBnvLcSR4tkphW5hQ9GtFPeEusLnunjJH84sAzE9ySDw25NlrjKyNegubHRsIjPHt0YysCx/ZbrmgGeYuR8Ch7x27FU7jUZh4qxRrwy24CMpMrQ+QQZetUg9LoOeAuC9mqGd8C7GLGfsXksqM3Db1XrzSBR2sQ+sYO/NSGIo9UyvBf30PzPAZARN3FjUor+y0ffPmJzrs0CgW/TcYxEjTvBA78WQQ/LKEWAm/bmJilwqGk1XzRFOwYwhjfkEw/0TQuiMOtYObz3Q5YMHVRSKM5mQlPpRw1uAB8nIUGwfWjr+ykPjd+ZGP9/tWhzDydhfRBUzt/sbTBpvUK0pR5gw== thorsten@hornung-bn.de
+
+ssh_pwauth: false
+disable_root: false
+
+packages:
+  - build-essential
+  - git
+  - curl
+  - wget
+  - net-tools
+  - htop
+  - iotop
+  - sysstat
+  - jq
+  - vim
+
+write_files:
+  # APT Proxy Configuration
+  - path: /etc/apt/apt.conf.d/01proxy
+    content: |
+      Acquire::http::Proxy "http://apt-cacher.hornung-bn.de:3142";
+    owner: root:root
+    permissions: '0644'
+
+  # Keyboard Configuration
+  - path: /etc/default/keyboard
+    content: |
+      XKBMODEL="pc105"
+      XKBLAYOUT="de"
+      XKBVARIANT=""
+      XKBOPTIONS=""
+      BACKSPACE="guess"
+    owner: root:root
+    permissions: '0644'
+
+  # SeaweedFS Master systemd service
+  - path: /etc/systemd/system/seaweedfs-master.service
+    content: |
+      [Unit]
+      Description=SeaweedFS Master Service
+      After=network.target
+
+      [Service]
+      Type=simple
+      User=root
+      Group=root
+      WorkingDirectory=/opt/seaweedfs
+      ExecStart=/usr/local/bin/weed master \
+          -ip=${seaweedfs_ip} \
+          -port=9333 \
+          -mdir=/mnt/seaweedfs-data/master \
+          -defaultReplication=000 \
+          -volumeSizeLimitMB=30000
+
+      Restart=on-failure
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=seaweedfs-master
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  # SeaweedFS Volume systemd service
+  - path: /etc/systemd/system/seaweedfs-volume.service
+    content: |
+      [Unit]
+      Description=SeaweedFS Volume Service
+      After=network.target seaweedfs-master.service
+      Wants=seaweedfs-master.service
+
+      [Service]
+      Type=simple
+      User=root
+      Group=root
+      WorkingDirectory=/opt/seaweedfs
+      ExecStart=/usr/local/bin/weed volume \
+          -dir=/mnt/seaweedfs-data/volumes \
+          -max=100 \
+          -mserver=${seaweedfs_ip}:9333 \
+          -port=8080 \
+          -ip=${seaweedfs_ip} \
+          -dataCenter=dc1 \
+          -rack=pve03
+
+      Restart=on-failure
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=seaweedfs-volume
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  # SeaweedFS Filer systemd service (LevelDB backend)
+  - path: /etc/systemd/system/seaweedfs-filer.service
+    content: |
+      [Unit]
+      Description=SeaweedFS Filer Service with LevelDB Backend
+      After=network.target seaweedfs-master.service seaweedfs-volume.service
+      Wants=seaweedfs-master.service seaweedfs-volume.service
+
+      [Service]
+      Type=simple
+      User=root
+      Group=root
+      WorkingDirectory=/opt/seaweedfs
+      ExecStart=/usr/local/bin/weed filer \
+          -ip=${seaweedfs_ip} \
+          -port=8888 \
+          -master=${seaweedfs_ip}:9333 \
+          -defaultStoreDir=/mnt/seaweedfs-data/filer
+
+      Restart=on-failure
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=seaweedfs-filer
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  # SeaweedFS S3 Gateway systemd service
+  - path: /etc/systemd/system/seaweedfs-s3.service
+    content: |
+      [Unit]
+      Description=SeaweedFS S3 Gateway
+      After=network.target seaweedfs-filer.service
+      Wants=seaweedfs-filer.service
+
+      [Service]
+      Type=simple
+      User=root
+      Group=root
+      WorkingDirectory=/opt/seaweedfs
+      ExecStart=/usr/local/bin/weed s3 \
+          -ip.bind=${seaweedfs_ip} \
+          -port=8333 \
+          -filer=${seaweedfs_ip}:8888
+
+      Restart=on-failure
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=seaweedfs-s3
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+runcmd:
+  # Update APT cache with proxy
+  - apt-get update
+
+  # Format and mount 500GB data disk
+  - mkfs.ext4 -F /dev/sdb
+  - mkdir -p /mnt/seaweedfs-data
+  - mount /dev/sdb /mnt/seaweedfs-data
+  - echo '/dev/sdb /mnt/seaweedfs-data ext4 defaults 0 2' >> /etc/fstab
+
+  # Create SeaweedFS directories
+  - mkdir -p /opt/seaweedfs
+  - mkdir -p /mnt/seaweedfs-data/master
+  - mkdir -p /mnt/seaweedfs-data/volumes
+  - mkdir -p /mnt/seaweedfs-data/filer
+  - mkdir -p /var/log/seaweedfs
+
+  # Download and install SeaweedFS pre-built binary (latest stable release)
+  - |
+    cd /tmp
+    wget -q "https://github.com/seaweedfs/seaweedfs/releases/download/3.82/linux_amd64.tar.gz"
+    tar -xzf linux_amd64.tar.gz
+    mv weed /usr/local/bin/weed
+    chmod +x /usr/local/bin/weed
+    rm linux_amd64.tar.gz
+
+  # Verify installation
+  - /usr/local/bin/weed version
+
+  # Reload systemd and enable services
+  - systemctl daemon-reload
+  - systemctl enable seaweedfs-master.service
+  - systemctl enable seaweedfs-volume.service
+  - systemctl enable seaweedfs-filer.service
+  - systemctl enable seaweedfs-s3.service
+
+  # Start SeaweedFS services in sequence
+  - systemctl start seaweedfs-master.service
+  - sleep 10
+  - systemctl start seaweedfs-volume.service
+  - sleep 10
+  - systemctl start seaweedfs-filer.service
+  - sleep 10
+  - systemctl start seaweedfs-s3.service
+
+  # Verify services are running
+  - systemctl status seaweedfs-master.service --no-pager
+  - systemctl status seaweedfs-volume.service --no-pager
+  - systemctl status seaweedfs-filer.service --no-pager
+  - systemctl status seaweedfs-s3.service --no-pager
+
+  # Health checks
+  - sleep 5
+  - curl -s http://${seaweedfs_ip}:9333/cluster/status || echo "Master not ready yet"
+  - curl -s http://${seaweedfs_ip}:8080/status || echo "Volume not ready yet"
+  - curl -s http://${seaweedfs_ip}:8888/dir/status || echo "Filer not ready yet"
+
+  # Display disk usage
+  - df -h /mnt/seaweedfs-data
+
+final_message: "SeaweedFS deployment complete! Services: Master:9333, Volume:8080, Filer:8888, S3:8333"
