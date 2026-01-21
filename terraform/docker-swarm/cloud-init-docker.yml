@@ -131,7 +131,6 @@ write_files:
           "max-file": "3"
         },
         "storage-driver": "overlay2",
-        "live-restore": true,
         "default-address-pools": [
           {"base": "172.20.0.0/16", "size": 24}
         ]
