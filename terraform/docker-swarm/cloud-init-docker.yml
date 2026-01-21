@@ -1,0 +1,230 @@
+#cloud-config
+# Docker Swarm Node Cloud-Init Configuration
+# Purpose: Generic Docker host for Swarm cluster
+# Features: Docker CE, LDAP/SSSD integration, dual VLAN networking
+# Hostname is set via Terraform templatefile variable: ${vm_hostname}
+
+package_update: true
+package_upgrade: false
+locale: en_US.UTF-8
+timezone: Europe/Berlin
+
+hostname: ${vm_hostname}
+fqdn: ${vm_hostname}.hornung-bn.de
+manage_etc_hosts: true
+
+keyboard:
+  layout: de
+  variant: ''
+
+users:
+  - name: ansible
+    groups: sudo, docker
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHDiYk2/cmfKjky19j+RQCDjNK1r0xd8VYi4VpR6tX/P thorsten@hornung-bn.de
+
+ssh_authorized_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHDiYk2/cmfKjky19j+RQCDjNK1r0xd8VYi4VpR6tX/P thorsten@hornung-bn.de
+
+ssh_pwauth: false
+disable_root: false
+
+write_files:
+  # APT Proxy Configuration
+  - path: /etc/apt/apt.conf.d/01proxy
+    content: |
+      Acquire::http::Proxy "http://apt-cacher.hornung-bn.de:3142";
+    owner: root:root
+    permissions: '0644'
+
+  # German Keyboard Configuration
+  - path: /etc/default/keyboard
+    content: |
+      XKBMODEL="pc105"
+      XKBLAYOUT="de"
+      XKBVARIANT=""
+      XKBOPTIONS=""
+      BACKSPACE="guess"
+    owner: root:root
+    permissions: '0644'
+
+  # SSSD Configuration for LDAP Integration
+  - path: /etc/sssd/sssd.conf
+    content: |
+      [sssd]
+      domains = default
+      config_file_version = 2
+      services = nss, pam
+
+      [domain/default]
+      id_provider = ldap
+      auth_provider = ldap
+      ldap_uri = ldap://ldap.hornung-bn.de
+      ldap_search_base = dc=ldap,dc=hornung-bn,dc=de
+      ldap_default_bind_dn = uid=root,cn=users,dc=ldap,dc=hornung-bn,dc=de
+      ldap_default_authtok = jyFD6gS1eyWAYCOe
+
+      ldap_tls_reqcert = never
+
+      cache_credentials = true
+      enumerate = true
+      entry_cache_timeout = 300
+
+      ldap_id_mapping = false
+      ldap_user_uid_number = uidNumber
+      ldap_user_gid_number = gidNumber
+      ldap_group_gid_number = gidNumber
+
+      ldap_user_search_base = cn=users,dc=ldap,dc=hornung-bn,dc=de
+      ldap_group_search_base = cn=groups,dc=ldap,dc=hornung-bn,dc=de
+
+      override_homedir = /home/%u
+      default_shell = /bin/bash
+      fallback_homedir = /home/%u
+
+      ldap_pwd_policy = none
+      debug_level = 0x0070
+    owner: root:root
+    permissions: '0600'
+
+  # PAM SSHD Configuration for LDAP
+  - path: /etc/pam.d/common-session
+    content: |
+      session [default=1]   pam_permit.so
+      session requisite     pam_deny.so
+      session required      pam_permit.so
+      session optional      pam_umask.so
+      session required      pam_unix.so
+      session optional      pam_sss.so
+      session required      pam_mkhomedir.so skel=/etc/skel umask=0022
+      session optional      pam_systemd.so
+    owner: root:root
+    permissions: '0644'
+
+  # NSSwitch Configuration for LDAP
+  - path: /etc/nsswitch.conf
+    content: |
+      passwd:         files sss systemd
+      group:          files sss systemd
+      shadow:         files sss
+      gshadow:        files
+      hosts:          files dns
+      networks:       files
+      protocols:      db files
+      services:       db files sss
+      ethers:         db files
+      rpc:            db files
+      netgroup:       nis sss
+      automount:      sss
+    owner: root:root
+    permissions: '0644'
+
+  # Docker daemon configuration
+  - path: /etc/docker/daemon.json
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "100m",
+          "max-file": "3"
+        },
+        "storage-driver": "overlay2",
+        "live-restore": true,
+        "default-address-pools": [
+          {"base": "172.20.0.0/16", "size": 24}
+        ]
+      }
+    owner: root:root
+    permissions: '0644'
+
+  # Remote Syslog to Loki/Promtail
+  - path: /etc/rsyslog.d/60-loki.conf
+    content: |
+      # Forward all logs to Loki/Promtail syslog receiver
+      # Using TCP for reliability
+      *.* @@loki.hornung-bn.de:1514
+
+      # Also send via UDP as backup
+      *.* @loki.hornung-bn.de:1514
+    owner: root:root
+    permissions: '0644'
+
+  # Sysctl settings for Docker networking
+  - path: /etc/sysctl.d/99-docker.conf
+    content: |
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward = 1
+      net.ipv4.conf.all.forwarding = 1
+      vm.swappiness = 10
+      vm.max_map_count = 262144
+    owner: root:root
+    permissions: '0644'
+
+packages:
+  - qemu-guest-agent
+  - curl
+  - wget
+  - gnupg
+  - ca-certificates
+  - apt-transport-https
+  - software-properties-common
+  - sssd
+  - sssd-ldap
+  - sssd-tools
+  - libnss-sss
+  - libpam-sss
+  - oddjob-mkhomedir
+  - jq
+  - htop
+  - iotop
+  - net-tools
+  - nfs-common
+  - open-iscsi
+
+runcmd:
+  # Configure keyboard
+  - setupcon --save-only
+  - loadkeys de
+
+  # Enable and start QEMU guest agent
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+
+  # Configure SSSD
+  - chmod 600 /etc/sssd/sssd.conf
+  - systemctl enable sssd
+  - systemctl restart sssd
+
+  # Enable PAM mkhomedir
+  - pam-auth-update --enable mkhomedir
+
+  # Install Docker CE from official Ubuntu repository
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+  # Configure Docker
+  - systemctl enable docker
+  - systemctl start docker
+  - usermod -aG docker ansible
+
+  # Apply sysctl settings
+  - sysctl --system
+
+  # Enable iSCSI for potential storage backends
+  - systemctl enable iscsid
+  - systemctl start iscsid
+
+  # Configure remote syslog to Loki
+  - systemctl restart rsyslog
+
+  # Signal cloud-init completion
+  - echo "Cloud-init completed for ${vm_hostname}" > /var/log/cloud-init-complete.log
+
+final_message: "Docker Swarm node ${vm_hostname} ready after $UPTIME seconds"
