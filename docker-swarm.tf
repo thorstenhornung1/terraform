@@ -173,16 +173,16 @@ resource "proxmox_virtual_environment_vm" "infra_nodes" {
 
   boot_order = ["scsi0"]
 
-  # Boot disk on ZFS Tank
+  # Boot disk (uses node-specific storage or default)
   disk {
-    datastore_id = var.storage_pool
+    datastore_id = coalesce(each.value.storage_pool, var.storage_pool)
     interface    = "scsi0"
     size         = var.infra_node_boot_disk_size
   }
 
-  # Data disk for SeaweedFS + Patroni on ZFS Tank (per-node size)
+  # Data disk for SeaweedFS + Patroni (per-node size and storage)
   disk {
-    datastore_id = var.storage_pool
+    datastore_id = coalesce(each.value.storage_pool, var.storage_pool)
     interface    = "scsi1"
     size         = each.value.data_disk_size
   }

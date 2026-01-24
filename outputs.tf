@@ -90,6 +90,32 @@ output "next_steps" {
     "4. Configure overlay networks for storage VLAN",
     "5. Deploy SeaweedFS on infra nodes with placement constraints",
     "6. Deploy Patroni PostgreSQL cluster on infra nodes",
-    "7. Deploy applications on app nodes"
+    "7. Deploy applications on app nodes",
+    "8. Deploy Swarmpit: ansible-playbook -i inventory-swarmpit.ini deploy-swarmpit.yml"
   ]
+}
+
+# ============================================================================
+# Swarmpit Container Output
+# ============================================================================
+
+output "swarmpit_deployment" {
+  description = "Swarmpit deployment information"
+  value = {
+    container_id = var.swarmpit_vmid
+    hostname     = var.swarmpit_hostname
+    ip_address   = var.swarmpit_ip
+    proxmox_node = var.swarmpit_node
+    resources = {
+      cpu    = "${var.swarmpit_cores} cores"
+      memory = "${var.swarmpit_memory / 1024} GB"
+      disk   = "${var.swarmpit_disk_size} GB"
+    }
+    access_urls = {
+      swarmpit_ui = "http://${var.swarmpit_ip}:888"
+      couchdb     = "http://${var.swarmpit_ip}:5984/_utils/"
+      influxdb    = "http://${var.swarmpit_ip}:8086"
+    }
+    ansible_command = "ansible-playbook -i inventory-swarmpit.ini deploy-swarmpit.yml"
+  }
 }

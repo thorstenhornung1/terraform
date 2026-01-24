@@ -1,0 +1,93 @@
+version: '3.8'
+
+# =============================================================================
+# Portainer CE Stack for Docker Swarm
+# =============================================================================
+# Deploy with: docker stack deploy -c portainer-stack.yml portainer
+# Access UI at: https://<swarmpit-ip>:9443
+#
+# Architecture:
+# - Portainer Server: Pinned to "swarmpit" node (label: portainer.data=true)
+# - Portainer Agent: Global mode (runs on ALL nodes)
+#
+# IMPORTANT: Server uses local BoltDB - must stay on same node for persistence!
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # Portainer Agent - Runs on EVERY node in the cluster (Global Mode)
+  # ===========================================================================
+  # The agent provides Docker API access from each node to the central server.
+  # Memory footprint: ~20MB per node
+  agent:
+    image: portainer/agent:2.21.5
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+    networks:
+      - agent_network
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.platform.os == linux
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+
+  # ===========================================================================
+  # Portainer Server - Pinned to "swarmpit" node
+  # ===========================================================================
+  # Central management server with web UI.
+  # Uses BoltDB (local file) - MUST stay on same node for data persistence.
+  portainer:
+    image: portainer/portainer-ce:2.21.5
+    command: -H tcp://tasks.agent:9001 --tlsskipverify
+    ports:
+      - "9443:9443"   # HTTPS Web UI
+      - "9000:9000"   # HTTP Web UI (optional, can be removed for security)
+      - "8000:8000"   # Edge Agent Tunnel (for remote/edge deployments)
+    volumes:
+      - portainer_data:/data
+    networks:
+      - agent_network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          # Pin to swarmpit-mgmt node using hostname constraint
+          - node.hostname == swarmpit-mgmt
+          # Alternative: Use label constraint (set via deploy script)
+          # - node.labels.portainer.data == true
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+
+networks:
+  agent_network:
+    driver: overlay
+    attachable: true
+    driver_opts:
+      encrypted: "true"  # Encrypt overlay network traffic
+
+volumes:
+  portainer_data:
+    driver: local
