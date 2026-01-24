@@ -1,0 +1,239 @@
+---
+# =============================================================================
+# Prepare Infrastructure Nodes for PostgreSQL HA + SeaweedFS
+# =============================================================================
+# This playbook prepares docker-infra nodes for storage services:
+#   - Sets Docker Swarm node labels for placement constraints
+#   - Mounts data disks (scsi1) for SeaweedFS volumes
+#   - Creates required directories
+#   - Installs FUSE for SeaweedFS mount
+#
+# Prerequisites:
+#   - Docker Swarm cluster initialized
+#   - Infra nodes joined to swarm as workers
+#   - Data disks attached (scsi1)
+#
+# Usage:
+#   ansible-playbook -i inventory.ini prepare-infra-nodes.yml
+# =============================================================================
+
+- name: Prepare Infrastructure Nodes
+  hosts: infra_nodes
+  become: yes
+  vars:
+    # Data disk device (scsi1 in Terraform)
+    data_disk: /dev/sdb
+    # Mount point for data disk
+    data_mount: /srv/data
+    # SeaweedFS directories
+    seaweedfs_dirs:
+      - /srv/seaweedfs/volumes
+      - /srv/seaweedfs/master
+      - /mnt/seaweedfs
+    # PostgreSQL directories
+    postgres_dirs:
+      - /var/lib/postgresql/data
+      - /var/lib/postgresql/wal_archive
+
+  tasks:
+    # =========================================================================
+    # System Packages
+    # =========================================================================
+
+    - name: Install required packages
+      apt:
+        name:
+          - fuse3
+          - xfsprogs
+          - lvm2
+          - parted
+          - python3-psycopg2
+          - awscli
+        state: present
+        update_cache: yes
+
+    - name: Ensure fuse module is loaded
+      modprobe:
+        name: fuse
+        state: present
+
+    - name: Add fuse to modules-load
+      lineinfile:
+        path: /etc/modules-load.d/fuse.conf
+        line: fuse
+        create: yes
+
+    # =========================================================================
+    # Data Disk Setup
+    # =========================================================================
+
+    - name: Check if data disk exists
+      stat:
+        path: "{{ data_disk }}"
+      register: disk_check
+
+    - name: Create partition on data disk
+      parted:
+        device: "{{ data_disk }}"
+        number: 1
+        state: present
+        part_start: 0%
+        part_end: 100%
+        fs_type: xfs
+      when: disk_check.stat.exists
+      register: partition_created
+
+    - name: Format data partition with XFS
+      filesystem:
+        fstype: xfs
+        dev: "{{ data_disk }}1"
+        opts: -L seaweedfs-data
+      when:
+        - disk_check.stat.exists
+        - partition_created.changed
+
+    - name: Create data mount point
+      file:
+        path: "{{ data_mount }}"
+        state: directory
+        mode: '0755'
+
+    - name: Mount data disk
+      mount:
+        path: "{{ data_mount }}"
+        src: "{{ data_disk }}1"
+        fstype: xfs
+        opts: defaults,noatime
+        state: mounted
+      when: disk_check.stat.exists
+
+    - name: Add data disk to fstab
+      mount:
+        path: "{{ data_mount }}"
+        src: "{{ data_disk }}1"
+        fstype: xfs
+        opts: defaults,noatime
+        state: present
+      when: disk_check.stat.exists
+
+    # =========================================================================
+    # Directory Structure
+    # =========================================================================
+
+    - name: Create SeaweedFS directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      loop: "{{ seaweedfs_dirs }}"
+
+    - name: Create SeaweedFS volumes symlink to data disk
+      file:
+        src: "{{ data_mount }}/seaweedfs"
+        dest: /srv/seaweedfs/volumes
+        state: link
+        force: yes
+      when: disk_check.stat.exists
+
+    - name: Create actual seaweedfs data directory on data disk
+      file:
+        path: "{{ data_mount }}/seaweedfs"
+        state: directory
+        mode: '0755'
+      when: disk_check.stat.exists
+
+    - name: Create PostgreSQL directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0700'
+        owner: '999'  # postgres user in container
+        group: '999'
+      loop: "{{ postgres_dirs }}"
+
+    # =========================================================================
+    # Docker Configuration
+    # =========================================================================
+
+    - name: Ensure Docker is running
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Get Docker info
+      command: docker info --format '{{ "{{" }}.Swarm.NodeID{{ "}}" }}'
+      register: docker_node_id
+      changed_when: false
+
+    - name: Display node info
+      debug:
+        msg: "Node {{ inventory_hostname }} has Docker ID: {{ docker_node_id.stdout }}"
+
+# =============================================================================
+# Set Node Labels (run on manager node)
+# =============================================================================
+
+- name: Set Docker Swarm Node Labels
+  hosts: swarm_managers[0]
+  become: yes
+  vars:
+    infra_nodes:
+      - hostname: docker-infra-1
+        labels:
+          infra_node: "1"
+          storage: "seaweedfs"
+          database: "patroni"
+      - hostname: docker-infra-2
+        labels:
+          infra_node: "2"
+          storage: "seaweedfs"
+          database: "patroni"
+      - hostname: docker-infra-3
+        labels:
+          infra_node: "3"
+          storage: "seaweedfs"
+          database: "patroni"
+
+  tasks:
+    - name: Get node IDs
+      command: docker node ls --format '{{ "{{" }}.Hostname{{ "}}" }} {{ "{{" }}.ID{{ "}}" }}'
+      register: node_list
+      changed_when: false
+
+    - name: Parse node IDs
+      set_fact:
+        node_ids: "{{ node_ids | default({}) | combine({item.split()[0]: item.split()[1]}) }}"
+      loop: "{{ node_list.stdout_lines }}"
+      when: item | length > 0
+
+    - name: Display discovered nodes
+      debug:
+        var: node_ids
+
+    - name: Set node labels
+      command: >
+        docker node update
+        {% for label, value in item.labels.items() %}
+        --label-add {{ label }}={{ value }}
+        {% endfor %}
+        {{ node_ids[item.hostname] }}
+      loop: "{{ infra_nodes }}"
+      when: item.hostname in node_ids
+      register: label_result
+      changed_when: "'already' not in label_result.stderr | default('')"
+
+    - name: Verify labels
+      command: docker node inspect {{ node_ids[item.hostname] }} --format '{{ "{{" }}.Spec.Labels{{ "}}" }}'
+      loop: "{{ infra_nodes }}"
+      when: item.hostname in node_ids
+      register: label_verify
+      changed_when: false
+
+    - name: Display labels
+      debug:
+        msg: "{{ item.item.hostname }}: {{ item.stdout }}"
+      loop: "{{ label_verify.results }}"
+      when: item.stdout is defined

@@ -1,0 +1,557 @@
+# =============================================================================
+# PostgreSQL HA Cluster Stack (Patroni + etcd)
+# =============================================================================
+# Production-grade PostgreSQL HA with:
+# - 3-node etcd cluster for consensus
+# - 3-node PostgreSQL cluster with Patroni orchestration
+# - Synchronous replication (RPO=0)
+# - Automatic failover (~30s RTO)
+# - pg_rewind for fast replica recovery
+#
+# Architecture:
+#   docker-infra-1: etcd-1 + postgres-1 (192.168.12.40)
+#   docker-infra-2: etcd-2 + postgres-2 (192.168.12.41)
+#   docker-infra-3: etcd-3 + postgres-3 (192.168.12.42)
+#
+# Deployment:
+#   1. Create secrets: ./scripts/create-postgres-secrets.sh
+#   2. Build image: docker build -t patroni-postgres:16 ./docker/
+#   3. Deploy: docker stack deploy -c postgres-ha-stack.yml postgres
+#
+# Network: Uses VLAN 12 (192.168.12.0/24) for storage/replication traffic
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # ETCD CLUSTER (3 nodes for Raft consensus)
+  # ===========================================================================
+  # etcd provides distributed key-value store for Patroni leader election
+  # Requires minimum 3 nodes for quorum (tolerates 1 node failure)
+
+  etcd-1:
+    image: quay.io/coreos/etcd:v3.5.15
+    hostname: etcd-1
+    networks:
+      - postgres-network
+    ports:
+      - target: 2379
+        published: 2379
+        protocol: tcp
+        mode: host
+      - target: 2380
+        published: 2380
+        protocol: tcp
+        mode: host
+    environment:
+      - ETCD_NAME=etcd-1
+      - ETCD_DATA_DIR=/etcd-data
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://192.168.12.40:2379
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://192.168.12.40:2380
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://192.168.12.40:2380,etcd-2=http://192.168.12.41:2380,etcd-3=http://192.168.12.42:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=patroni-etcd-cluster
+      - ETCD_ENABLE_V2=false
+      - ETCD_HEARTBEAT_INTERVAL=250
+      - ETCD_ELECTION_TIMEOUT=1250
+    volumes:
+      - etcd-data-1:/etcd-data
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  etcd-2:
+    image: quay.io/coreos/etcd:v3.5.15
+    hostname: etcd-2
+    networks:
+      - postgres-network
+    ports:
+      - target: 2379
+        published: 2379
+        protocol: tcp
+        mode: host
+      - target: 2380
+        published: 2380
+        protocol: tcp
+        mode: host
+    environment:
+      - ETCD_NAME=etcd-2
+      - ETCD_DATA_DIR=/etcd-data
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://192.168.12.41:2379
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://192.168.12.41:2380
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://192.168.12.40:2380,etcd-2=http://192.168.12.41:2380,etcd-3=http://192.168.12.42:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=patroni-etcd-cluster
+      - ETCD_ENABLE_V2=false
+      - ETCD_HEARTBEAT_INTERVAL=250
+      - ETCD_ELECTION_TIMEOUT=1250
+    volumes:
+      - etcd-data-2:/etcd-data
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 2
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  etcd-3:
+    image: quay.io/coreos/etcd:v3.5.15
+    hostname: etcd-3
+    networks:
+      - postgres-network
+    ports:
+      - target: 2379
+        published: 2379
+        protocol: tcp
+        mode: host
+      - target: 2380
+        published: 2380
+        protocol: tcp
+        mode: host
+    environment:
+      - ETCD_NAME=etcd-3
+      - ETCD_DATA_DIR=/etcd-data
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://192.168.12.42:2379
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://192.168.12.42:2380
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://192.168.12.40:2380,etcd-2=http://192.168.12.41:2380,etcd-3=http://192.168.12.42:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=patroni-etcd-cluster
+      - ETCD_ENABLE_V2=false
+      - ETCD_HEARTBEAT_INTERVAL=250
+      - ETCD_ELECTION_TIMEOUT=1250
+    volumes:
+      - etcd-data-3:/etcd-data
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 3
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ===========================================================================
+  # POSTGRESQL PATRONI CLUSTER (3 nodes)
+  # ===========================================================================
+  # Patroni orchestrates PostgreSQL HA with automatic failover
+  # Uses synchronous replication for zero data loss (RPO=0)
+
+  postgres-1:
+    image: patroni-postgres:16
+    hostname: postgres-1
+    networks:
+      - postgres-network
+    ports:
+      - target: 5432
+        published: 5432
+        protocol: tcp
+        mode: host
+      - target: 8008
+        published: 8008
+        protocol: tcp
+        mode: host
+    environment:
+      - PATRONI_SCOPE=postgres-cluster
+      - PATRONI_NAME=postgres-1
+      - PATRONI_RESTAPI_CONNECT_ADDRESS=192.168.12.40:8008
+      - PATRONI_POSTGRESQL_CONNECT_ADDRESS=192.168.12.40:5432
+      - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
+      - PATRONI_ETCD3_HOSTS=192.168.12.40:2379,192.168.12.41:2379,192.168.12.42:2379
+      - PATRONI_SUPERUSER_PASSWORD_FILE=/run/secrets/pg_superuser_password
+      - PATRONI_REPLICATION_PASSWORD_FILE=/run/secrets/pg_replication_password
+      - PATRONI_ADMIN_PASSWORD_FILE=/run/secrets/pg_admin_password
+      - PATRONI_SYNCHRONOUS_MODE=true
+      - PATRONI_SYNCHRONOUS_MODE_STRICT=false
+      - PATRONI_TTL=30
+      - PATRONI_LOOP_WAIT=10
+      - PATRONI_RETRY_TIMEOUT=10
+      - PATRONI_MAXIMUM_LAG_ON_FAILOVER=1048576
+      - PATRONI_SHARED_BUFFERS=512MB
+      - PATRONI_EFFECTIVE_CACHE_SIZE=1536MB
+      - PATRONI_MAX_CONNECTIONS=200
+      - PATRONI_WAL_KEEP_SIZE=2GB
+    secrets:
+      - pg_superuser_password
+      - pg_replication_password
+      - pg_admin_password
+    volumes:
+      - postgres-data-1:/var/lib/postgresql/data
+      - postgres-wal-1:/var/lib/postgresql/wal_archive
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  postgres-2:
+    image: patroni-postgres:16
+    hostname: postgres-2
+    networks:
+      - postgres-network
+    ports:
+      - target: 5432
+        published: 5432
+        protocol: tcp
+        mode: host
+      - target: 8008
+        published: 8008
+        protocol: tcp
+        mode: host
+    environment:
+      - PATRONI_SCOPE=postgres-cluster
+      - PATRONI_NAME=postgres-2
+      - PATRONI_RESTAPI_CONNECT_ADDRESS=192.168.12.41:8008
+      - PATRONI_POSTGRESQL_CONNECT_ADDRESS=192.168.12.41:5432
+      - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
+      - PATRONI_ETCD3_HOSTS=192.168.12.40:2379,192.168.12.41:2379,192.168.12.42:2379
+      - PATRONI_SUPERUSER_PASSWORD_FILE=/run/secrets/pg_superuser_password
+      - PATRONI_REPLICATION_PASSWORD_FILE=/run/secrets/pg_replication_password
+      - PATRONI_ADMIN_PASSWORD_FILE=/run/secrets/pg_admin_password
+      - PATRONI_SYNCHRONOUS_MODE=true
+      - PATRONI_SYNCHRONOUS_MODE_STRICT=false
+      - PATRONI_TTL=30
+      - PATRONI_LOOP_WAIT=10
+      - PATRONI_RETRY_TIMEOUT=10
+      - PATRONI_MAXIMUM_LAG_ON_FAILOVER=1048576
+      - PATRONI_SHARED_BUFFERS=512MB
+      - PATRONI_EFFECTIVE_CACHE_SIZE=1536MB
+      - PATRONI_MAX_CONNECTIONS=200
+      - PATRONI_WAL_KEEP_SIZE=2GB
+    secrets:
+      - pg_superuser_password
+      - pg_replication_password
+      - pg_admin_password
+    volumes:
+      - postgres-data-2:/var/lib/postgresql/data
+      - postgres-wal-2:/var/lib/postgresql/wal_archive
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 2
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  postgres-3:
+    image: patroni-postgres:16
+    hostname: postgres-3
+    networks:
+      - postgres-network
+    ports:
+      - target: 5432
+        published: 5432
+        protocol: tcp
+        mode: host
+      - target: 8008
+        published: 8008
+        protocol: tcp
+        mode: host
+    environment:
+      - PATRONI_SCOPE=postgres-cluster
+      - PATRONI_NAME=postgres-3
+      - PATRONI_RESTAPI_CONNECT_ADDRESS=192.168.12.42:8008
+      - PATRONI_POSTGRESQL_CONNECT_ADDRESS=192.168.12.42:5432
+      - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
+      - PATRONI_ETCD3_HOSTS=192.168.12.40:2379,192.168.12.41:2379,192.168.12.42:2379
+      - PATRONI_SUPERUSER_PASSWORD_FILE=/run/secrets/pg_superuser_password
+      - PATRONI_REPLICATION_PASSWORD_FILE=/run/secrets/pg_replication_password
+      - PATRONI_ADMIN_PASSWORD_FILE=/run/secrets/pg_admin_password
+      - PATRONI_SYNCHRONOUS_MODE=true
+      - PATRONI_SYNCHRONOUS_MODE_STRICT=false
+      - PATRONI_TTL=30
+      - PATRONI_LOOP_WAIT=10
+      - PATRONI_RETRY_TIMEOUT=10
+      - PATRONI_MAXIMUM_LAG_ON_FAILOVER=1048576
+      - PATRONI_SHARED_BUFFERS=512MB
+      - PATRONI_EFFECTIVE_CACHE_SIZE=1536MB
+      - PATRONI_MAX_CONNECTIONS=200
+      - PATRONI_WAL_KEEP_SIZE=2GB
+    secrets:
+      - pg_superuser_password
+      - pg_replication_password
+      - pg_admin_password
+    volumes:
+      - postgres-data-3:/var/lib/postgresql/data
+      - postgres-wal-3:/var/lib/postgresql/wal_archive
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 3
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ===========================================================================
+  # PGBOUNCER (Connection Pooler) - Optional
+  # ===========================================================================
+  # Provides connection pooling and automatic primary routing
+  # Deploy on manager nodes for application access via VLAN 4
+
+  pgbouncer:
+    image: bitnami/pgbouncer:1.23.1
+    hostname: pgbouncer
+    networks:
+      - postgres-network
+    ports:
+      - target: 6432
+        published: 6432
+        protocol: tcp
+        mode: ingress
+    environment:
+      - PGBOUNCER_DATABASE=*
+      - PGBOUNCER_PORT=6432
+      - PGBOUNCER_POOL_MODE=transaction
+      - PGBOUNCER_DEFAULT_POOL_SIZE=25
+      - PGBOUNCER_MIN_POOL_SIZE=5
+      - PGBOUNCER_RESERVE_POOL_SIZE=5
+      - PGBOUNCER_MAX_CLIENT_CONN=200
+      - PGBOUNCER_MAX_DB_CONNECTIONS=100
+      - PGBOUNCER_IGNORE_STARTUP_PARAMETERS=extra_float_digits
+      # Will be configured to point to Patroni leader via HAProxy or Consul
+      - POSTGRESQL_HOST=192.168.12.40
+      - POSTGRESQL_PORT=5432
+      - POSTGRESQL_USERNAME=postgres
+      - POSTGRESQL_PASSWORD_FILE=/run/secrets/pg_superuser_password
+    secrets:
+      - pg_superuser_password
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      update_config:
+        parallelism: 1
+        delay: 10s
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "6432"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ===========================================================================
+  # POSTGRES EXPORTER (Prometheus Metrics)
+  # ===========================================================================
+  # Exports PostgreSQL metrics for Prometheus monitoring
+  # Scrape endpoint: http://<any-manager>:9187/metrics
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    hostname: postgres-exporter
+    networks:
+      - postgres-network
+    ports:
+      - target: 9187
+        published: 9187
+        protocol: tcp
+        mode: ingress
+    environment:
+      # Connect to the PostgreSQL cluster (will auto-discover leader via PgBouncer)
+      - DATA_SOURCE_URI=192.168.12.40:5432/postgres?sslmode=disable
+      - DATA_SOURCE_USER=postgres
+      - DATA_SOURCE_PASS_FILE=/run/secrets/pg_superuser_password
+      - PG_EXPORTER_AUTO_DISCOVER_DATABASES=true
+      - PG_EXPORTER_EXCLUDE_DATABASES=template0,template1
+    secrets:
+      - pg_superuser_password
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9187/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  postgres-network:
+    driver: overlay
+    attachable: true
+    driver_opts:
+      encrypted: "true"
+    ipam:
+      config:
+        - subnet: 10.0.20.0/24
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  # etcd data volumes
+  etcd-data-1:
+    driver: local
+  etcd-data-2:
+    driver: local
+  etcd-data-3:
+    driver: local
+
+  # PostgreSQL data volumes
+  postgres-data-1:
+    driver: local
+  postgres-data-2:
+    driver: local
+  postgres-data-3:
+    driver: local
+
+  # WAL archive volumes
+  postgres-wal-1:
+    driver: local
+  postgres-wal-2:
+    driver: local
+  postgres-wal-3:
+    driver: local
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  pg_superuser_password:
+    external: true
+  pg_replication_password:
+    external: true
+  pg_admin_password:
+    external: true

@@ -1,0 +1,104 @@
+# =============================================================================
+# SeaweedFS Filer Configuration
+# =============================================================================
+# This configuration enables PostgreSQL as the metadata store for true
+# active-active HA across multiple filer instances.
+#
+# Architecture:
+#   - All 3 filers connect to the same PostgreSQL cluster (via Patroni)
+#   - PostgreSQL handles metadata consistency and replication
+#   - Any filer can serve read/write requests
+#   - Filer failures don't affect metadata availability
+#
+# Prerequisites:
+#   - PostgreSQL HA cluster deployed
+#   - Database 'seaweedfs' created with 'filemeta' table
+#   - User 'seaweedfs' with appropriate permissions
+# =============================================================================
+
+# Disable embedded LevelDB (we're using PostgreSQL)
+[leveldb2]
+enabled = false
+
+[leveldb3]
+enabled = false
+
+# =============================================================================
+# PostgreSQL Metadata Store (Primary - HA)
+# =============================================================================
+# Connects to the PostgreSQL Patroni cluster for shared metadata
+# All 3 filers use the same PostgreSQL backend for consistency
+
+[postgres2]
+enabled = true
+
+# Connection to PostgreSQL cluster
+# Using PgBouncer for connection pooling and automatic failover
+hostname = "192.168.12.40"
+port = 5432
+username = "seaweedfs"
+# Password loaded from Docker secret (mounted at /run/secrets/)
+passwordFile = "/run/secrets/seaweedfs_db_password"
+database = "seaweedfs"
+schema = "public"
+
+# SSL Configuration (disable for internal network, enable for production)
+sslmode = "disable"
+
+# Connection Pooling
+connection_max_idle = 10
+connection_max_open = 50
+connection_max_lifetime_seconds = 3600
+
+# =============================================================================
+# Filer Options
+# =============================================================================
+
+[filer.options]
+# Enable recursive delete
+recursive_delete = true
+# Maximum entries in a directory listing
+max_entries_for_dir_listing = 100000
+
+# =============================================================================
+# Notification (Optional - for event-driven architectures)
+# =============================================================================
+# Uncomment to enable notifications when files change
+
+# [notification.kafka]
+# enabled = false
+# hosts = ["kafka1:9092", "kafka2:9092"]
+# topic = "seaweedfs-events"
+
+# [notification.aws_sqs]
+# enabled = false
+# region = "us-east-1"
+# queue_name = "seaweedfs-events"
+
+# =============================================================================
+# S3 API Configuration
+# =============================================================================
+
+[filer.s3]
+# Enable anonymous read access (set to false for production)
+allow_anonymous_read = false
+
+# S3 signature versions
+auths_v4_enabled = true
+
+# Default bucket location
+region = "us-east-1"
+
+# =============================================================================
+# Cache Configuration
+# =============================================================================
+
+[filer.cache]
+# Enable metadata caching
+enabled = true
+
+# Cache expiration
+expire_after_seconds = 300
+
+# Maximum cache size
+max_cache_size_mb = 256

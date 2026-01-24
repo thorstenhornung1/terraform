@@ -1,0 +1,27 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+
+# Secrets (NEVER commit!)
+*.env
+.env.*
+secrets.yml
+*-secrets.yml
+*.key
+*.pem
+
+# Local overrides
+docker-compose.override.yml
+*-local.yml

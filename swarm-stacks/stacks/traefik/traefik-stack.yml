@@ -1,0 +1,116 @@
+version: "3.8"
+
+services:
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    environment:
+      CONTAINERS: "1"
+      SERVICES: "1"
+      TASKS: "1"
+      NETWORKS: "1"
+      NODES: "1"
+      SWARM: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik_internal
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.labels.app == true
+      restart_policy:
+        condition: on-failure
+
+  traefik:
+    image: traefik:v3.1
+    secrets:
+      - traefik_dns_api_token
+      - traefik_dashboard_auth
+    environment:
+      CF_DNS_API_TOKEN_FILE: /run/secrets/traefik_dns_api_token
+
+    command:
+      # Logging
+      - --log.level=INFO
+      - --accesslog=true
+
+      # Docker Swarm Provider
+      - --providers.docker=true
+      - --providers.docker.swarmMode=true
+      - --providers.docker.endpoint=tcp://docker-socket-proxy:2375
+      - --providers.docker.exposedbydefault=false
+
+      # EntryPoints
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+
+      # ACME DNS-01 (Wildcard)
+      - --certificatesresolvers.dns.acme.email=admin@hornung-bn.de
+      - --certificatesresolvers.dns.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.dns.acme.dnschallenge=true
+      - --certificatesresolvers.dns.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.dns.acme.dnschallenge.delaybeforecheck=10
+
+      # Dashboard
+      - --api.dashboard=true
+      - --api.insecure=false
+
+      # Healthcheck
+      - --ping=true
+
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: ingress
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: ingress
+
+    volumes:
+      - traefik_letsencrypt:/letsencrypt
+
+    networks:
+      - traefik_public
+      - traefik_internal
+
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.labels.app == true
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+      labels:
+        # Traefik Dashboard
+        - traefik.enable=true
+        - traefik.http.routers.traefik.rule=Host(`traefik.hornung-bn.de`)
+        - traefik.http.routers.traefik.entrypoints=websecure
+        - traefik.http.routers.traefik.tls=true
+        - traefik.http.routers.traefik.tls.certresolver=dns
+        - traefik.http.routers.traefik.service=api@internal
+        - traefik.http.routers.traefik.middlewares=traefik-auth
+        - traefik.http.middlewares.traefik-auth.basicauth.usersFile=/run/secrets/traefik_dashboard_auth
+
+networks:
+  traefik_public:
+    external: true
+
+  traefik_internal:
+    driver: overlay
+    internal: true
+
+volumes:
+  traefik_letsencrypt:
+
+secrets:
+  traefik_dns_api_token:
+    external: true
+  traefik_dashboard_auth:
+    external: true

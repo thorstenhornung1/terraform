@@ -1,0 +1,749 @@
+# =============================================================================
+# SeaweedFS HA Cluster Stack
+# =============================================================================
+# Production-grade distributed storage with full high availability:
+# - 3 Master servers (Raft consensus for leader election)
+# - 3 Volume servers (data storage with 001 replication = 2 copies)
+# - 3 Filer servers (PostgreSQL metadata for active-active HA)
+# - 3 FUSE mounts (POSIX access on each infra node)
+# - S3 API endpoint (load balanced across all filers)
+#
+# Architecture:
+#   docker-infra-1: master-1 + volume-1 + filer-1 + mount-1 (192.168.12.40)
+#   docker-infra-2: master-2 + volume-2 + filer-2 + mount-2 (192.168.12.41)
+#   docker-infra-3: master-3 + volume-3 + filer-3 + mount-3 (192.168.12.42)
+#
+# Prerequisites:
+#   1. PostgreSQL HA cluster deployed (postgres stack)
+#   2. SeaweedFS database created in PostgreSQL
+#   3. Node labels set: infra_node=1/2/3
+#   4. Directories created: /srv/seaweedfs/*, /mnt/seaweedfs
+#
+# Deployment:
+#   1. Create database: ./create-seaweedfs-db.sh
+#   2. Deploy: docker stack deploy -c seaweedfs-ha-stack.yml seaweedfs
+#
+# Access:
+#   - S3 API: http://192.168.4.40:8333 (any filer, load balanced)
+#   - Filer HTTP: http://192.168.4.40:8888
+#   - Master API: http://192.168.12.40:9333
+#   - POSIX: /mnt/seaweedfs (on each infra node)
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # SEAWEEDFS MASTER CLUSTER (3 nodes with Raft)
+  # ===========================================================================
+  # Masters coordinate the cluster and handle volume assignment
+  # Raft consensus ensures only one active leader at a time
+  # Tolerates 1 master failure (requires 2/3 for quorum)
+
+  master-1:
+    image: chrislusf/seaweedfs:3.79
+    hostname: master-1
+    networks:
+      - seaweedfs-network
+    ports:
+      - target: 9333
+        published: 9333
+        protocol: tcp
+        mode: host
+      - target: 19333
+        published: 19333
+        protocol: tcp
+        mode: host
+    command:
+      - master
+      - -ip=192.168.12.40
+      - -ip.bind=0.0.0.0
+      - -port=9333
+      - -port.grpc=19333
+      - -mdir=/data/master
+      - -peers=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
+      - -defaultReplication=001
+      - -volumeSizeLimitMB=30000
+      - -volumePreallocate=false
+      - -garbageThreshold=0.3
+      - -metricsPort=9324
+    volumes:
+      - master-data-1:/data/master
+    environment:
+      - WEED_MASTER_VOLUME_GROWTH_COPY_1=7
+      - WEED_MASTER_VOLUME_GROWTH_COPY_2=3
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9333/cluster/status"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  master-2:
+    image: chrislusf/seaweedfs:3.79
+    hostname: master-2
+    networks:
+      - seaweedfs-network
+    ports:
+      - target: 9333
+        published: 9333
+        protocol: tcp
+        mode: host
+      - target: 19333
+        published: 19333
+        protocol: tcp
+        mode: host
+    command:
+      - master
+      - -ip=192.168.12.41
+      - -ip.bind=0.0.0.0
+      - -port=9333
+      - -port.grpc=19333
+      - -mdir=/data/master
+      - -peers=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
+      - -defaultReplication=001
+      - -volumeSizeLimitMB=30000
+      - -volumePreallocate=false
+      - -garbageThreshold=0.3
+      - -metricsPort=9324
+    volumes:
+      - master-data-2:/data/master
+    environment:
+      - WEED_MASTER_VOLUME_GROWTH_COPY_1=7
+      - WEED_MASTER_VOLUME_GROWTH_COPY_2=3
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 2
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9333/cluster/status"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  master-3:
+    image: chrislusf/seaweedfs:3.79
+    hostname: master-3
+    networks:
+      - seaweedfs-network
+    ports:
+      - target: 9333
+        published: 9333
+        protocol: tcp
+        mode: host
+      - target: 19333
+        published: 19333
+        protocol: tcp
+        mode: host
+    command:
+      - master
+      - -ip=192.168.12.42
+      - -ip.bind=0.0.0.0
+      - -port=9333
+      - -port.grpc=19333
+      - -mdir=/data/master
+      - -peers=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
+      - -defaultReplication=001
+      - -volumeSizeLimitMB=30000
+      - -volumePreallocate=false
+      - -garbageThreshold=0.3
+      - -metricsPort=9324
+    volumes:
+      - master-data-3:/data/master
+    environment:
+      - WEED_MASTER_VOLUME_GROWTH_COPY_1=7
+      - WEED_MASTER_VOLUME_GROWTH_COPY_2=3
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9333/cluster/status"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ===========================================================================
+  # SEAWEEDFS VOLUME SERVERS (3 nodes)
+  # ===========================================================================
+  # Volume servers store the actual file data
+  # Replication 001 = each volume has 1 additional copy on different server
+  # Tolerates 1 volume server failure without data loss
+
+  volume-1:
+    image: chrislusf/seaweedfs:3.79
+    hostname: volume-1
+    networks:
+      - seaweedfs-network
+    ports:
+      - target: 8080
+        published: 8080
+        protocol: tcp
+        mode: host
+      - target: 18080
+        published: 18080
+        protocol: tcp
+        mode: host
+    command:
+      - volume
+      - -ip=192.168.12.40
+      - -ip.bind=0.0.0.0
+      - -port=8080
+      - -port.grpc=18080
+      - -mserver=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
+      - -dir=/data/volumes
+      - -max=0
+      - -rack=rack1
+      - -dataCenter=dc1
+      - -compactionMBps=50
+      - -metricsPort=9325
+      - -minFreeSpace=5%
+    volumes:
+      - /srv/seaweedfs/volumes:/data/volumes
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/status"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  volume-2:
+    image: chrislusf/seaweedfs:3.79
+    hostname: volume-2
+    networks:
+      - seaweedfs-network
+    ports:
+      - target: 8080
+        published: 8080
+        protocol: tcp
+        mode: host
+      - target: 18080
+        published: 18080
+        protocol: tcp
+        mode: host
+    command:
+      - volume
+      - -ip=192.168.12.41
+      - -ip.bind=0.0.0.0
+      - -port=8080
+      - -port.grpc=18080
+      - -mserver=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
+      - -dir=/data/volumes
+      - -max=0
+      - -rack=rack2
+      - -dataCenter=dc1
+      - -compactionMBps=50
+      - -metricsPort=9325
+      - -minFreeSpace=5%
+    volumes:
+      - /srv/seaweedfs/volumes:/data/volumes
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 2
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/status"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  volume-3:
+    image: chrislusf/seaweedfs:3.79
+    hostname: volume-3
+    networks:
+      - seaweedfs-network
+    ports:
+      - target: 8080
+        published: 8080
+        protocol: tcp
+        mode: host
+      - target: 18080
+        published: 18080
+        protocol: tcp
+        mode: host
+    command:
+      - volume
+      - -ip=192.168.12.42
+      - -ip.bind=0.0.0.0
+      - -port=8080
+      - -port.grpc=18080
+      - -mserver=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
+      - -dir=/data/volumes
+      - -max=0
+      - -rack=rack3
+      - -dataCenter=dc1
+      - -compactionMBps=50
+      - -metricsPort=9325
+      - -minFreeSpace=5%
+    volumes:
+      - /srv/seaweedfs/volumes:/data/volumes
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 3
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/status"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ===========================================================================
+  # SEAWEEDFS FILER SERVERS (3 nodes - Active-Active HA)
+  # ===========================================================================
+  # Filers provide file system abstraction and S3 API
+  # Using PostgreSQL for shared metadata enables true active-active operation
+  # All 3 filers can serve read/write requests simultaneously
+  # Tolerates any 2 filer failures (clients can use any available filer)
+
+  filer-1:
+    image: chrislusf/seaweedfs:3.79
+    hostname: filer-1
+    networks:
+      - seaweedfs-network
+    ports:
+      # Filer HTTP API (VLAN 4 - accessible to apps)
+      - target: 8888
+        published: 8888
+        protocol: tcp
+        mode: host
+      # S3 API endpoint
+      - target: 8333
+        published: 8333
+        protocol: tcp
+        mode: host
+      # gRPC port
+      - target: 18888
+        published: 18888
+        protocol: tcp
+        mode: host
+    command:
+      - filer
+      - -ip=192.168.12.40
+      - -ip.bind=0.0.0.0
+      - -port=8888
+      - -port.grpc=18888
+      - -master=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
+      - -s3
+      - -s3.port=8333
+      - -s3.allowEmptyFolder=true
+      - -defaultReplicaPlacement=001
+      - -metricsPort=9326
+      - -filer.path=/
+    configs:
+      - source: filer_config
+        target: /etc/seaweedfs/filer.toml
+        mode: 0644
+    secrets:
+      - seaweedfs_db_password
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8888/"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  filer-2:
+    image: chrislusf/seaweedfs:3.79
+    hostname: filer-2
+    networks:
+      - seaweedfs-network
+    ports:
+      - target: 8888
+        published: 8888
+        protocol: tcp
+        mode: host
+      - target: 8333
+        published: 8333
+        protocol: tcp
+        mode: host
+      - target: 18888
+        published: 18888
+        protocol: tcp
+        mode: host
+    command:
+      - filer
+      - -ip=192.168.12.41
+      - -ip.bind=0.0.0.0
+      - -port=8888
+      - -port.grpc=18888
+      - -master=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
+      - -s3
+      - -s3.port=8333
+      - -s3.allowEmptyFolder=true
+      - -defaultReplicaPlacement=001
+      - -metricsPort=9326
+      - -filer.path=/
+    configs:
+      - source: filer_config
+        target: /etc/seaweedfs/filer.toml
+        mode: 0644
+    secrets:
+      - seaweedfs_db_password
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 2
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8888/"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  filer-3:
+    image: chrislusf/seaweedfs:3.79
+    hostname: filer-3
+    networks:
+      - seaweedfs-network
+    ports:
+      - target: 8888
+        published: 8888
+        protocol: tcp
+        mode: host
+      - target: 8333
+        published: 8333
+        protocol: tcp
+        mode: host
+      - target: 18888
+        published: 18888
+        protocol: tcp
+        mode: host
+    command:
+      - filer
+      - -ip=192.168.12.42
+      - -ip.bind=0.0.0.0
+      - -port=8888
+      - -port.grpc=18888
+      - -master=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
+      - -s3
+      - -s3.port=8333
+      - -s3.allowEmptyFolder=true
+      - -defaultReplicaPlacement=001
+      - -metricsPort=9326
+      - -filer.path=/
+    configs:
+      - source: filer_config
+        target: /etc/seaweedfs/filer.toml
+        mode: 0644
+    secrets:
+      - seaweedfs_db_password
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 3
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8888/"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ===========================================================================
+  # WEED MOUNT (FUSE) - POSIX Access (3 nodes)
+  # ===========================================================================
+  # Provides POSIX file system interface via FUSE
+  # Each infra node gets a local mount for applications like Frigate
+  # Requires privileged mode for FUSE device access
+
+  mount-1:
+    image: chrislusf/seaweedfs:3.79
+    hostname: mount-1
+    networks:
+      - seaweedfs-network
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse:/dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    command:
+      - mount
+      - -filer=192.168.12.40:8888,192.168.12.41:8888,192.168.12.42:8888
+      - -dir=/mnt/seaweedfs
+      - -filer.path=/
+      - -allowOthers=true
+      - -cacheDir=/tmp/seaweedfs-cache
+      - -cacheCapacityMB=1024
+      - -concurrentWriters=32
+    volumes:
+      - /mnt/seaweedfs:/mnt/seaweedfs:shared
+      - mount-cache-1:/tmp/seaweedfs-cache
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+
+  mount-2:
+    image: chrislusf/seaweedfs:3.79
+    hostname: mount-2
+    networks:
+      - seaweedfs-network
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse:/dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    command:
+      - mount
+      - -filer=192.168.12.40:8888,192.168.12.41:8888,192.168.12.42:8888
+      - -dir=/mnt/seaweedfs
+      - -filer.path=/
+      - -allowOthers=true
+      - -cacheDir=/tmp/seaweedfs-cache
+      - -cacheCapacityMB=1024
+      - -concurrentWriters=32
+    volumes:
+      - /mnt/seaweedfs:/mnt/seaweedfs:shared
+      - mount-cache-2:/tmp/seaweedfs-cache
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 2
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+
+  mount-3:
+    image: chrislusf/seaweedfs:3.79
+    hostname: mount-3
+    networks:
+      - seaweedfs-network
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse:/dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    command:
+      - mount
+      - -filer=192.168.12.40:8888,192.168.12.41:8888,192.168.12.42:8888
+      - -dir=/mnt/seaweedfs
+      - -filer.path=/
+      - -allowOthers=true
+      - -cacheDir=/tmp/seaweedfs-cache
+      - -cacheCapacityMB=1024
+      - -concurrentWriters=32
+    volumes:
+      - /mnt/seaweedfs:/mnt/seaweedfs:shared
+      - mount-cache-3:/tmp/seaweedfs-cache
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  seaweedfs-network:
+    driver: overlay
+    attachable: true
+    driver_opts:
+      encrypted: "true"
+    ipam:
+      config:
+        - subnet: 10.0.21.0/24
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  # Master metadata
+  master-data-1:
+    driver: local
+  master-data-2:
+    driver: local
+  master-data-3:
+    driver: local
+
+  # Mount cache volumes
+  mount-cache-1:
+    driver: local
+  mount-cache-2:
+    driver: local
+  mount-cache-3:
+    driver: local
+
+# =============================================================================
+# CONFIGS
+# =============================================================================
+configs:
+  filer_config:
+    file: ./filer.toml
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  seaweedfs_db_password:
+    external: true
