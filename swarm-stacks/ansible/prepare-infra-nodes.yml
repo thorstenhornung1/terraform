@@ -48,7 +48,6 @@
           - lvm2
           - parted
           - python3-psycopg2
-          - awscli
         state: present
         update_cache: yes
 
@@ -87,10 +86,8 @@
       filesystem:
         fstype: xfs
         dev: "{{ data_disk }}1"
-        opts: -L seaweedfs-data
-      when:
-        - disk_check.stat.exists
-        - partition_created.changed
+        opts: -L swfsdata
+      when: disk_check.stat.exists
 
     - name: Create data mount point
       file:
