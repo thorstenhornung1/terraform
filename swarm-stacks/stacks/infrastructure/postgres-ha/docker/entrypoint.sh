@@ -7,6 +7,21 @@
 
 set -e
 
+# =============================================================================
+# Read secrets from files (Docker secrets pattern)
+# =============================================================================
+if [ -n "$PATRONI_SUPERUSER_PASSWORD_FILE" ] && [ -f "$PATRONI_SUPERUSER_PASSWORD_FILE" ]; then
+    export PATRONI_SUPERUSER_PASSWORD=$(cat "$PATRONI_SUPERUSER_PASSWORD_FILE")
+fi
+
+if [ -n "$PATRONI_REPLICATION_PASSWORD_FILE" ] && [ -f "$PATRONI_REPLICATION_PASSWORD_FILE" ]; then
+    export PATRONI_REPLICATION_PASSWORD=$(cat "$PATRONI_REPLICATION_PASSWORD_FILE")
+fi
+
+if [ -n "$PATRONI_ADMIN_PASSWORD_FILE" ] && [ -f "$PATRONI_ADMIN_PASSWORD_FILE" ]; then
+    export PATRONI_ADMIN_PASSWORD=$(cat "$PATRONI_ADMIN_PASSWORD_FILE")
+fi
+
 # Generate Patroni configuration from environment variables
 cat > /etc/patroni/patroni.yml << EOF
 scope: ${PATRONI_SCOPE:-postgres-cluster}

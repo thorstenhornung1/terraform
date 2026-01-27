@@ -32,10 +32,10 @@ enabled = false
 [postgres2]
 enabled = true
 
-# Connection to PostgreSQL cluster
-# Using PgBouncer for connection pooling and automatic failover
-hostname = "192.168.12.40"
-port = 5432
+# Connection to PostgreSQL cluster via HAProxy (automatic Patroni leader routing)
+# Filers join the shared infra-postgres-network and resolve pg-haproxy via overlay DNS
+hostname = "pg-haproxy"
+port = 5433
 username = "seaweedfs"
 # Password loaded from Docker secret (mounted at /run/secrets/)
 passwordFile = "/run/secrets/seaweedfs_db_password"

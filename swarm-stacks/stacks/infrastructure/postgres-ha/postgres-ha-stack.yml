@@ -400,41 +400,101 @@ services:
       start_period: 30s
 
   # ===========================================================================
+  # HAPROXY (Patroni Leader Routing)
+  # ===========================================================================
+  # Routes PostgreSQL connections to the current Patroni leader/replicas
+  # using HTTP health checks against Patroni REST API (port 8008).
+  # Primary (RW): port 5433 | Replicas (RO): port 5434 | Stats: port 7000
+  #
+  # Other stacks (e.g. SeaweedFS) can join the shared infra-postgres-network
+  # and connect via the overlay DNS alias: pg-haproxy:5433
+
+  haproxy:
+    image: haproxy:2.9-alpine
+    hostname: haproxy
+    networks:
+      postgres-network:
+        aliases:
+          - pg-haproxy
+    ports:
+      - target: 5433
+        published: 5433
+        protocol: tcp
+        mode: ingress
+      - target: 5434
+        published: 5434
+        protocol: tcp
+        mode: ingress
+      - target: 7000
+        published: 7000
+        protocol: tcp
+        mode: ingress
+    configs:
+      - source: haproxy_config
+        target: /usr/local/etc/haproxy/haproxy.cfg
+        mode: 0644
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:7000/ > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ===========================================================================
   # PGBOUNCER (Connection Pooler) - Optional
   # ===========================================================================
-  # Provides connection pooling and automatic primary routing
-  # Deploy on manager nodes for application access via VLAN 4
+  # Provides connection pooling on top of HAProxy leader routing.
+  # Enable by setting replicas > 0. Requires PG_PASSWORD env var to be set
+  # on Swarm nodes or replaced with a custom entrypoint reading from secrets.
 
   pgbouncer:
-    image: bitnami/pgbouncer:1.23.1
+    image: edoburu/pgbouncer:1.23.1
     hostname: pgbouncer
     networks:
-      - postgres-network
+      postgres-network:
+        aliases:
+          - pg-bouncer
     ports:
-      - target: 6432
+      - target: 5432
         published: 6432
         protocol: tcp
         mode: ingress
     environment:
-      - PGBOUNCER_DATABASE=*
-      - PGBOUNCER_PORT=6432
-      - PGBOUNCER_POOL_MODE=transaction
-      - PGBOUNCER_DEFAULT_POOL_SIZE=25
-      - PGBOUNCER_MIN_POOL_SIZE=5
-      - PGBOUNCER_RESERVE_POOL_SIZE=5
-      - PGBOUNCER_MAX_CLIENT_CONN=200
-      - PGBOUNCER_MAX_DB_CONNECTIONS=100
-      - PGBOUNCER_IGNORE_STARTUP_PARAMETERS=extra_float_digits
-      # Will be configured to point to Patroni leader via HAProxy or Consul
-      - POSTGRESQL_HOST=192.168.12.40
-      - POSTGRESQL_PORT=5432
-      - POSTGRESQL_USERNAME=postgres
-      - POSTGRESQL_PASSWORD_FILE=/run/secrets/pg_superuser_password
+      # edoburu/pgbouncer reads DATABASE_URL for upstream connection
+      # PG_PASSWORD must be provided as a Swarm env var or via custom entrypoint
+      - DATABASE_URL=postgres://postgres:${PG_PASSWORD}@pg-haproxy:5433/postgres
+      - POOL_MODE=transaction
+      - DEFAULT_POOL_SIZE=25
+      - MIN_POOL_SIZE=5
+      - RESERVE_POOL_SIZE=5
+      - MAX_CLIENT_CONN=200
+      - MAX_DB_CONNECTIONS=100
+      - IGNORE_STARTUP_PARAMETERS=extra_float_digits
     secrets:
-      - pg_superuser_password
+      - source: pg_superuser_password
+        target: pg_password
     deploy:
       mode: replicated
-      replicas: 2
+      replicas: 0  # Disabled - HAProxy handles routing; enable for connection pooling
       placement:
         constraints:
           - node.role == manager
@@ -452,7 +512,7 @@ services:
         parallelism: 1
         delay: 10s
     healthcheck:
-      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "6432"]
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "5432"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -509,6 +569,7 @@ services:
 # =============================================================================
 networks:
   postgres-network:
+    name: infra-postgres-network
     driver: overlay
     attachable: true
     driver_opts:
@@ -544,6 +605,13 @@ volumes:
     driver: local
   postgres-wal-3:
     driver: local
+
+# =============================================================================
+# CONFIGS
+# =============================================================================
+configs:
+  haproxy_config:
+    file: ./haproxy.cfg
 
 # =============================================================================
 # SECRETS

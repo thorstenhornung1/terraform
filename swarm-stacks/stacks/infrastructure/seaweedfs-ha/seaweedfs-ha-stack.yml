@@ -5,34 +5,77 @@
 # - 3 Master servers (Raft consensus for leader election)
 # - 3 Volume servers (data storage with 001 replication = 2 copies)
 # - 3 Filer servers (PostgreSQL metadata for active-active HA)
-# - 3 FUSE mounts (POSIX access on each infra node)
 # - S3 API endpoint (load balanced across all filers)
 #
+# NOTE: FUSE mounts are NOT included - Docker Swarm doesn't support privileged
+# containers. For POSIX access, use one of these alternatives:
+#   - Run weed mount outside Swarm: docker run --privileged chrislusf/seaweedfs mount ...
+#   - Use S3 mount (s3fs-fuse) with the S3 API endpoint
+#   - Access via HTTP API
+#
 # Architecture:
-#   docker-infra-1: master-1 + volume-1 + filer-1 + mount-1 (192.168.12.40)
-#   docker-infra-2: master-2 + volume-2 + filer-2 + mount-2 (192.168.12.41)
-#   docker-infra-3: master-3 + volume-3 + filer-3 + mount-3 (192.168.12.42)
+#   docker-infra-1: master-1 + volume-1 + filer-1 (192.168.12.40)
+#   docker-infra-2: master-2 + volume-2 + filer-2 (192.168.12.41)
+#   docker-infra-3: master-3 + volume-3 + filer-3 (192.168.12.42)
 #
 # Prerequisites:
 #   1. PostgreSQL HA cluster deployed (postgres stack)
-#   2. SeaweedFS database created in PostgreSQL
+#   2. Docker Swarm secrets (from postgres stack):
+#      - pg_superuser_password (used by db-init)
+#      - seaweedfs_db_password (used by db-init + filers)
 #   3. Node labels set: infra_node=1/2/3
-#   4. Directories created: /srv/seaweedfs/*, /mnt/seaweedfs
+#   4. Directories created: /srv/seaweedfs/volumes on each node
 #
-# Deployment:
-#   1. Create database: ./create-seaweedfs-db.sh
-#   2. Deploy: docker stack deploy -c seaweedfs-ha-stack.yml seaweedfs
+# Deployment via Portainer GitOps:
+#   1. Create secrets in Portainer first
+#   2. Deploy stack from Git repository
 #
 # Access:
-#   - S3 API: http://192.168.4.40:8333 (any filer, load balanced)
-#   - Filer HTTP: http://192.168.4.40:8888
+#   - S3 API: http://192.168.12.40:8333 (any filer)
+#   - Filer HTTP: http://192.168.12.40:8888
 #   - Master API: http://192.168.12.40:9333
-#   - POSIX: /mnt/seaweedfs (on each infra node)
 # =============================================================================
 
 version: '3.8'
 
 services:
+  # ===========================================================================
+  # DATABASE INITIALIZATION (One-shot)
+  # ===========================================================================
+  # Creates the seaweedfs database and user in PostgreSQL
+  # Runs once on stack deploy, then exits
+  # Idempotent - safe to run multiple times
+
+  db-init:
+    image: postgres:16-alpine
+    networks:
+      - seaweedfs-network
+      - postgres-network
+    configs:
+      - source: db_init_script
+        target: /init.sh
+        mode: 0755
+    secrets:
+      - pg_superuser_password
+      - seaweedfs_db_password
+    environment:
+      - PGHOST=pg-haproxy
+      - PGPORT=5433
+      - PGUSER=postgres
+    command: ["/init.sh"]
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      restart_policy:
+        condition: none
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
   # ===========================================================================
   # SEAWEEDFS MASTER CLUSTER (3 nodes with Raft)
   # ===========================================================================
@@ -242,7 +285,7 @@ services:
       - -dataCenter=dc1
       - -compactionMBps=50
       - -metricsPort=9325
-      - -minFreeSpace=5%
+      - -minFreeSpace=5G
     volumes:
       - /srv/seaweedfs/volumes:/data/volumes
     deploy:
@@ -296,7 +339,7 @@ services:
       - -dataCenter=dc1
       - -compactionMBps=50
       - -metricsPort=9325
-      - -minFreeSpace=5%
+      - -minFreeSpace=5G
     volumes:
       - /srv/seaweedfs/volumes:/data/volumes
     deploy:
@@ -350,7 +393,7 @@ services:
       - -dataCenter=dc1
       - -compactionMBps=50
       - -metricsPort=9325
-      - -minFreeSpace=5%
+      - -minFreeSpace=5G
     volumes:
       - /srv/seaweedfs/volumes:/data/volumes
     deploy:
@@ -390,6 +433,7 @@ services:
     hostname: filer-1
     networks:
       - seaweedfs-network
+      - postgres-network
     ports:
       # Filer HTTP API (VLAN 4 - accessible to apps)
       - target: 8888
@@ -418,13 +462,13 @@ services:
       - -s3.allowEmptyFolder=true
       - -defaultReplicaPlacement=001
       - -metricsPort=9326
-      - -filer.path=/
     configs:
       - source: filer_config
         target: /etc/seaweedfs/filer.toml
         mode: 0644
     secrets:
-      - seaweedfs_db_password
+      - source: seaweedfs_db_password
+        target: /run/secrets/seaweedfs_db_password
     deploy:
       mode: replicated
       replicas: 1
@@ -454,6 +498,7 @@ services:
     hostname: filer-2
     networks:
       - seaweedfs-network
+      - postgres-network
     ports:
       - target: 8888
         published: 8888
@@ -479,13 +524,13 @@ services:
       - -s3.allowEmptyFolder=true
       - -defaultReplicaPlacement=001
       - -metricsPort=9326
-      - -filer.path=/
     configs:
       - source: filer_config
         target: /etc/seaweedfs/filer.toml
         mode: 0644
     secrets:
-      - seaweedfs_db_password
+      - source: seaweedfs_db_password
+        target: /run/secrets/seaweedfs_db_password
     deploy:
       mode: replicated
       replicas: 1
@@ -515,6 +560,7 @@ services:
     hostname: filer-3
     networks:
       - seaweedfs-network
+      - postgres-network
     ports:
       - target: 8888
         published: 8888
@@ -540,13 +586,13 @@ services:
       - -s3.allowEmptyFolder=true
       - -defaultReplicaPlacement=001
       - -metricsPort=9326
-      - -filer.path=/
     configs:
       - source: filer_config
         target: /etc/seaweedfs/filer.toml
         mode: 0644
     secrets:
-      - seaweedfs_db_password
+      - source: seaweedfs_db_password
+        target: /run/secrets/seaweedfs_db_password
     deploy:
       mode: replicated
       replicas: 1
@@ -571,136 +617,6 @@ services:
       retries: 3
       start_period: 30s
 
-  # ===========================================================================
-  # WEED MOUNT (FUSE) - POSIX Access (3 nodes)
-  # ===========================================================================
-  # Provides POSIX file system interface via FUSE
-  # Each infra node gets a local mount for applications like Frigate
-  # Requires privileged mode for FUSE device access
-
-  mount-1:
-    image: chrislusf/seaweedfs:3.79
-    hostname: mount-1
-    networks:
-      - seaweedfs-network
-    cap_add:
-      - SYS_ADMIN
-    devices:
-      - /dev/fuse:/dev/fuse
-    security_opt:
-      - apparmor:unconfined
-    command:
-      - mount
-      - -filer=192.168.12.40:8888,192.168.12.41:8888,192.168.12.42:8888
-      - -dir=/mnt/seaweedfs
-      - -filer.path=/
-      - -allowOthers=true
-      - -cacheDir=/tmp/seaweedfs-cache
-      - -cacheCapacityMB=1024
-      - -concurrentWriters=32
-    volumes:
-      - /mnt/seaweedfs:/mnt/seaweedfs:shared
-      - mount-cache-1:/tmp/seaweedfs-cache
-    deploy:
-      mode: replicated
-      replicas: 1
-      placement:
-        constraints:
-          - node.labels.infra_node == 1
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-      restart_policy:
-        condition: on-failure
-        delay: 10s
-        max_attempts: 5
-
-  mount-2:
-    image: chrislusf/seaweedfs:3.79
-    hostname: mount-2
-    networks:
-      - seaweedfs-network
-    cap_add:
-      - SYS_ADMIN
-    devices:
-      - /dev/fuse:/dev/fuse
-    security_opt:
-      - apparmor:unconfined
-    command:
-      - mount
-      - -filer=192.168.12.40:8888,192.168.12.41:8888,192.168.12.42:8888
-      - -dir=/mnt/seaweedfs
-      - -filer.path=/
-      - -allowOthers=true
-      - -cacheDir=/tmp/seaweedfs-cache
-      - -cacheCapacityMB=1024
-      - -concurrentWriters=32
-    volumes:
-      - /mnt/seaweedfs:/mnt/seaweedfs:shared
-      - mount-cache-2:/tmp/seaweedfs-cache
-    deploy:
-      mode: replicated
-      replicas: 1
-      placement:
-        constraints:
-          - node.labels.infra_node == 2
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-      restart_policy:
-        condition: on-failure
-        delay: 10s
-        max_attempts: 5
-
-  mount-3:
-    image: chrislusf/seaweedfs:3.79
-    hostname: mount-3
-    networks:
-      - seaweedfs-network
-    cap_add:
-      - SYS_ADMIN
-    devices:
-      - /dev/fuse:/dev/fuse
-    security_opt:
-      - apparmor:unconfined
-    command:
-      - mount
-      - -filer=192.168.12.40:8888,192.168.12.41:8888,192.168.12.42:8888
-      - -dir=/mnt/seaweedfs
-      - -filer.path=/
-      - -allowOthers=true
-      - -cacheDir=/tmp/seaweedfs-cache
-      - -cacheCapacityMB=1024
-      - -concurrentWriters=32
-    volumes:
-      - /mnt/seaweedfs:/mnt/seaweedfs:shared
-      - mount-cache-3:/tmp/seaweedfs-cache
-    deploy:
-      mode: replicated
-      replicas: 1
-      placement:
-        constraints:
-          - node.labels.infra_node == 3
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-      restart_policy:
-        condition: on-failure
-        delay: 10s
-        max_attempts: 5
-
 # =============================================================================
 # NETWORKS
 # =============================================================================
@@ -713,25 +629,20 @@ networks:
     ipam:
       config:
         - subnet: 10.0.21.0/24
+  postgres-network:
+    external: true
+    name: infra-postgres-network
 
 # =============================================================================
 # VOLUMES
 # =============================================================================
 volumes:
-  # Master metadata
+  # Master metadata (Raft state)
   master-data-1:
     driver: local
   master-data-2:
     driver: local
   master-data-3:
-    driver: local
-
-  # Mount cache volumes
-  mount-cache-1:
-    driver: local
-  mount-cache-2:
-    driver: local
-  mount-cache-3:
     driver: local
 
 # =============================================================================
@@ -740,10 +651,14 @@ volumes:
 configs:
   filer_config:
     file: ./filer.toml
+  db_init_script:
+    file: ./db-init.sh
 
 # =============================================================================
 # SECRETS
 # =============================================================================
 secrets:
+  pg_superuser_password:
+    external: true
   seaweedfs_db_password:
     external: true
