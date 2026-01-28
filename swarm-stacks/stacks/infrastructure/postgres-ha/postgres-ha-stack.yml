@@ -569,7 +569,6 @@ services:
 # =============================================================================
 networks:
   postgres-network:
-    name: infra-postgres-network
     driver: overlay
     attachable: true
     driver_opts:
