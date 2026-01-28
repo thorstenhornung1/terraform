@@ -37,8 +37,9 @@ enabled = true
 hostname = "pg-haproxy"
 port = 5433
 username = "seaweedfs"
-# Password loaded from Docker secret (mounted at /run/secrets/)
-passwordFile = "/run/secrets/seaweedfs_db_password"
+# Password injected at runtime from Docker secret by the entrypoint wrapper
+# (see filer command in seaweedfs-ha-stack.yml)
+password = ""
 database = "seaweedfs"
 schema = "public"
 

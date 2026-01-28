@@ -450,21 +450,25 @@ services:
         published: 18888
         protocol: tcp
         mode: host
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - filer
-      - -ip=192.168.12.40
-      - -ip.bind=0.0.0.0
-      - -port=8888
-      - -port.grpc=18888
-      - -master=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
-      - -s3
-      - -s3.port=8333
-      - -s3.allowEmptyFolder=true
-      - -defaultReplicaPlacement=001
-      - -metricsPort=9326
+      - |
+        DB_PASS=$$(cat /run/secrets/seaweedfs_db_password)
+        sed "s|^password.*|password = \"$$DB_PASS\"|" /docker-config/filer.toml > /etc/seaweedfs/filer.toml
+        exec weed filer \
+          -ip=192.168.12.40 \
+          -ip.bind=0.0.0.0 \
+          -port=8888 \
+          -port.grpc=18888 \
+          -master=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333 \
+          -s3 \
+          -s3.port=8333 \
+          -s3.allowEmptyFolder=true \
+          -defaultReplicaPlacement=001 \
+          -metricsPort=9326
     configs:
       - source: filer_config
-        target: /etc/seaweedfs/filer.toml
+        target: /docker-config/filer.toml
         mode: 0644
     secrets:
       - source: seaweedfs_db_password
@@ -512,21 +516,25 @@ services:
         published: 18888
         protocol: tcp
         mode: host
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - filer
-      - -ip=192.168.12.41
-      - -ip.bind=0.0.0.0
-      - -port=8888
-      - -port.grpc=18888
-      - -master=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
-      - -s3
-      - -s3.port=8333
-      - -s3.allowEmptyFolder=true
-      - -defaultReplicaPlacement=001
-      - -metricsPort=9326
+      - |
+        DB_PASS=$$(cat /run/secrets/seaweedfs_db_password)
+        sed "s|^password.*|password = \"$$DB_PASS\"|" /docker-config/filer.toml > /etc/seaweedfs/filer.toml
+        exec weed filer \
+          -ip=192.168.12.41 \
+          -ip.bind=0.0.0.0 \
+          -port=8888 \
+          -port.grpc=18888 \
+          -master=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333 \
+          -s3 \
+          -s3.port=8333 \
+          -s3.allowEmptyFolder=true \
+          -defaultReplicaPlacement=001 \
+          -metricsPort=9326
     configs:
       - source: filer_config
-        target: /etc/seaweedfs/filer.toml
+        target: /docker-config/filer.toml
         mode: 0644
     secrets:
       - source: seaweedfs_db_password
@@ -574,21 +582,25 @@ services:
         published: 18888
         protocol: tcp
         mode: host
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - filer
-      - -ip=192.168.12.42
-      - -ip.bind=0.0.0.0
-      - -port=8888
-      - -port.grpc=18888
-      - -master=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333
-      - -s3
-      - -s3.port=8333
-      - -s3.allowEmptyFolder=true
-      - -defaultReplicaPlacement=001
-      - -metricsPort=9326
+      - |
+        DB_PASS=$$(cat /run/secrets/seaweedfs_db_password)
+        sed "s|^password.*|password = \"$$DB_PASS\"|" /docker-config/filer.toml > /etc/seaweedfs/filer.toml
+        exec weed filer \
+          -ip=192.168.12.42 \
+          -ip.bind=0.0.0.0 \
+          -port=8888 \
+          -port.grpc=18888 \
+          -master=192.168.12.40:9333,192.168.12.41:9333,192.168.12.42:9333 \
+          -s3 \
+          -s3.port=8333 \
+          -s3.allowEmptyFolder=true \
+          -defaultReplicaPlacement=001 \
+          -metricsPort=9326
     configs:
       - source: filer_config
-        target: /etc/seaweedfs/filer.toml
+        target: /docker-config/filer.toml
         mode: 0644
     secrets:
       - source: seaweedfs_db_password
