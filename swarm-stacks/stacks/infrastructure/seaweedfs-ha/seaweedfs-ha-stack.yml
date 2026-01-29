@@ -467,7 +467,7 @@ services:
           -defaultReplicaPlacement=001 \
           -metricsPort=9326
     configs:
-      - source: filer_config_v2
+      - source: filer_config_v3
         target: /docker-config/filer.toml
         mode: 0644
     secrets:
@@ -533,7 +533,7 @@ services:
           -defaultReplicaPlacement=001 \
           -metricsPort=9326
     configs:
-      - source: filer_config_v2
+      - source: filer_config_v3
         target: /docker-config/filer.toml
         mode: 0644
     secrets:
@@ -599,7 +599,7 @@ services:
           -defaultReplicaPlacement=001 \
           -metricsPort=9326
     configs:
-      - source: filer_config_v2
+      - source: filer_config_v3
         target: /docker-config/filer.toml
         mode: 0644
     secrets:
@@ -661,7 +661,7 @@ volumes:
 # CONFIGS
 # =============================================================================
 configs:
-  filer_config_v2:
+  filer_config_v3:
     file: ./filer.toml
   db_init_script_v2:
     file: ./db-init.sh
