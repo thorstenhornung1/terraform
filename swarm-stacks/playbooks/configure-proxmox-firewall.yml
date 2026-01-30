@@ -1,0 +1,243 @@
+# =============================================================================
+# Proxmox VM Firewall Configuration for Docker Swarm Cluster
+# =============================================================================
+# Configures per-VM firewall rules on Proxmox to restrict network access.
+# Processes one VM at a time (serial: 1) to prevent cluster-wide lockout.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini playbooks/configure-proxmox-firewall.yml
+#
+# Rollback (disable firewall on all VMs):
+#   ansible-playbook -i inventory.ini playbooks/configure-proxmox-firewall.yml \
+#     --extra-vars "firewall_enabled=false"
+#
+# Or manually per-VM:
+#   pvesh set /nodes/<node>/qemu/<vmid>/firewall/options --enable 0
+# =============================================================================
+---
+- name: Configure Proxmox Firewall for Docker Swarm VMs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  serial: 1
+
+  vars:
+    proxmox_api_host: "pve01.hornung-bn.de"
+    proxmox_api_user: "root@pam"
+    # Pass via --extra-vars or environment: PROXMOX_API_PASSWORD
+    proxmox_api_password: "{{ lookup('env', 'PROXMOX_API_PASSWORD') }}"
+    firewall_enabled: true
+
+    # -------------------------------------------------------------------------
+    # VM Definitions
+    # -------------------------------------------------------------------------
+    app_nodes:
+      - vmid: 4100
+        node: pve01
+        name: docker-app-1
+      - vmid: 4101
+        node: pve02
+        name: docker-app-2
+      - vmid: 4102
+        node: pve03
+        name: docker-app-3
+
+    infra_nodes:
+      - vmid: 4200
+        node: pve01
+        name: docker-infra-1
+      - vmid: 4201
+        node: pve02
+        name: docker-infra-2
+      - vmid: 4202
+        node: pve03
+        name: docker-infra-3
+
+    # -------------------------------------------------------------------------
+    # Firewall Rules - Common (applied to ALL nodes)
+    # -------------------------------------------------------------------------
+    common_rules:
+      # SSH from management VLAN
+      - type: in
+        action: ACCEPT
+        source: "192.168.2.0/24"
+        dport: "22"
+        proto: tcp
+        comment: "SSH from management VLAN 2"
+        pos: 0
+
+      # Home Assistant -> HAProxy RW
+      - type: in
+        action: ACCEPT
+        source: "192.168.2.5"
+        dport: "5433"
+        proto: tcp
+        comment: "Home Assistant -> HAProxy PostgreSQL RW"
+        pos: 1
+
+      # Home Assistant -> HAProxy RO
+      - type: in
+        action: ACCEPT
+        source: "192.168.2.5"
+        dport: "5434"
+        proto: tcp
+        comment: "Home Assistant -> HAProxy PostgreSQL RO"
+        pos: 2
+
+      # Docker Swarm management (VLAN 4)
+      - type: in
+        action: ACCEPT
+        source: "192.168.4.0/24"
+        dport: "2377"
+        proto: tcp
+        comment: "Swarm management VLAN 4"
+        pos: 3
+
+      # Docker Swarm gossip TCP (VLAN 4)
+      - type: in
+        action: ACCEPT
+        source: "192.168.4.0/24"
+        dport: "7946"
+        proto: tcp
+        comment: "Swarm gossip TCP VLAN 4"
+        pos: 4
+
+      # Docker Swarm gossip UDP (VLAN 4)
+      - type: in
+        action: ACCEPT
+        source: "192.168.4.0/24"
+        dport: "7946"
+        proto: udp
+        comment: "Swarm gossip UDP VLAN 4"
+        pos: 5
+
+      # Docker Swarm VXLAN (VLAN 4)
+      - type: in
+        action: ACCEPT
+        source: "192.168.4.0/24"
+        dport: "4789"
+        proto: udp
+        comment: "Swarm VXLAN VLAN 4"
+        pos: 6
+
+      # Docker Swarm gossip TCP (VLAN 12)
+      - type: in
+        action: ACCEPT
+        source: "192.168.12.0/24"
+        dport: "7946"
+        proto: tcp
+        comment: "Swarm gossip TCP VLAN 12"
+        pos: 7
+
+      # Docker Swarm gossip UDP (VLAN 12)
+      - type: in
+        action: ACCEPT
+        source: "192.168.12.0/24"
+        dport: "7946"
+        proto: udp
+        comment: "Swarm gossip UDP VLAN 12"
+        pos: 8
+
+      # Docker Swarm VXLAN (VLAN 12)
+      - type: in
+        action: ACCEPT
+        source: "192.168.12.0/24"
+        dport: "4789"
+        proto: udp
+        comment: "Swarm VXLAN VLAN 12"
+        pos: 9
+
+    # -------------------------------------------------------------------------
+    # Firewall Rules - Infra-only (PostgreSQL, Patroni, etcd)
+    # -------------------------------------------------------------------------
+    infra_extra_rules:
+      # PostgreSQL direct (HAProxy + replication via VLAN 12)
+      - type: in
+        action: ACCEPT
+        source: "192.168.12.0/24"
+        dport: "5432"
+        proto: tcp
+        comment: "PostgreSQL direct VLAN 12"
+        pos: 10
+
+      # Patroni REST API (HAProxy health checks via VLAN 12)
+      - type: in
+        action: ACCEPT
+        source: "192.168.12.0/24"
+        dport: "8008"
+        proto: tcp
+        comment: "Patroni REST API VLAN 12"
+        pos: 11
+
+      # etcd client port (VLAN 12)
+      - type: in
+        action: ACCEPT
+        source: "192.168.12.0/24"
+        dport: "2379"
+        proto: tcp
+        comment: "etcd client VLAN 12"
+        pos: 12
+
+      # etcd peer port (VLAN 12)
+      - type: in
+        action: ACCEPT
+        source: "192.168.12.0/24"
+        dport: "2380"
+        proto: tcp
+        comment: "etcd peer VLAN 12"
+        pos: 13
+
+      # Prometheus exporter (VLAN 4 for monitoring)
+      - type: in
+        action: ACCEPT
+        source: "192.168.4.0/24"
+        dport: "9187"
+        proto: tcp
+        comment: "Postgres exporter metrics VLAN 4"
+        pos: 14
+
+  tasks:
+    # =========================================================================
+    # Step 1: Get Proxmox API ticket
+    # =========================================================================
+    - name: Authenticate to Proxmox API
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_api_host }}:8006/api2/json/access/ticket"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          username: "{{ proxmox_api_user }}"
+          password: "{{ proxmox_api_password }}"
+        validate_certs: false
+      register: proxmox_auth
+      no_log: true
+
+    - name: Set auth facts
+      ansible.builtin.set_fact:
+        pve_ticket: "{{ proxmox_auth.json.data.ticket }}"
+        pve_csrf: "{{ proxmox_auth.json.data.CSRFPreventionToken }}"
+      no_log: true
+
+    # =========================================================================
+    # Step 2: Configure App Nodes (one at a time)
+    # =========================================================================
+    - name: Configure firewall for app nodes
+      ansible.builtin.include_tasks: tasks/configure-vm-firewall.yml
+      loop: "{{ app_nodes }}"
+      loop_control:
+        loop_var: vm
+        label: "{{ vm.name }} (VMID {{ vm.vmid }})"
+      vars:
+        fw_rules: "{{ common_rules }}"
+
+    # =========================================================================
+    # Step 3: Configure Infra Nodes (one at a time)
+    # =========================================================================
+    - name: Configure firewall for infra nodes
+      ansible.builtin.include_tasks: tasks/configure-vm-firewall.yml
+      loop: "{{ infra_nodes }}"
+      loop_control:
+        loop_var: vm
+        label: "{{ vm.name }} (VMID {{ vm.vmid }})"
+      vars:
+        fw_rules: "{{ common_rules + infra_extra_rules }}"

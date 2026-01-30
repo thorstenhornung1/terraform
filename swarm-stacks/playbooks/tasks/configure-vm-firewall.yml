@@ -1,0 +1,112 @@
+# =============================================================================
+# Configure Proxmox Firewall for a single VM
+# =============================================================================
+# Called from configure-proxmox-firewall.yml via include_tasks
+#
+# Required variables:
+#   vm.vmid    - Proxmox VM ID
+#   vm.node    - Proxmox node name
+#   vm.name    - VM display name (for logging)
+#   fw_rules   - List of firewall rules to apply
+#   pve_ticket - Proxmox API ticket
+#   pve_csrf   - Proxmox CSRF token
+#   firewall_enabled - Whether to enable the firewall (true/false)
+# =============================================================================
+---
+# ---------------------------------------------------------------------------
+# Delete existing rules (start clean)
+# ---------------------------------------------------------------------------
+- name: "{{ vm.name }} - Get existing firewall rules"
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ vm.node }}/qemu/{{ vm.vmid }}/firewall/rules"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ pve_ticket }}"
+    validate_certs: false
+  register: existing_rules
+
+- name: "{{ vm.name }} - Delete existing firewall rules"
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ vm.node }}/qemu/{{ vm.vmid }}/firewall/rules/{{ item.pos }}"
+    method: DELETE
+    headers:
+      Cookie: "PVEAuthCookie={{ pve_ticket }}"
+      CSRFPreventionToken: "{{ pve_csrf }}"
+    validate_certs: false
+    status_code: [200]
+  loop: "{{ existing_rules.json.data | default([]) | sort(attribute='pos') | reverse | list }}"
+  loop_control:
+    label: "rule pos={{ item.pos }}"
+  when: existing_rules.json.data | default([]) | length > 0
+
+# ---------------------------------------------------------------------------
+# Create firewall rules
+# ---------------------------------------------------------------------------
+- name: "{{ vm.name }} - Create firewall rules"
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ vm.node }}/qemu/{{ vm.vmid }}/firewall/rules"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ pve_ticket }}"
+      CSRFPreventionToken: "{{ pve_csrf }}"
+    body_format: form-urlencoded
+    body:
+      type: "{{ item.type }}"
+      action: "{{ item.action }}"
+      source: "{{ item.source }}"
+      dport: "{{ item.dport }}"
+      proto: "{{ item.proto }}"
+      comment: "{{ item.comment }}"
+      enable: "1"
+      pos: "{{ item.pos }}"
+    validate_certs: false
+    status_code: [200]
+  loop: "{{ fw_rules }}"
+  loop_control:
+    label: "{{ item.comment }}"
+
+# ---------------------------------------------------------------------------
+# Set firewall options (policy + enable/disable)
+# ---------------------------------------------------------------------------
+- name: "{{ vm.name }} - Set firewall options (policy_in=DROP, policy_out=ACCEPT)"
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ vm.node }}/qemu/{{ vm.vmid }}/firewall/options"
+    method: PUT
+    headers:
+      Cookie: "PVEAuthCookie={{ pve_ticket }}"
+      CSRFPreventionToken: "{{ pve_csrf }}"
+    body_format: form-urlencoded
+    body:
+      enable: "{{ '1' if firewall_enabled | bool else '0' }}"
+      policy_in: "DROP"
+      policy_out: "ACCEPT"
+      dhcp: "0"
+      ndp: "0"
+      log_level_in: "nolog"
+      log_level_out: "nolog"
+    validate_certs: false
+    status_code: [200]
+
+# ---------------------------------------------------------------------------
+# Verify SSH connectivity after enabling firewall
+# ---------------------------------------------------------------------------
+- name: "{{ vm.name }} - Verify SSH connectivity (post-firewall)"
+  ansible.builtin.wait_for:
+    host: "{{ vm.name }}"
+    port: 22
+    timeout: 15
+    state: started
+  when: firewall_enabled | bool
+  ignore_errors: true
+  register: ssh_check
+
+- name: "{{ vm.name }} - WARN if SSH check failed"
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: SSH connectivity check failed for {{ vm.name }}.
+      Firewall may be blocking SSH. Run rollback:
+      pvesh set /nodes/{{ vm.node }}/qemu/{{ vm.vmid }}/firewall/options --enable 0
+  when:
+    - firewall_enabled | bool
+    - ssh_check is defined
+    - ssh_check.failed | default(false)

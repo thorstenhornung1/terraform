@@ -90,14 +90,16 @@ resource "proxmox_virtual_environment_vm" "app_nodes" {
 
   # Network Interface 1: VLAN 4 (Cluster Network - PRIMARY)
   network_device {
-    bridge  = "vmbr0"
-    vlan_id = var.vlan_id
+    bridge   = "vmbr0"
+    vlan_id  = var.vlan_id
+    firewall = true
   }
 
   # Network Interface 2: VLAN 12 (Storage Network)
   network_device {
-    bridge  = "vmbr0"
-    vlan_id = var.vlan_id_storage
+    bridge   = "vmbr0"
+    vlan_id  = var.vlan_id_storage
+    firewall = true
   }
 
   initialization {
@@ -189,14 +191,16 @@ resource "proxmox_virtual_environment_vm" "infra_nodes" {
 
   # Network Interface 1: VLAN 4 (Cluster Network - PRIMARY)
   network_device {
-    bridge  = "vmbr0"
-    vlan_id = var.vlan_id
+    bridge   = "vmbr0"
+    vlan_id  = var.vlan_id
+    firewall = true
   }
 
   # Network Interface 2: VLAN 12 (Storage Network)
   network_device {
-    bridge  = "vmbr0"
-    vlan_id = var.vlan_id_storage
+    bridge   = "vmbr0"
+    vlan_id  = var.vlan_id_storage
+    firewall = true
   }
 
   initialization {

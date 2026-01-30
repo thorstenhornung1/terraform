@@ -425,10 +425,7 @@ services:
         published: 5434
         protocol: tcp
         mode: ingress
-      - target: 7000
-        published: 7000
-        protocol: tcp
-        mode: ingress
+      # Stats port 7000 removed from external access (use docker exec when needed)
     configs:
       - source: haproxy_config
         target: /usr/local/etc/haproxy/haproxy.cfg
@@ -516,6 +513,45 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  # ===========================================================================
+  # DB-INIT (One-Shot Application Database Setup)
+  # ===========================================================================
+  # Creates application databases and users idempotently.
+  # Runs once on deploy, then exits (restart_policy: none).
+  # Add new app secrets here when extending db-init.sh.
+
+  db-init:
+    image: postgres:16-alpine
+    networks:
+      - postgres-network
+    configs:
+      - source: db_init_script
+        target: /docker-entrypoint-initdb.d/db-init.sh
+        mode: 0755
+    secrets:
+      - pg_superuser_password
+      - ha_recorder_db_password
+    environment:
+      - PGHOST=pg-haproxy
+      - PGPORT=5433
+      - PGUSER=postgres
+    entrypoint: ["/docker-entrypoint-initdb.d/db-init.sh"]
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: none
 
   # ===========================================================================
   # POSTGRES EXPORTER (Prometheus Metrics)
@@ -611,6 +647,8 @@ volumes:
 configs:
   haproxy_config:
     file: ./haproxy.cfg
+  db_init_script:
+    file: ./db-init.sh
 
 # =============================================================================
 # SECRETS
@@ -621,4 +659,6 @@ secrets:
   pg_replication_password:
     external: true
   pg_admin_password:
+    external: true
+  ha_recorder_db_password:
     external: true

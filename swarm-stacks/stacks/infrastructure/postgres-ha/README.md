@@ -66,6 +66,7 @@ All nodes run on **VLAN 12** (192.168.12.0/24), the dedicated storage and replic
 | etcd-1, etcd-2, etcd-3 | 1 each (pinned per node) | `quay.io/coreos/etcd:v3.5.15` | Distributed consensus for Patroni leader election |
 | postgres-1, postgres-2, postgres-3 | 1 each (pinned per node) | `patroni-postgres:16` (custom) | PostgreSQL 16 with Patroni HA orchestration |
 | haproxy | 2 (manager nodes) | `haproxy:2.9-alpine` | Automatic primary/replica routing via Patroni REST API |
+| db-init | 1 (one-shot) | `postgres:16-alpine` | Creates application databases and users idempotently |
 | pgbouncer | 0 (disabled) | `edoburu/pgbouncer:1.23.1` | Connection pooling (optional, enable by setting replicas > 0) |
 | postgres-exporter | 1 (manager node) | `prometheuscommunity/postgres-exporter:v0.15.0` | Prometheus metrics exporter |
 
@@ -93,6 +94,7 @@ All nodes run on **VLAN 12** (192.168.12.0/24), the dedicated storage and replic
 |---|---|
 | `postgres-ha-stack.yml` | Docker Swarm stack definition (all services, networks, volumes, secrets) |
 | `haproxy.cfg` | HAProxy configuration -- primary routing on 5433, replica routing on 5434, stats on 7000 |
+| `db-init.sh` | Central database initialization -- creates application users and databases idempotently |
 | `create-secrets.sh` | Script to create Docker secrets (run once on a Swarm manager before first deploy) |
 | `docker/Dockerfile` | Custom image definition: PostgreSQL 16 Alpine + Patroni 3.3.2 + etcd3 support |
 | `docker/entrypoint.sh` | Generates `patroni.yml` from environment variables, reads passwords from secret files |
@@ -146,6 +148,7 @@ Alternatively, create secrets through Portainer.
 | `pg_superuser_password` | PostgreSQL superuser (`postgres`) password |
 | `pg_replication_password` | Replication user (`replicator`) password |
 | `pg_admin_password` | Admin user with `CREATEDB` and `CREATEROLE` privileges |
+| `ha_recorder_db_password` | Home Assistant recorder database user password (used by db-init) |
 
 ---
 
@@ -232,21 +235,55 @@ services:
 
 ## Creating New Databases
 
-Connect to the primary via HAProxy and create users and databases:
+Application databases are managed automatically by the **db-init** one-shot service. On every stack deploy, `db-init` connects to the primary via HAProxy and idempotently creates all configured users and databases.
+
+### Managed Databases
+
+| User | Database | Secret |
+|---|---|---|
+| `homeassistant` | `homeassistant` | `ha_recorder_db_password` |
+
+### Adding a New Application Database
+
+1. Create a Docker secret for the app password (via Portainer or CLI):
+   ```bash
+   echo "secure-password" | docker secret create myapp_db_password -
+   ```
+
+2. Edit `db-init.sh` -- add a block at the end:
+   ```sh
+   MYAPP_PASS=$(cat /run/secrets/myapp_db_password)
+   init_app "myapp" "$MYAPP_PASS" "myapp"
+   ```
+
+3. Edit `postgres-ha-stack.yml` -- add the new secret to the `db-init` service:
+   ```yaml
+   secrets:
+     - pg_superuser_password
+     - ha_recorder_db_password
+     - myapp_db_password      # <-- add
+   ```
+
+   And register it in the top-level `secrets:` section:
+   ```yaml
+   secrets:
+     myapp_db_password:
+       external: true
+   ```
+
+4. Redeploy the stack. The `db-init` service will create the user and database, then exit (0/1 replicas).
+
+### Manual Database Creation
+
+For ad-hoc databases not managed by db-init, connect to the primary via HAProxy:
 
 ```bash
-# Connect as superuser via HAProxy (always reaches the primary)
 psql -h pg-haproxy -p 5433 -U postgres
 ```
 
 ```sql
--- Create a new application user
 CREATE USER myapp WITH PASSWORD 'secure-password';
-
--- Create the database owned by the new user
 CREATE DATABASE myapp OWNER myapp;
-
--- Grant privileges
 GRANT ALL PRIVILEGES ON DATABASE myapp TO myapp;
 ```
 
@@ -380,6 +417,7 @@ SHOW synchronous_standby_names;
 | etcd (per node) | 0.5 | 512M | 0.1 | 128M |
 | postgres (per node) | 2.0 | 2G | 0.5 | 512M |
 | haproxy (per replica) | 0.5 | 256M | 0.1 | 64M |
+| db-init (one-shot) | 0.5 | 256M | 0.1 | 64M |
 | pgbouncer (disabled) | 0.5 | 256M | 0.1 | 64M |
 | postgres-exporter | 0.25 | 128M | 0.05 | 32M |
 

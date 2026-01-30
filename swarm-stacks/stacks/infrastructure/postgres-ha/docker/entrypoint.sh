@@ -66,12 +66,18 @@ bootstrap:
     - data-checksums
 
   pg_hba:
-    - host replication replicator 0.0.0.0/0 scram-sha-256
-    - host all all 0.0.0.0/0 scram-sha-256
+    # Replication: infra nodes on VLAN 12 only
+    - host replication replicator 192.168.12.40/32 scram-sha-256
+    - host replication replicator 192.168.12.41/32 scram-sha-256
+    - host replication replicator 192.168.12.42/32 scram-sha-256
+    # App connections via HAProxy (overlay network)
+    - host all all 10.0.20.0/24 scram-sha-256
+    # Direct from infra nodes (pg_rewind, monitoring, db-init)
+    - host all all 192.168.12.0/24 scram-sha-256
 
   users:
     admin:
-      password: ${PATRONI_ADMIN_PASSWORD:-admin}
+      password: ${PATRONI_ADMIN_PASSWORD}
       options:
         - createrole
         - createdb
