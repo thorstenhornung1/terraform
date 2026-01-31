@@ -25,6 +25,8 @@ Production-grade PostgreSQL 16 high-availability cluster running on Docker Swarm
 - [Monitoring](#monitoring)
 - [Resource Allocation](#resource-allocation)
 - [Troubleshooting](#troubleshooting)
+  - [Rotating Application Database Passwords](#rotating-application-database-passwords-eg-ha_recorder_db_password)
+  - [Rotating Infrastructure Passwords](#rotating-infrastructure-passwords-superuser-replication-admin)
 - [References](#references)
 
 ---
@@ -549,16 +551,109 @@ etcdctl endpoint health --endpoints=http://192.168.12.40:2379,http://192.168.12.
 docker service update --force postgres-ha-stack_etcd-1
 ```
 
-### Secrets need to be rotated
+### Rotating Application Database Passwords (e.g. ha_recorder_db_password)
 
-**Cause:** Periodic credential rotation or compromise.
+**When:** Periodic credential rotation, compromise, or initial password setup.
 
-**Process:** Docker Swarm secrets are immutable. To rotate:
+Application database passwords (like `ha_recorder_db_password`) are used by the
+`db-init` one-shot service to create/update PostgreSQL user passwords via
+`ALTER USER ... WITH PASSWORD`. The rotation procedure is:
 
-1. Create new secrets with updated names (e.g., `pg_superuser_password_v2`).
-2. Update `postgres-ha-stack.yml` to reference the new secret names.
-3. Redeploy the stack. Patroni will pick up the new passwords from `/run/secrets/`.
-4. Remove the old secrets: `docker secret rm pg_superuser_password`.
+**Step 1: Replace the Docker secret**
+
+Docker Swarm secrets are immutable -- you must delete and recreate:
+
+```bash
+# Via Portainer UI: Secrets → delete old → create new with same name
+# Or via CLI from a Swarm manager node:
+echo "new-secure-password" | docker secret create ha_recorder_db_password_new -
+# Note: You cannot delete a secret that is in use by a service.
+# The stack must be redeployed to release the old secret reference.
+```
+
+If using **Portainer** (recommended):
+1. Go to **Secrets** in the Portainer UI
+2. Delete the existing `ha_recorder_db_password`
+3. Create a new secret with the **same name** `ha_recorder_db_password`
+4. Enter the new password value
+
+**Step 2: Redeploy the stack to trigger db-init**
+
+```bash
+cd /home/ansible/postgres-ha   # or wherever the stack files are
+docker stack deploy -c postgres-ha-stack.yml postgres-ha-stack --prune
+```
+
+This re-runs the `db-init` one-shot service, which:
+- Reads the new password from `/run/secrets/ha_recorder_db_password`
+- Connects to PostgreSQL primary via HAProxy (`pg-haproxy:5433`)
+- Runs `ALTER USER homeassistant WITH PASSWORD '<new>'` (idempotent)
+
+**Step 3: Verify the password was applied**
+
+```bash
+# Check db-init completed successfully
+docker service logs postgres-ha-stack_db-init --tail 20
+
+# Expected output should include:
+#   NOTICE:  User homeassistant password updated
+#   === Central database initialization complete! ===
+```
+
+**Step 4: Update the application (Home Assistant)**
+
+Update the `recorder` database URL in Home Assistant's `configuration.yaml`:
+
+```yaml
+recorder:
+  db_url: postgresql://homeassistant:<NEW_PASSWORD>@postgres.hornung-bn.de:5433/homeassistant
+```
+
+Then restart Home Assistant to apply the new connection string.
+
+> **Important:** The password change takes effect immediately in PostgreSQL.
+> Any application still using the old password will get authentication failures
+> until updated.
+
+### Rotating Infrastructure Passwords (superuser, replication, admin)
+
+Infrastructure passwords (`pg_superuser_password`, `pg_replication_password`,
+`pg_admin_password`) require additional care because they are used by Patroni
+at runtime for replication and cluster management.
+
+**Process:**
+
+1. **Remove the stack** (secrets cannot be deleted while in use):
+   ```bash
+   docker stack rm postgres-ha-stack
+   ```
+   > **Warning:** This stops all PostgreSQL services. Plan for downtime.
+
+2. **Wait for all services to stop** (~30 seconds):
+   ```bash
+   docker service ls --filter name=postgres-ha-stack  # should show nothing
+   ```
+
+3. **Delete and recreate the secrets:**
+   ```bash
+   docker secret rm pg_superuser_password
+   echo "new-superuser-password" | docker secret create pg_superuser_password -
+   ```
+
+4. **Redeploy the stack:**
+   ```bash
+   docker stack deploy -c postgres-ha-stack.yml postgres-ha-stack --prune
+   ```
+
+5. **Verify Patroni cluster health:**
+   ```bash
+   docker exec $(docker ps -q -f name=postgres-1) patronictl list
+   ```
+
+> **Note:** For superuser/replication passwords, Patroni reads them from
+> `/run/secrets/` at startup and applies them to `pg_hba.conf` and
+> `postgresql.conf`. The PostgreSQL password is updated in the database
+> automatically by Patroni's bootstrap process.
 
 ---
 
