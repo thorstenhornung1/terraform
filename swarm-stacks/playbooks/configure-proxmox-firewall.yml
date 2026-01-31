@@ -4,11 +4,17 @@
 # Configures per-VM firewall rules on Proxmox to restrict network access.
 # Processes one VM at a time (serial: 1) to prevent cluster-wide lockout.
 #
-# Usage:
-#   ansible-playbook -i inventory.ini playbooks/configure-proxmox-firewall.yml
+# Usage (API token - recommended):
+#   PROXMOX_API_TOKEN_ID=user@pam!tokenname \
+#   PROXMOX_API_TOKEN_SECRET=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx \
+#   ansible-playbook -i ansible/inventory.ini playbooks/configure-proxmox-firewall.yml
+#
+# Usage (password auth - alternative):
+#   PROXMOX_API_PASSWORD=password \
+#   ansible-playbook -i ansible/inventory.ini playbooks/configure-proxmox-firewall.yml
 #
 # Rollback (disable firewall on all VMs):
-#   ansible-playbook -i inventory.ini playbooks/configure-proxmox-firewall.yml \
+#   ansible-playbook -i ansible/inventory.ini playbooks/configure-proxmox-firewall.yml \
 #     --extra-vars "firewall_enabled=false"
 #
 # Or manually per-VM:
@@ -24,8 +30,13 @@
   vars:
     proxmox_api_host: "pve01.hornung-bn.de"
     proxmox_api_user: "root@pam"
-    # Pass via --extra-vars or environment: PROXMOX_API_PASSWORD
+    # Auth method 1: API token (preferred)
+    proxmox_api_token_id: "{{ lookup('env', 'PROXMOX_API_TOKEN_ID') }}"
+    proxmox_api_token_secret: "{{ lookup('env', 'PROXMOX_API_TOKEN_SECRET') }}"
+    # Auth method 2: Password (fallback)
     proxmox_api_password: "{{ lookup('env', 'PROXMOX_API_PASSWORD') }}"
+    # Use token auth if token is set, otherwise password
+    use_token_auth: "{{ proxmox_api_token_id | length > 0 }}"
     firewall_enabled: true
 
     # -------------------------------------------------------------------------
@@ -198,9 +209,19 @@
 
   tasks:
     # =========================================================================
-    # Step 1: Get Proxmox API ticket
+    # Step 1: Authenticate to Proxmox API
     # =========================================================================
-    - name: Authenticate to Proxmox API
+
+    # --- Token auth (preferred) ---
+    - name: Set auth headers (API token)
+      ansible.builtin.set_fact:
+        pve_auth_headers:
+          Authorization: "PVEAPIToken={{ proxmox_api_token_id }}={{ proxmox_api_token_secret }}"
+      no_log: true
+      when: use_token_auth | bool
+
+    # --- Password auth (fallback) ---
+    - name: Authenticate to Proxmox API (password)
       ansible.builtin.uri:
         url: "https://{{ proxmox_api_host }}:8006/api2/json/access/ticket"
         method: POST
@@ -211,12 +232,15 @@
         validate_certs: false
       register: proxmox_auth
       no_log: true
+      when: not (use_token_auth | bool)
 
-    - name: Set auth facts
+    - name: Set auth headers (password ticket)
       ansible.builtin.set_fact:
-        pve_ticket: "{{ proxmox_auth.json.data.ticket }}"
-        pve_csrf: "{{ proxmox_auth.json.data.CSRFPreventionToken }}"
+        pve_auth_headers:
+          Cookie: "PVEAuthCookie={{ proxmox_auth.json.data.ticket }}"
+          CSRFPreventionToken: "{{ proxmox_auth.json.data.CSRFPreventionToken }}"
       no_log: true
+      when: not (use_token_auth | bool)
 
     # =========================================================================
     # Step 2: Configure App Nodes (one at a time)

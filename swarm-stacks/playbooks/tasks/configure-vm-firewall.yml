@@ -4,12 +4,11 @@
 # Called from configure-proxmox-firewall.yml via include_tasks
 #
 # Required variables:
-#   vm.vmid    - Proxmox VM ID
-#   vm.node    - Proxmox node name
-#   vm.name    - VM display name (for logging)
-#   fw_rules   - List of firewall rules to apply
-#   pve_ticket - Proxmox API ticket
-#   pve_csrf   - Proxmox CSRF token
+#   vm.vmid          - Proxmox VM ID
+#   vm.node          - Proxmox node name
+#   vm.name          - VM display name (for logging)
+#   fw_rules         - List of firewall rules to apply
+#   pve_auth_headers - Dict of auth headers (token or ticket+CSRF)
 #   firewall_enabled - Whether to enable the firewall (true/false)
 # =============================================================================
 ---
@@ -20,8 +19,7 @@
   ansible.builtin.uri:
     url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ vm.node }}/qemu/{{ vm.vmid }}/firewall/rules"
     method: GET
-    headers:
-      Cookie: "PVEAuthCookie={{ pve_ticket }}"
+    headers: "{{ pve_auth_headers }}"
     validate_certs: false
   register: existing_rules
 
@@ -29,9 +27,7 @@
   ansible.builtin.uri:
     url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ vm.node }}/qemu/{{ vm.vmid }}/firewall/rules/{{ item.pos }}"
     method: DELETE
-    headers:
-      Cookie: "PVEAuthCookie={{ pve_ticket }}"
-      CSRFPreventionToken: "{{ pve_csrf }}"
+    headers: "{{ pve_auth_headers }}"
     validate_certs: false
     status_code: [200]
   loop: "{{ existing_rules.json.data | default([]) | sort(attribute='pos') | reverse | list }}"
@@ -46,9 +42,7 @@
   ansible.builtin.uri:
     url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ vm.node }}/qemu/{{ vm.vmid }}/firewall/rules"
     method: POST
-    headers:
-      Cookie: "PVEAuthCookie={{ pve_ticket }}"
-      CSRFPreventionToken: "{{ pve_csrf }}"
+    headers: "{{ pve_auth_headers }}"
     body_format: form-urlencoded
     body:
       type: "{{ item.type }}"
@@ -72,9 +66,7 @@
   ansible.builtin.uri:
     url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ vm.node }}/qemu/{{ vm.vmid }}/firewall/options"
     method: PUT
-    headers:
-      Cookie: "PVEAuthCookie={{ pve_ticket }}"
-      CSRFPreventionToken: "{{ pve_csrf }}"
+    headers: "{{ pve_auth_headers }}"
     body_format: form-urlencoded
     body:
       enable: "{{ '1' if firewall_enabled | bool else '0' }}"

@@ -775,8 +775,9 @@ kubectl exec -n databases <backup-pod> -- bash -c "
 ## Documentation Map
 
 - **Main Knowledge Base:** `.claude/project_knowledge.md`
-- **KubeView Deployment:** `docs/KUBEVIEW_DEPLOYMENT.md` ⭐ NEW (2025-12-13)
-- **KubeView Quick Reference:** `KUBEVIEW_QUICK_REFERENCE.md` ⭐ NEW (2025-12-13)
+- **PostgreSQL HA Security:** `docs/POSTGRES_HA_SECURITY.md` ⭐ NEW (2026-01-30)
+- **KubeView Deployment:** `docs/KUBEVIEW_DEPLOYMENT.md` (2025-12-13)
+- **KubeView Quick Reference:** `KUBEVIEW_QUICK_REFERENCE.md` (2025-12-13)
 - **Infisical TLS Deployment:** `docs/INFISICAL_TLS_DEPLOYMENT.md` (2025-12-05)
 - **Infisical Recovery Guide:** `docs/INFISICAL_RESTORE_GUIDE.md` (2025-12-05)
 - **PostgreSQL Backup System:** `docs/POSTGRESQL_BACKUP_SYSTEM.md` (2025-11-14)
@@ -925,11 +926,17 @@ For issues:
 
 ---
 
-**Last Updated:** 2025-12-28
-**Updated By:** Infrastructure Team (Infisical Operator Recursive Fix)
+**Last Updated:** 2026-01-30
+**Updated By:** Infrastructure Team (PostgreSQL HA Security Hardening)
 
 ## Recent Achievements
-- ✅ **Infisical Operator recursive fix** - Resolved secret sync limitation (2025-12-28) ⭐ NEW
+- ✅ **PostgreSQL HA security hardening** - 3-layer access control (2026-01-30) ⭐ NEW
+  - pg_hba.conf restricted from 0.0.0.0/0 to specific VLAN 12 + overlay CIDRs
+  - HAProxy stats port 7000 removed from external access
+  - Proxmox VM firewall enabled on all 6 nodes (DROP policy, explicit ACCEPT rules)
+  - Only Home Assistant (192.168.2.5) and internal VLANs can reach PostgreSQL
+  - Docs: `docs/POSTGRES_HA_SECURITY.md`
+- ✅ **Infisical Operator recursive fix** - Resolved secret sync limitation (2025-12-28)
   - Created migration script: `helpers/migrate-infisical-secrets.py` (main branch)
   - Fixed `recursive: true` not syncing subdirectory secrets
   - Flattened 15 secrets to root path with path prefixes

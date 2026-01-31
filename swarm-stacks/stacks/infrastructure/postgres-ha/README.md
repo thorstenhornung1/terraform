@@ -93,7 +93,7 @@ All nodes run on **VLAN 12** (192.168.12.0/24), the dedicated storage and replic
 | File | Purpose |
 |---|---|
 | `postgres-ha-stack.yml` | Docker Swarm stack definition (all services, networks, volumes, secrets) |
-| `haproxy.cfg` | HAProxy configuration -- primary routing on 5433, replica routing on 5434, stats on 7000 |
+| `haproxy.cfg` | HAProxy configuration -- primary routing on 5433, replica routing on 5434, stats on 7000 (internal only) |
 | `db-init.sh` | Central database initialization -- creates application users and databases idempotently |
 | `create-secrets.sh` | Script to create Docker secrets (run once on a Swarm manager before first deploy) |
 | `docker/Dockerfile` | Custom image definition: PostgreSQL 16 Alpine + Patroni 3.3.2 + etcd3 support |
@@ -187,7 +187,7 @@ docker stack services postgres-ha-stack
 |---|---|---|---|
 | HAProxy Primary (RW) | 5433 | TCP (ingress) | Routed to current Patroni leader |
 | HAProxy Replicas (RO) | 5434 | TCP (ingress) | Load-balanced across standby nodes |
-| HAProxy Stats | 7000 | HTTP (ingress) | Health dashboard at `http://<any-node>:7000` |
+| HAProxy Stats | 7000 | HTTP (internal only) | Access via `docker exec` (removed from published ports for security) |
 | PostgreSQL Direct | 5432 | TCP (host mode) | Direct node access (not recommended for applications) |
 | Patroni REST API | 8008 | HTTP (host mode) | Health checks: `/primary`, `/replica`, `/health`, `/cluster` |
 | PgBouncer | 6432 | TCP (ingress) | Connection pooling (disabled by default, replicas: 0) |
@@ -358,7 +358,14 @@ When the primary node fails or becomes unreachable:
 
 ### HAProxy Stats Dashboard
 
-Available at `http://<any-swarm-node>:7000`. Shows real-time backend health for both the primary and replica listeners, including connection counts, response times, and server states (UP/DOWN).
+Port 7000 is no longer published externally for security. Access the stats dashboard via `docker exec`:
+
+```bash
+# From a Swarm manager node
+docker exec $(docker ps -q -f name=haproxy) sh -c 'wget -qO- http://127.0.0.1:7000/'
+```
+
+Shows real-time backend health for both the primary and replica listeners, including connection counts, response times, and server states (UP/DOWN).
 
 ### Patroni REST API
 
@@ -422,6 +429,39 @@ SHOW synchronous_standby_names;
 | postgres-exporter | 0.25 | 128M | 0.05 | 32M |
 
 **Total per infrastructure node:** 2.5 CPU / 2.5 GB memory (limits), 0.6 CPU / 640 MB memory (reservations).
+
+---
+
+## Security
+
+The cluster is hardened at three layers. See `docs/POSTGRES_HA_SECURITY.md` for full details.
+
+### Layer 1: pg_hba.conf
+
+PostgreSQL authentication is restricted to specific CIDRs:
+- **Replication:** Only the 3 infra node IPs on VLAN 12 (`192.168.12.40-42/32`)
+- **Application connections:** Only the Docker overlay network (`10.0.20.0/24`) and VLAN 12 (`192.168.12.0/24`)
+- **No `0.0.0.0/0` rules** — unauthenticated network access is impossible
+
+### Layer 2: HAProxy
+
+- Stats port 7000 removed from external access (internal via `docker exec` only)
+- Admin password has no default — deployment fails if secret is missing
+
+### Layer 3: Proxmox Firewall
+
+All 6 VMs have Proxmox VM-level firewall enabled with `policy_in=DROP`:
+- **App nodes (4100-4102):** SSH, HAProxy ports (5433/5434 from HA only), Swarm ports
+- **Infra nodes (4200-4202):** All app rules plus PostgreSQL (5432), Patroni (8008), etcd (2379/2380), exporter (9187)
+- Only Home Assistant (192.168.2.5) and VLAN 4/12 subnets are allowed through
+- Firewall rules are enforced at the hypervisor level, outside the VM
+
+### Rollback
+
+```bash
+# Disable firewall on a single VM
+pvesh set /nodes/<pve-node>/qemu/<vmid>/firewall/options --enable 0
+```
 
 ---
 
