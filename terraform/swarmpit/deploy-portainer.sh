@@ -16,7 +16,7 @@ set -e
 # Configuration
 STACK_NAME="portainer"
 COMPOSE_FILE="$(dirname "$0")/portainer-stack.yml"
-TARGET_NODE="swarmpit-mgmt"
+TARGET_NODE="swarmpit"
 
 # Colors for output
 RED='\033[0;31m'

@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   docker-socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.3.0
+    image: tecnativa/docker-socket-proxy:latest
     environment:
       CONTAINERS: "1"
       SERVICES: "1"
@@ -23,23 +23,23 @@ services:
         condition: on-failure
 
   traefik:
-    image: traefik:v3.1
+    image: traefik:v3.6
     secrets:
       - traefik_dns_api_token
       - traefik_dashboard_auth
     environment:
       CF_DNS_API_TOKEN_FILE: /run/secrets/traefik_dns_api_token
+      DOCKER_API_VERSION: "1.45"
 
     command:
       # Logging
       - --log.level=INFO
       - --accesslog=true
 
-      # Docker Swarm Provider
-      - --providers.docker=true
-      - --providers.docker.swarmMode=true
-      - --providers.docker.endpoint=tcp://docker-socket-proxy:2375
-      - --providers.docker.exposedbydefault=false
+      # Docker Swarm Provider (v3 syntax)
+      - --providers.swarm=true
+      - --providers.swarm.endpoint=tcp://docker-socket-proxy:2375
+      - --providers.swarm.exposedbydefault=false
 
       # EntryPoints
       - --entrypoints.web.address=:80
@@ -97,6 +97,7 @@ services:
         - traefik.http.routers.traefik.service=api@internal
         - traefik.http.routers.traefik.middlewares=traefik-auth
         - traefik.http.middlewares.traefik-auth.basicauth.usersFile=/run/secrets/traefik_dashboard_auth
+        - traefik.http.services.traefik.loadbalancer.server.port=8080
 
 networks:
   traefik_public:
