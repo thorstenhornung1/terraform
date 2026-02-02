@@ -73,9 +73,9 @@ services:
           cpus: '0.1'
           memory: 128M
       restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
+        condition: any
+        delay: 10s
+        window: 120s
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
       interval: 10s
@@ -125,9 +125,9 @@ services:
           cpus: '0.1'
           memory: 128M
       restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
+        condition: any
+        delay: 10s
+        window: 120s
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
       interval: 10s
@@ -177,9 +177,9 @@ services:
           cpus: '0.1'
           memory: 128M
       restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
+        condition: any
+        delay: 10s
+        window: 120s
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
       interval: 10s
@@ -247,9 +247,9 @@ services:
           cpus: '0.5'
           memory: 512M
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 10s
-        max_attempts: 3
+        window: 120s
       update_config:
         parallelism: 1
         delay: 30s
@@ -316,9 +316,9 @@ services:
           cpus: '0.5'
           memory: 512M
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 10s
-        max_attempts: 3
+        window: 120s
       update_config:
         parallelism: 1
         delay: 30s
@@ -385,9 +385,9 @@ services:
           cpus: '0.5'
           memory: 512M
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 10s
-        max_attempts: 3
+        window: 120s
       update_config:
         parallelism: 1
         delay: 30s
@@ -444,9 +444,9 @@ services:
           cpus: '0.1'
           memory: 64M
       restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
+        condition: any
+        delay: 10s
+        window: 120s
       update_config:
         parallelism: 1
         delay: 10s
@@ -592,8 +592,9 @@ services:
           cpus: '0.05'
           memory: 32M
       restart_policy:
-        condition: on-failure
-        delay: 5s
+        condition: any
+        delay: 10s
+        window: 120s
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9187/metrics"]
       interval: 30s

@@ -35,6 +35,8 @@ PostgreSQL sees overlay IPs (10.0.20.x) for all connections routed through HAPro
 
 | Type | Database | User | Source CIDR | Auth Method | Purpose |
 |------|----------|------|-------------|-------------|---------|
+| local | all | all | — | peer | Patroni health checks and management |
+| host | all | all | 127.0.0.1/32 | scram-sha-256 | Patroni localhost connections |
 | host | replication | replicator | 192.168.12.40/32 | scram-sha-256 | Replication from infra-1 |
 | host | replication | replicator | 192.168.12.41/32 | scram-sha-256 | Replication from infra-2 |
 | host | replication | replicator | 192.168.12.42/32 | scram-sha-256 | Replication from infra-3 |
@@ -44,15 +46,18 @@ PostgreSQL sees overlay IPs (10.0.20.x) for all connections routed through HAPro
 ### What changed
 
 - **Before:** `0.0.0.0/0` — any IP could authenticate
-- **After:** Only VLAN 12 infra nodes and the Docker overlay network
+- **After:** Only localhost (for Patroni), VLAN 12 infra nodes, and the Docker overlay network
+- **2026-02-02 fix:** Added `local` and `127.0.0.1/32` rules — Patroni requires localhost access for health checks, leader election, and pg_rewind. Without these rules, no node can become leader and the entire cluster stays dead.
 
 ### Applying changes to a running cluster
 
 ```bash
-# Patch via Patroni REST API (apply to leader, auto-propagates)
+# Patch via Patroni REST API (apply to any node, auto-propagates)
 curl -s -XPATCH http://192.168.12.41:8008/config -d '{
   "postgresql": {
     "pg_hba": [
+      "local all all peer",
+      "host all all 127.0.0.1/32 scram-sha-256",
       "host replication replicator 192.168.12.40/32 scram-sha-256",
       "host replication replicator 192.168.12.41/32 scram-sha-256",
       "host replication replicator 192.168.12.42/32 scram-sha-256",
