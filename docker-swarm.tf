@@ -1,39 +1,17 @@
 # ============================================================================
 # Docker Swarm Cluster Infrastructure
 # ============================================================================
-# Architecture: Single Swarm with 6 nodes
-#   - 3 Application Nodes (docker-app-1/2/3) - Swarm Managers
-#   - 3 Infrastructure Nodes (docker-infra-1/2/3) - SeaweedFS + Patroni
+# Architecture: Single Swarm with 3 infra nodes + 1 management LXC
+#   - 3 Infrastructure Nodes (docker-infra-1/2/3) - Swarm Managers + Patroni
+#   - 1 Management LXC (swarm-control) - Portainer (bootstrap/recovery)
 #
-# Storage: All VMs on ZFS Tank pool for snapshots and performance
-# Network: Dual VLAN (4 = Cluster, 12 = Storage)
-#
-# Ansible will later:
-#   - Initialize Docker Swarm cluster
-#   - Deploy SeaweedFS on infra nodes (placement constraints)
-#   - Deploy Patroni PostgreSQL cluster on infra nodes
-#   - Configure overlay networks
+# Storage: ZFS Tank pool (pve01/pve03), local-lvm (pve02)
+# Network: Dual VLAN (4 = Cluster, 12 = Storage/Replication)
 # ============================================================================
 
 # ============================================================================
 # Cloud-Init Snippets
 # ============================================================================
-
-# Application Nodes Cloud-Init
-resource "proxmox_virtual_environment_file" "cloud_init_app" {
-  for_each = var.app_nodes
-
-  content_type = "snippets"
-  datastore_id = "local"
-  node_name    = each.value.node
-
-  source_raw {
-    data = templatefile("${path.module}/terraform/docker-swarm/cloud-init-docker.yml", {
-      vm_hostname = "${var.app_node_prefix}-${each.key}"
-    })
-    file_name = "cloud-init-${var.app_node_prefix}-${each.key}.yml"
-  }
-}
 
 # Infrastructure Nodes Cloud-Init
 resource "proxmox_virtual_environment_file" "cloud_init_infra" {
@@ -52,101 +30,7 @@ resource "proxmox_virtual_environment_file" "cloud_init_infra" {
 }
 
 # ============================================================================
-# Application Nodes (Docker Swarm Managers for Applications)
-# ============================================================================
-
-resource "proxmox_virtual_environment_vm" "app_nodes" {
-  for_each = var.app_nodes
-
-  name      = "${var.app_node_prefix}-${each.key}"
-  node_name = each.value.node
-  vm_id     = each.value.vm_id
-
-  tags = ["docker", "swarm", "app"]
-
-  clone {
-    vm_id     = var.template_id
-    node_name = "pve03"
-    full      = true
-  }
-
-  cpu {
-    cores = var.app_node_cores
-    type  = "host"
-  }
-
-  memory {
-    dedicated = var.app_node_memory
-  }
-
-  boot_order = ["scsi0"]
-
-  # Single disk on ZFS Tank
-  disk {
-    datastore_id = var.storage_pool
-    interface    = "scsi0"
-    size         = var.app_node_disk_size
-  }
-
-  # Network Interface 1: VLAN 4 (Cluster Network - PRIMARY)
-  network_device {
-    bridge   = "vmbr0"
-    vlan_id  = var.vlan_id
-    firewall = true
-  }
-
-  # Network Interface 2: VLAN 12 (Storage Network)
-  network_device {
-    bridge   = "vmbr0"
-    vlan_id  = var.vlan_id_storage
-    firewall = true
-  }
-
-  initialization {
-    # IP Config for VLAN 4 (eth0 - PRIMARY with gateway)
-    ip_config {
-      ipv4 {
-        address = "${each.value.ip_vlan4}/24"
-        gateway = var.network_gateway
-      }
-    }
-
-    # IP Config for VLAN 12 (eth1 - Storage, no gateway)
-    ip_config {
-      ipv4 {
-        address = "${each.value.ip_vlan12}/24"
-      }
-    }
-
-    dns {
-      servers = var.dns_servers
-    }
-
-    user_account {
-      username = var.vm_username
-      password = var.vm_password
-      keys     = [file(var.ssh_public_key_path)]
-    }
-
-    user_data_file_id = proxmox_virtual_environment_file.cloud_init_app[each.key].id
-  }
-
-  agent {
-    enabled = true
-  }
-
-  operating_system {
-    type = "l26"
-  }
-
-  # Clean SSH known_hosts after VM creation
-  provisioner "local-exec" {
-    command = "ssh-keygen -R ${each.value.ip_vlan4} 2>/dev/null || true"
-  }
-}
-
-# ============================================================================
-# Infrastructure Nodes (SeaweedFS + Patroni Cluster)
+# Infrastructure Nodes (Swarm Managers + Patroni PostgreSQL)
 # ============================================================================
 
 resource "proxmox_virtual_environment_vm" "infra_nodes" {
@@ -156,7 +40,7 @@ resource "proxmox_virtual_environment_vm" "infra_nodes" {
   node_name = each.value.node
   vm_id     = each.value.vm_id
 
-  tags = ["docker", "swarm", "infra", "storage", "database"]
+  tags = ["docker", "swarm", "infra", "database"]
 
   clone {
     vm_id     = var.template_id

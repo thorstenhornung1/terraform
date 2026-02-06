@@ -1,6 +1,6 @@
 # Terraform Variables for Docker Swarm Cluster
-# Architecture: Single Swarm with 3 App Nodes + 3 Infra Nodes
-# All VMs on ZFS Tank storage with dual VLAN networking
+# Architecture: Single Swarm with 3 Infra Nodes (Managers) + 1 Management LXC
+# Infra nodes on ZFS Tank / local-lvm with dual VLAN networking
 
 # ============================================================================
 # PROXMOX CONFIGURATION
@@ -93,75 +93,13 @@ variable "storage_pool" {
 }
 
 # ============================================================================
-# APPLICATION NODES (Docker Swarm - Application Workloads)
+# INFRASTRUCTURE NODES (Docker Swarm Managers + Patroni PostgreSQL)
 # ============================================================================
-# These nodes run application containers: web apps, APIs, etc.
-# All 3 are Swarm Managers for HA
-
-variable "app_node_prefix" {
-  description = "Prefix for application node names"
-  type        = string
-  default     = "docker-app"
-}
-
-variable "app_node_cores" {
-  description = "CPU cores for app nodes"
-  type        = number
-  default     = 4
-}
-
-variable "app_node_memory" {
-  description = "Memory for app nodes in MB"
-  type        = number
-  default     = 8192
-}
-
-variable "app_node_disk_size" {
-  description = "Disk size for app nodes in GB"
-  type        = number
-  default     = 50
-}
-
-variable "app_nodes" {
-  description = "Application node configuration"
-  type = map(object({
-    node    = string
-    vm_id   = number
-    ip_vlan4  = string
-    ip_vlan12 = string
-  }))
-  default = {
-    "1" = {
-      node      = "pve01"
-      vm_id     = 4100
-      ip_vlan4  = "192.168.4.30"
-      ip_vlan12 = "192.168.12.30"
-    }
-    "2" = {
-      node      = "pve02"
-      vm_id     = 4101
-      ip_vlan4  = "192.168.4.31"
-      ip_vlan12 = "192.168.12.31"
-    }
-    "3" = {
-      node      = "pve03"
-      vm_id     = 4102
-      ip_vlan4  = "192.168.4.32"
-      ip_vlan12 = "192.168.12.32"
-    }
-  }
-}
-
-# ============================================================================
-# INFRASTRUCTURE NODES (Docker Swarm - SeaweedFS + Patroni)
-# ============================================================================
-# These nodes run infrastructure services:
-# - SeaweedFS distributed storage cluster
-# - PostgreSQL Patroni HA cluster
-# Placement constraints ensure these only run on infra nodes
-#
-# NOTE: Only 2 infra nodes (pve01, pve03) due to storage constraints on pve02
-# SeaweedFS/Patroni 3rd instance can run on app node if needed
+# These nodes are Swarm Managers and run:
+# - Patroni PostgreSQL HA cluster (etcd + postgres)
+# - Traefik reverse proxy (via app=true label)
+# - HAProxy for PostgreSQL routing
+# - Application workloads
 
 variable "infra_node_prefix" {
   description = "Prefix for infrastructure node names"
@@ -224,50 +162,50 @@ variable "infra_nodes" {
 }
 
 # ============================================================================
-# SWARMPIT LXC CONTAINER (Docker Swarm Management UI)
+# SWARM-CONTROL LXC CONTAINER (Bootstrap/Recovery Management Node)
 # ============================================================================
-# Swarmpit provides web UI for Docker Swarm management
-# Runs as Docker Swarm worker with CouchDB + InfluxDB
-# CouchDB Memory Requirements: 4GB minimum for view building spikes
+# Independent management node for Portainer (bootstrap/recovery tool)
+# Survives infra node failures for cluster recovery
+# Runs as Docker Swarm worker
 
-variable "swarmpit_node" {
-  description = "Proxmox node for Swarmpit container"
+variable "swarm_control_node" {
+  description = "Proxmox node for swarm-control container"
   type        = string
   default     = "pve01"
 }
 
-variable "swarmpit_vmid" {
-  description = "VM ID for Swarmpit LXC container"
+variable "swarm_control_vmid" {
+  description = "VM ID for swarm-control LXC container"
   type        = number
   default     = 4300
 }
 
-variable "swarmpit_hostname" {
-  description = "Hostname for Swarmpit container"
+variable "swarm_control_hostname" {
+  description = "Hostname for swarm-control container"
   type        = string
-  default     = "swarmpit-mgmt"
+  default     = "swarm-control"
 }
 
-variable "swarmpit_ip" {
-  description = "IP address for Swarmpit container (VLAN 4)"
+variable "swarm_control_ip" {
+  description = "IP address for swarm-control container (VLAN 4)"
   type        = string
   default     = "192.168.4.50"
 }
 
-variable "swarmpit_cores" {
-  description = "CPU cores for Swarmpit container"
+variable "swarm_control_cores" {
+  description = "CPU cores for swarm-control container"
   type        = number
-  default     = 4  # 2 for Swarm/Docker, 2 for CouchDB
+  default     = 4
 }
 
-variable "swarmpit_memory" {
-  description = "Memory in MB for Swarmpit container"
+variable "swarm_control_memory" {
+  description = "Memory in MB for swarm-control container"
   type        = number
-  default     = 6144  # 6GB: 4GB CouchDB + 2GB Swarmpit/InfluxDB
+  default     = 6144  # 6GB: Portainer + Swarmpit services
 }
 
-variable "swarmpit_disk_size" {
-  description = "Disk size in GB for Swarmpit container"
+variable "swarm_control_disk_size" {
+  description = "Disk size in GB for swarm-control container"
   type        = number
-  default     = 30  # CouchDB data + InfluxDB metrics
+  default     = 30
 }

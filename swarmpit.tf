@@ -1,13 +1,13 @@
 # ============================================================================
-# Swarmpit LXC Container Configuration
+# Swarm-Control LXC Container Configuration
 # ============================================================================
-# Purpose: Swarmpit Docker Swarm Management UI with CouchDB
+# Purpose: Bootstrap/Recovery management node with Portainer
 # Container Type: LXC (privileged for Docker nesting)
 # Storage: ZFS Tank for snapshots
 # Network: VLAN 4 (Cluster Network)
 #
-# IMPORTANT: This container will be added to the existing Docker Swarm
-# as a Worker node. Swarmpit services run here but don't affect Swarm quorum.
+# IMPORTANT: This container is the independent recovery tool for the Swarm.
+# Portainer runs here and survives infra node failures.
 # ============================================================================
 
 # ============================================================================
@@ -17,7 +17,7 @@
 resource "proxmox_virtual_environment_download_file" "ubuntu_lxc_template" {
   content_type = "vztmpl"
   datastore_id = "local"
-  node_name    = var.swarmpit_node
+  node_name    = var.swarm_control_node
 
   url       = "http://download.proxmox.com/images/system/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
   file_name = "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
@@ -26,49 +26,46 @@ resource "proxmox_virtual_environment_download_file" "ubuntu_lxc_template" {
 }
 
 # ============================================================================
-# Cloud-Init Snippet for Swarmpit Container
+# Cloud-Init Snippet for Swarm-Control Container
 # ============================================================================
 
-resource "proxmox_virtual_environment_file" "cloud_init_swarmpit" {
+resource "proxmox_virtual_environment_file" "cloud_init_swarm_control" {
   content_type = "snippets"
   datastore_id = "local"
-  node_name    = var.swarmpit_node
+  node_name    = var.swarm_control_node
 
   source_raw {
     data = templatefile("${path.module}/terraform/swarmpit/cloud-init-swarmpit.yml", {
-      vm_hostname     = var.swarmpit_hostname
-      dns_servers     = join(" ", var.dns_servers)
-      swarm_manager_ip = var.app_nodes["1"].ip_vlan4  # First app node is Swarm manager
+      vm_hostname      = var.swarm_control_hostname
+      dns_servers      = join(" ", var.dns_servers)
+      swarm_manager_ip = var.infra_nodes["1"].ip_vlan4  # First infra node is Swarm manager
     })
-    file_name = "cloud-init-swarmpit.yml"
+    file_name = "cloud-init-swarm-control.yml"
   }
 }
 
 # ============================================================================
-# Swarmpit LXC Container
+# Swarm-Control LXC Container
 # ============================================================================
 
-resource "proxmox_virtual_environment_container" "swarmpit" {
-  node_name = var.swarmpit_node
-  vm_id     = var.swarmpit_vmid
+resource "proxmox_virtual_environment_container" "swarm_control" {
+  node_name = var.swarm_control_node
+  vm_id     = var.swarm_control_vmid
 
-  description = "Swarmpit Docker Swarm Management UI with CouchDB"
-  tags        = ["docker", "swarm", "swarmpit", "management"]
+  description = "Swarm-Control: Bootstrap/Recovery management node with Portainer"
+  tags        = ["docker", "swarm", "management", "portainer"]
 
   # =========================================================================
-  # Container Resources (CRITICAL for CouchDB!)
+  # Container Resources
   # =========================================================================
-  # CouchDB requires: 4GB RAM (hard), 2GB (soft) for view building spikes
-  # Swarmpit + InfluxDB: 1-2GB additional
-  # Total recommended: 6GB RAM minimum
 
   cpu {
-    cores = var.swarmpit_cores
+    cores = var.swarm_control_cores
   }
 
   memory {
-    dedicated = var.swarmpit_memory
-    swap      = 0  # CouchDB performs poorly with swap
+    dedicated = var.swarm_control_memory
+    swap      = 0
   }
 
   # =========================================================================
@@ -77,7 +74,7 @@ resource "proxmox_virtual_environment_container" "swarmpit" {
 
   disk {
     datastore_id = var.storage_pool
-    size         = var.swarmpit_disk_size
+    size         = var.swarm_control_disk_size
   }
 
   # =========================================================================
@@ -124,11 +121,11 @@ resource "proxmox_virtual_environment_container" "swarmpit" {
   # =========================================================================
 
   initialization {
-    hostname = var.swarmpit_hostname
+    hostname = var.swarm_control_hostname
 
     ip_config {
       ipv4 {
-        address = "${var.swarmpit_ip}/24"
+        address = "${var.swarm_control_ip}/24"
         gateway = var.network_gateway
       }
     }
@@ -168,7 +165,7 @@ resource "proxmox_virtual_environment_container" "swarmpit" {
   # =========================================================================
 
   provisioner "local-exec" {
-    command = "ssh-keygen -R ${var.swarmpit_ip} 2>/dev/null || true"
+    command = "ssh-keygen -R ${var.swarm_control_ip} 2>/dev/null || true"
   }
 
   depends_on = [
@@ -180,25 +177,25 @@ resource "proxmox_virtual_environment_container" "swarmpit" {
 # Outputs
 # ============================================================================
 
-output "swarmpit_container" {
-  description = "Swarmpit LXC container details"
+output "swarm_control_container" {
+  description = "Swarm-Control LXC container details"
   value = {
-    vm_id     = proxmox_virtual_environment_container.swarmpit.vm_id
-    hostname  = var.swarmpit_hostname
-    ip        = var.swarmpit_ip
-    node      = var.swarmpit_node
-    cpu       = "${var.swarmpit_cores} cores"
-    memory    = "${var.swarmpit_memory} MB"
-    disk      = "${var.swarmpit_disk_size} GB"
-    swarmpit_ui = "http://${var.swarmpit_ip}:888"
+    vm_id     = proxmox_virtual_environment_container.swarm_control.vm_id
+    hostname  = var.swarm_control_hostname
+    ip        = var.swarm_control_ip
+    node      = var.swarm_control_node
+    cpu       = "${var.swarm_control_cores} cores"
+    memory    = "${var.swarm_control_memory} MB"
+    disk      = "${var.swarm_control_disk_size} GB"
+    portainer = "https://${var.swarm_control_ip}:9443"
   }
 }
 
-output "swarmpit_ansible_host" {
-  description = "Ansible inventory entry for Swarmpit"
+output "swarm_control_ansible_host" {
+  description = "Ansible inventory entry for swarm-control"
   value = {
-    hostname = var.swarmpit_hostname
-    ip       = var.swarmpit_ip
+    hostname = var.swarm_control_hostname
+    ip       = var.swarm_control_ip
     user     = "root"
   }
 }

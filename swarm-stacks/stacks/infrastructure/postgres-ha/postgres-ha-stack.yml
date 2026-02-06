@@ -259,7 +259,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 10m
 
   postgres-2:
     image: patroni-postgres:16
@@ -328,7 +328,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 10m
 
   postgres-3:
     image: patroni-postgres:16
@@ -397,7 +397,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 10m
 
   # ===========================================================================
   # HAPROXY (Patroni Leader Routing)

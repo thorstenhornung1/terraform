@@ -61,7 +61,7 @@ services:
       placement:
         constraints:
           # Pin to swarmpit-mgmt node using hostname constraint
-          - node.hostname == swarmpit
+          - node.hostname == swarm-control
           # Alternative: Use label constraint (set via deploy script)
           # - node.labels.portainer.data == true
       resources:

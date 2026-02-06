@@ -43,6 +43,7 @@
     - name: Install required packages
       apt:
         name:
+          - qemu-guest-agent
           - fuse3
           - xfsprogs
           - lvm2
@@ -50,6 +51,12 @@
           - python3-psycopg2
         state: present
         update_cache: yes
+
+    - name: Ensure qemu-guest-agent is running
+      service:
+        name: qemu-guest-agent
+        state: started
+        enabled: yes
 
     - name: Ensure fuse module is loaded
       modprobe:

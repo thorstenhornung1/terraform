@@ -19,7 +19,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 STACKS_DIR="$REPO_ROOT/stacks"
-SWARM_MANAGER="${SWARM_MANAGER:-192.168.4.30}"
+SWARM_MANAGER="${SWARM_MANAGER:-192.168.4.40}"
 SWARM_USER="${SWARM_USER:-ansible}"
 
 # Colors

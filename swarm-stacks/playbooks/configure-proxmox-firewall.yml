@@ -42,17 +42,6 @@
     # -------------------------------------------------------------------------
     # VM Definitions
     # -------------------------------------------------------------------------
-    app_nodes:
-      - vmid: 4100
-        node: pve01
-        name: docker-app-1
-      - vmid: 4101
-        node: pve02
-        name: docker-app-2
-      - vmid: 4102
-        node: pve03
-        name: docker-app-3
-
     infra_nodes:
       - vmid: 4200
         node: pve01
@@ -95,6 +84,22 @@
         comment: "Home Assistant -> HAProxy PostgreSQL RO"
         pos: 2
 
+      # Traefik HTTP (VLAN 4 - web traffic)
+      - type: in
+        action: ACCEPT
+        dport: "80"
+        proto: tcp
+        comment: "Traefik HTTP ingress"
+        pos: 3
+
+      # Traefik HTTPS (VLAN 4 - web traffic)
+      - type: in
+        action: ACCEPT
+        dport: "443"
+        proto: tcp
+        comment: "Traefik HTTPS ingress"
+        pos: 4
+
       # Docker Swarm management (VLAN 4)
       - type: in
         action: ACCEPT
@@ -102,7 +107,7 @@
         dport: "2377"
         proto: tcp
         comment: "Swarm management VLAN 4"
-        pos: 3
+        pos: 5
 
       # Docker Swarm gossip TCP (VLAN 4)
       - type: in
@@ -111,7 +116,7 @@
         dport: "7946"
         proto: tcp
         comment: "Swarm gossip TCP VLAN 4"
-        pos: 4
+        pos: 6
 
       # Docker Swarm gossip UDP (VLAN 4)
       - type: in
@@ -120,7 +125,7 @@
         dport: "7946"
         proto: udp
         comment: "Swarm gossip UDP VLAN 4"
-        pos: 5
+        pos: 7
 
       # Docker Swarm VXLAN (VLAN 4)
       - type: in
@@ -129,7 +134,7 @@
         dport: "4789"
         proto: udp
         comment: "Swarm VXLAN VLAN 4"
-        pos: 6
+        pos: 8
 
       # Docker Swarm gossip TCP (VLAN 12)
       - type: in
@@ -138,7 +143,7 @@
         dport: "7946"
         proto: tcp
         comment: "Swarm gossip TCP VLAN 12"
-        pos: 7
+        pos: 9
 
       # Docker Swarm gossip UDP (VLAN 12)
       - type: in
@@ -147,7 +152,7 @@
         dport: "7946"
         proto: udp
         comment: "Swarm gossip UDP VLAN 12"
-        pos: 8
+        pos: 10
 
       # Docker Swarm VXLAN (VLAN 12)
       - type: in
@@ -156,7 +161,7 @@
         dport: "4789"
         proto: udp
         comment: "Swarm VXLAN VLAN 12"
-        pos: 9
+        pos: 11
 
     # -------------------------------------------------------------------------
     # Firewall Rules - Infra-only (PostgreSQL, Patroni, etcd)
@@ -169,7 +174,7 @@
         dport: "5432"
         proto: tcp
         comment: "PostgreSQL direct VLAN 12"
-        pos: 10
+        pos: 12
 
       # Patroni REST API (HAProxy health checks via VLAN 12)
       - type: in
@@ -178,7 +183,7 @@
         dport: "8008"
         proto: tcp
         comment: "Patroni REST API VLAN 12"
-        pos: 11
+        pos: 13
 
       # etcd client port (VLAN 12)
       - type: in
@@ -187,7 +192,7 @@
         dport: "2379"
         proto: tcp
         comment: "etcd client VLAN 12"
-        pos: 12
+        pos: 14
 
       # etcd peer port (VLAN 12)
       - type: in
@@ -196,7 +201,7 @@
         dport: "2380"
         proto: tcp
         comment: "etcd peer VLAN 12"
-        pos: 13
+        pos: 15
 
       # Prometheus exporter (VLAN 4 for monitoring)
       - type: in
@@ -205,7 +210,7 @@
         dport: "9187"
         proto: tcp
         comment: "Postgres exporter metrics VLAN 4"
-        pos: 14
+        pos: 16
 
   tasks:
     # =========================================================================
@@ -243,19 +248,7 @@
       when: not (use_token_auth | bool)
 
     # =========================================================================
-    # Step 2: Configure App Nodes (one at a time)
-    # =========================================================================
-    - name: Configure firewall for app nodes
-      ansible.builtin.include_tasks: tasks/configure-vm-firewall.yml
-      loop: "{{ app_nodes }}"
-      loop_control:
-        loop_var: vm
-        label: "{{ vm.name }} (VMID {{ vm.vmid }})"
-      vars:
-        fw_rules: "{{ common_rules }}"
-
-    # =========================================================================
-    # Step 3: Configure Infra Nodes (one at a time)
+    # Step 2: Configure Infra Nodes (Swarm Managers + Patroni)
     # =========================================================================
     - name: Configure firewall for infra nodes
       ansible.builtin.include_tasks: tasks/configure-vm-firewall.yml
