@@ -54,12 +54,17 @@ bootstrap:
         wal_keep_size: ${PATRONI_WAL_KEEP_SIZE:-1GB}
         hot_standby_feedback: "on"
         archive_mode: "on"
-        archive_command: 'cp %p /var/lib/postgresql/wal_archive/%f'
+        archive_command: 'cp %p /var/lib/postgresql/wal_archive/%f && find /var/lib/postgresql/wal_archive/ -type f -mtime +7 -delete'
         shared_buffers: ${PATRONI_SHARED_BUFFERS:-256MB}
         effective_cache_size: ${PATRONI_EFFECTIVE_CACHE_SIZE:-1GB}
         work_mem: ${PATRONI_WORK_MEM:-16MB}
         maintenance_work_mem: ${PATRONI_MAINTENANCE_WORK_MEM:-128MB}
         synchronous_commit: ${PATRONI_SYNCHRONOUS_COMMIT:-on}
+        tcp_keepalives_idle: 30
+        tcp_keepalives_interval: 10
+        tcp_keepalives_count: 5
+        statement_timeout: 3600000
+        idle_in_transaction_session_timeout: 3600000
 
   initdb:
     - encoding: UTF8

@@ -66,7 +66,7 @@ All nodes run on **VLAN 12** (192.168.12.0/24), the dedicated storage and replic
 | Component | Replicas | Image | Purpose |
 |---|---|---|---|
 | etcd-1, etcd-2, etcd-3 | 1 each (pinned per node) | `quay.io/coreos/etcd:v3.5.15` | Distributed consensus for Patroni leader election |
-| postgres-1, postgres-2, postgres-3 | 1 each (pinned per node) | `patroni-postgres:16` (custom) | PostgreSQL 16 with Patroni HA orchestration |
+| postgres-1, postgres-2, postgres-3 | 1 each (pinned per node) | `ghcr.io/.../patroni-postgres:16` | PostgreSQL 16 with Patroni HA orchestration |
 | haproxy | 2 (manager nodes) | `haproxy:2.9-alpine` | Automatic primary/replica routing via Patroni REST API |
 | db-init | 1 (one-shot) | `postgres:16-alpine` | Creates application databases and users idempotently |
 | pgbouncer | 0 (disabled) | `edoburu/pgbouncer:1.23.1` | Connection pooling (optional, enable by setting replicas > 0) |
@@ -123,7 +123,16 @@ docker node update --label-add infra_node=3 docker-infra-3
 
 ### 3. Custom Patroni Image
 
-Build the custom image on all infrastructure nodes (or push to a shared registry):
+The `patroni-postgres:16` image is automatically built and pushed to GHCR by GitHub Actions on every push to `main` and weekly for base image updates. All Swarm nodes must be authenticated to pull:
+
+```bash
+# One-time setup on each node (or use ansible/ghcr-login.yml):
+echo "$GITHUB_PAT" | docker login ghcr.io -u <USERNAME> --password-stdin
+```
+
+The stack references `ghcr.io/thorstenhornung1/swarm-stacks/patroni-postgres:16`. See [docs/CONTAINER-IMAGES.md](../../../docs/CONTAINER-IMAGES.md) for maintenance and upgrade procedures.
+
+To build locally (e.g., for testing):
 
 ```bash
 docker build -t patroni-postgres:16 ./docker/

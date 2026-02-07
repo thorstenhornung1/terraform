@@ -155,6 +155,12 @@ runcmd:
   - systemctl start docker
   - usermod -aG docker ansible
 
+  # Authenticate to GitHub Container Registry (GHCR)
+  - echo '${ghcr_pat}' | docker login ghcr.io -u '${ghcr_user}' --password-stdin
+  - mkdir -p /home/ansible/.docker
+  - cp /root/.docker/config.json /home/ansible/.docker/config.json
+  - chown -R ansible:ansible /home/ansible/.docker
+
   # Apply sysctl settings
   - sysctl --system
 

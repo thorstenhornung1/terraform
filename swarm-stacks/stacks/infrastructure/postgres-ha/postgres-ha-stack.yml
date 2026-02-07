@@ -15,7 +15,7 @@
 #
 # Deployment:
 #   1. Create secrets: ./scripts/create-postgres-secrets.sh
-#   2. Build image: docker build -t patroni-postgres:16 ./docker/
+#   2. Image auto-built via GitHub Actions → ghcr.io
 #   3. Deploy: docker stack deploy -c postgres-ha-stack.yml postgres
 #
 # Network: Uses VLAN 12 (192.168.12.0/24) for storage/replication traffic
@@ -193,7 +193,7 @@ services:
   # Uses synchronous replication for zero data loss (RPO=0)
 
   postgres-1:
-    image: patroni-postgres:16
+    image: ghcr.io/thorstenhornung1/swarm-stacks/patroni-postgres:16
     hostname: postgres-1
     networks:
       - postgres-network
@@ -262,7 +262,7 @@ services:
       start_period: 10m
 
   postgres-2:
-    image: patroni-postgres:16
+    image: ghcr.io/thorstenhornung1/swarm-stacks/patroni-postgres:16
     hostname: postgres-2
     networks:
       - postgres-network
@@ -331,7 +331,7 @@ services:
       start_period: 10m
 
   postgres-3:
-    image: patroni-postgres:16
+    image: ghcr.io/thorstenhornung1/swarm-stacks/patroni-postgres:16
     hostname: postgres-3
     networks:
       - postgres-network
@@ -570,8 +570,8 @@ services:
         protocol: tcp
         mode: ingress
     environment:
-      # Connect to the PostgreSQL cluster (will auto-discover leader via PgBouncer)
-      - DATA_SOURCE_URI=192.168.12.40:5432/postgres?sslmode=disable
+      # Connect via HAProxy primary endpoint (follows Patroni leader automatically)
+      - DATA_SOURCE_URI=pg-haproxy:5433/postgres?sslmode=disable
       - DATA_SOURCE_USER=postgres
       - DATA_SOURCE_PASS_FILE=/run/secrets/pg_superuser_password
       - PG_EXPORTER_AUTO_DISCOVER_DATABASES=true
@@ -596,10 +596,11 @@ services:
         delay: 10s
         window: 120s
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9187/metrics"]
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9187/ || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
+      start_period: 30s
 
 # =============================================================================
 # NETWORKS

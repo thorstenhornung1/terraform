@@ -54,6 +54,26 @@ variable "dns_servers" {
 }
 
 # ============================================================================
+# GITHUB CONTAINER REGISTRY (GHCR)
+# ============================================================================
+# PAT for pulling custom images (e.g., patroni-postgres:16) from GHCR.
+# Applied to all Docker nodes via cloud-init so new VMs authenticate on first boot.
+# Generate at: https://github.com/settings/tokens?type=beta
+#   → Repository: swarm-stacks → Permissions: Packages (Read)
+
+variable "ghcr_user" {
+  description = "GitHub username for GHCR authentication"
+  type        = string
+  default     = "thorstenhornung1"
+}
+
+variable "ghcr_pat" {
+  description = "GitHub PAT with read:packages scope for GHCR image pulls"
+  type        = string
+  sensitive   = true
+}
+
+# ============================================================================
 # VM TEMPLATE & CLOUD-INIT
 # ============================================================================
 

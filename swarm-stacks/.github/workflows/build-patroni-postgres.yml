@@ -1,0 +1,77 @@
+# =============================================================================
+# Build & Push patroni-postgres Image to GitHub Container Registry
+# =============================================================================
+# Triggers:
+#   - Push to main (changes to Dockerfile or entrypoint)
+#   - Weekly schedule (picks up postgres:16-alpine base image updates)
+#   - Manual dispatch (for ad-hoc rebuilds)
+#
+# Image: ghcr.io/thorstenhornung1/swarm-stacks/patroni-postgres:16
+# =============================================================================
+
+name: Build patroni-postgres
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'stacks/infrastructure/postgres-ha/docker/**'
+      - '.github/workflows/build-patroni-postgres.yml'
+  schedule:
+    # Weekly rebuild every Monday at 04:00 UTC to pick up base image patches
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/patroni-postgres
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Tag "16" on every build (mutable, always latest PG16 build)
+            type=raw,value=16
+            # Tag with short SHA for traceability
+            type=sha,prefix=16-
+            # Tag with date for auditing
+            type=raw,value=16-{{date 'YYYYMMDD'}}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: stacks/infrastructure/postgres-ha/docker
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Verify pushed image
+        run: |
+          echo "Image pushed successfully:"
+          echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n'

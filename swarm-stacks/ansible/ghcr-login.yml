@@ -1,0 +1,78 @@
+---
+# =============================================================================
+# Log in all Swarm nodes to GitHub Container Registry (GHCR)
+# =============================================================================
+# Authenticates all Docker nodes so they can pull custom images from GHCR.
+# This prevents image loss when Docker prunes under disk pressure (terraform#1).
+#
+# Usage:
+#   ansible-playbook -i inventory.ini ghcr-login.yml \
+#     -e "ghcr_token=ghp_xxxx"
+#
+# Or with explicit username:
+#   ansible-playbook -i inventory.ini ghcr-login.yml \
+#     -e "ghcr_token=ghp_xxxx" -e "ghcr_user=thorstenhornung1"
+#
+# Prerequisites:
+#   - GitHub PAT with read:packages scope
+#   - Create at: https://github.com/settings/tokens?type=beta
+#     → Repository: swarm-stacks → Permissions: Packages (Read)
+# =============================================================================
+
+- name: Configure GHCR authentication on all Docker Swarm nodes
+  hosts: docker_swarm
+  become: true
+  vars:
+    ghcr_registry: ghcr.io
+    ghcr_user: thorstenhornung1
+    ghcr_image: ghcr.io/thorstenhornung1/swarm-stacks/patroni-postgres:16
+
+  tasks:
+    - name: Validate GHCR token is provided
+      ansible.builtin.assert:
+        that:
+          - ghcr_token is defined
+          - ghcr_token | length > 0
+        fail_msg: >
+          GHCR token not provided. Run with:
+          ansible-playbook -i inventory.ini ghcr-login.yml -e "ghcr_token=ghp_xxxx"
+
+    # Root login — Docker Swarm daemon pulls images as root
+    - name: Log in to GHCR (root — used by Docker Swarm)
+      ansible.builtin.shell:
+        cmd: echo '{{ ghcr_token }}' | docker login {{ ghcr_registry }} -u '{{ ghcr_user }}' --password-stdin
+      no_log: true
+      changed_when: true
+
+    # Ansible user login — for manual pulls and troubleshooting
+    - name: Ensure ansible user .docker directory exists
+      ansible.builtin.file:
+        path: /home/ansible/.docker
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: '0700'
+
+    - name: Copy GHCR credentials to ansible user
+      ansible.builtin.copy:
+        src: /root/.docker/config.json
+        dest: /home/ansible/.docker/config.json
+        remote_src: true
+        owner: ansible
+        group: ansible
+        mode: '0600'
+
+    # Verify by pulling the patroni-postgres image
+    - name: Pull patroni-postgres image to verify authentication
+      ansible.builtin.command:
+        cmd: docker pull {{ ghcr_image }}
+      register: pull_result
+      changed_when: "'Downloaded newer image' in pull_result.stdout or 'Pull complete' in pull_result.stdout"
+      failed_when: false
+
+    - name: Report GHCR authentication status
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ 'GHCR pull OK — image cached' if pull_result.rc == 0
+             else 'GHCR pull FAILED (rc=' ~ pull_result.rc ~ ') — check token permissions' }}

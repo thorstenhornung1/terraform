@@ -39,6 +39,8 @@ resource "proxmox_virtual_environment_file" "cloud_init_swarm_control" {
       vm_hostname      = var.swarm_control_hostname
       dns_servers      = join(" ", var.dns_servers)
       swarm_manager_ip = var.infra_nodes["1"].ip_vlan4  # First infra node is Swarm manager
+      ghcr_user        = var.ghcr_user
+      ghcr_pat         = var.ghcr_pat
     })
     file_name = "cloud-init-swarm-control.yml"
   }

@@ -118,6 +118,18 @@ cmd_deploy() {
         exit 1
     }
 
+    # Pre-pull GHCR images on infra nodes (postgres-ha uses custom image)
+    if [ "$stack_name" = "postgres-ha" ]; then
+        local ghcr_image="ghcr.io/thorstenhornung1/swarm-stacks/patroni-postgres:16"
+        log_info "Pre-pulling $ghcr_image on infra nodes..."
+        for node_ip in 192.168.4.40 192.168.4.41 192.168.4.42; do
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "${SWARM_USER}@${node_ip}" \
+                "docker pull $ghcr_image" > /dev/null 2>&1 && \
+                log_info "  $node_ip: image ready" || \
+                log_warn "  $node_ip: pull failed (run: ansible-playbook -i ansible/inventory.ini ansible/ghcr-login.yml -e ghcr_token=<PAT>)"
+        done
+    fi
+
     # Copy and deploy
     log_info "Copying stack file to manager..."
     cat "$stack_file" | ssh_swarm "cat > /tmp/${stack_name}-stack.yml"

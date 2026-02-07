@@ -176,6 +176,39 @@
       debug:
         msg: "Node {{ inventory_hostname }} has Docker ID: {{ docker_node_id.stdout }}"
 
+    # =========================================================================
+    # GHCR Authentication (pull custom images from GitHub Container Registry)
+    # =========================================================================
+    # Ensures Docker can pull ghcr.io/thorstenhornung1/swarm-stacks/* images.
+    # Skip if ghcr_token is not provided (e.g., cloud-init already configured it).
+
+    - name: Log in to GHCR (root — used by Docker Swarm)
+      shell:
+        cmd: echo '{{ ghcr_token }}' | docker login ghcr.io -u '{{ ghcr_user | default("thorstenhornung1") }}' --password-stdin
+      no_log: true
+      changed_when: true
+      when: ghcr_token is defined and ghcr_token | length > 0
+
+    - name: Copy GHCR credentials to ansible user
+      block:
+        - name: Ensure ansible .docker directory exists
+          file:
+            path: /home/ansible/.docker
+            state: directory
+            owner: ansible
+            group: ansible
+            mode: '0700'
+
+        - name: Copy Docker config to ansible user
+          copy:
+            src: /root/.docker/config.json
+            dest: /home/ansible/.docker/config.json
+            remote_src: true
+            owner: ansible
+            group: ansible
+            mode: '0600'
+      when: ghcr_token is defined and ghcr_token | length > 0
+
 # =============================================================================
 # Set Node Labels (run on manager node)
 # =============================================================================

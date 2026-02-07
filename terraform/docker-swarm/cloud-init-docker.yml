@@ -213,6 +213,16 @@ runcmd:
   - systemctl start docker
   - usermod -aG docker ansible
 
+  # Authenticate to GitHub Container Registry (GHCR)
+  # Docker Swarm pulls images as root, so this login (running as root via cloud-init)
+  # stores credentials in /root/.docker/config.json — exactly where Swarm reads them.
+  # This prevents image loss during disk pressure (terraform#1).
+  - echo '${ghcr_pat}' | docker login ghcr.io -u '${ghcr_user}' --password-stdin
+  # Also configure for ansible user (manual pulls)
+  - mkdir -p /home/ansible/.docker
+  - cp /root/.docker/config.json /home/ansible/.docker/config.json
+  - chown -R ansible:ansible /home/ansible/.docker
+
   # Apply sysctl settings
   - sysctl --system
 

@@ -24,6 +24,8 @@ resource "proxmox_virtual_environment_file" "cloud_init_infra" {
   source_raw {
     data = templatefile("${path.module}/terraform/docker-swarm/cloud-init-docker.yml", {
       vm_hostname = "${var.infra_node_prefix}-${each.key}"
+      ghcr_user   = var.ghcr_user
+      ghcr_pat    = var.ghcr_pat
     })
     file_name = "cloud-init-${var.infra_node_prefix}-${each.key}.yml"
   }

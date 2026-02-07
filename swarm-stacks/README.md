@@ -57,8 +57,10 @@ Then use: `ssh swarm`
 ```
 swarm-stacks/
 ├── README.md                 # This file
+├── .github/workflows/        # CI/CD (image builds)
 ├── docs/
 │   ├── ARCHITECTURE.md       # Cluster architecture overview
+│   ├── CONTAINER-IMAGES.md   # Custom image build & maintenance
 │   ├── NETWORKING.md         # Network topology & VLANs
 │   └── ONBOARDING.md         # New developer guide
 ├── scripts/
@@ -188,6 +190,18 @@ networks:
 | Node | Labels |
 |------|--------|
 | swarmpit-mgmt | `portainer.data=true` |
+
+---
+
+## Container Images
+
+Custom images are built automatically via GitHub Actions and pushed to GitHub Container Registry (GHCR).
+
+| Image | Tag | Build Trigger |
+|-------|-----|---------------|
+| `ghcr.io/thorstenhornung1/swarm-stacks/patroni-postgres` | `16` | Push to `main` + weekly schedule |
+
+Swarm nodes need GHCR authentication to pull. See [docs/CONTAINER-IMAGES.md](docs/CONTAINER-IMAGES.md) for setup, maintenance, and upgrade procedures.
 
 ---
 

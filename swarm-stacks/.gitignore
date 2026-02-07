@@ -21,6 +21,7 @@ secrets.yml
 *-secrets.yml
 *.key
 *.pem
+.vault_pass.txt
 
 # Local overrides
 docker-compose.override.yml
