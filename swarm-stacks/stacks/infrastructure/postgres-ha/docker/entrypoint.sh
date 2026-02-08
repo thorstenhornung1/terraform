@@ -74,6 +74,7 @@ bootstrap:
     # Patroni requires localhost access for health checks and management
     - local all all peer
     - host all all 127.0.0.1/32 scram-sha-256
+    - host replication replicator 127.0.0.1/32 scram-sha-256
     # Replication: infra nodes on VLAN 12 only
     - host replication replicator 192.168.12.40/32 scram-sha-256
     - host replication replicator 192.168.12.41/32 scram-sha-256

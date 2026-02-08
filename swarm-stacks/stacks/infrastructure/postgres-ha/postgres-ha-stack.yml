@@ -51,7 +51,7 @@ services:
       - ETCD_ADVERTISE_CLIENT_URLS=http://192.168.12.40:2379
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://192.168.12.40:2380
-      - ETCD_INITIAL_CLUSTER=etcd-1=http://192.168.12.40:2380,etcd-2=http://192.168.12.41:2380,etcd-3=http://192.168.12.42:2380
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://192.168.12.40:2380,etcd-2=http://192.168.12.41:2380,etcd-3=http://192.168.12.42:2380,etcd-4=http://192.168.12.53:2380,etcd-5=http://192.168.12.54:2380
       - ETCD_INITIAL_CLUSTER_STATE=new
       - ETCD_INITIAL_CLUSTER_TOKEN=patroni-etcd-cluster
       - ETCD_ENABLE_V2=false
@@ -76,6 +76,10 @@ services:
         condition: any
         delay: 10s
         window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: continue
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
       interval: 10s
@@ -103,7 +107,7 @@ services:
       - ETCD_ADVERTISE_CLIENT_URLS=http://192.168.12.41:2379
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://192.168.12.41:2380
-      - ETCD_INITIAL_CLUSTER=etcd-1=http://192.168.12.40:2380,etcd-2=http://192.168.12.41:2380,etcd-3=http://192.168.12.42:2380
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://192.168.12.40:2380,etcd-2=http://192.168.12.41:2380,etcd-3=http://192.168.12.42:2380,etcd-4=http://192.168.12.53:2380,etcd-5=http://192.168.12.54:2380
       - ETCD_INITIAL_CLUSTER_STATE=new
       - ETCD_INITIAL_CLUSTER_TOKEN=patroni-etcd-cluster
       - ETCD_ENABLE_V2=false
@@ -128,6 +132,10 @@ services:
         condition: any
         delay: 10s
         window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: continue
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
       interval: 10s
@@ -155,7 +163,7 @@ services:
       - ETCD_ADVERTISE_CLIENT_URLS=http://192.168.12.42:2379
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://192.168.12.42:2380
-      - ETCD_INITIAL_CLUSTER=etcd-1=http://192.168.12.40:2380,etcd-2=http://192.168.12.41:2380,etcd-3=http://192.168.12.42:2380
+      - ETCD_INITIAL_CLUSTER=etcd-1=http://192.168.12.40:2380,etcd-2=http://192.168.12.41:2380,etcd-3=http://192.168.12.42:2380,etcd-4=http://192.168.12.53:2380,etcd-5=http://192.168.12.54:2380
       - ETCD_INITIAL_CLUSTER_STATE=new
       - ETCD_INITIAL_CLUSTER_TOKEN=patroni-etcd-cluster
       - ETCD_ENABLE_V2=false
@@ -180,6 +188,10 @@ services:
         condition: any
         delay: 10s
         window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: continue
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
       interval: 10s
@@ -212,7 +224,7 @@ services:
       - PATRONI_RESTAPI_CONNECT_ADDRESS=192.168.12.40:8008
       - PATRONI_POSTGRESQL_CONNECT_ADDRESS=192.168.12.40:5432
       - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
-      - PATRONI_ETCD3_HOSTS=192.168.12.40:2379,192.168.12.41:2379,192.168.12.42:2379
+      - PATRONI_ETCD3_HOSTS=192.168.12.40:2379,192.168.12.41:2379,192.168.12.42:2379,192.168.12.53:2379,192.168.12.54:2379
       - PATRONI_SUPERUSER_PASSWORD_FILE=/run/secrets/pg_superuser_password
       - PATRONI_REPLICATION_PASSWORD_FILE=/run/secrets/pg_replication_password
       - PATRONI_ADMIN_PASSWORD_FILE=/run/secrets/pg_admin_password
@@ -281,7 +293,7 @@ services:
       - PATRONI_RESTAPI_CONNECT_ADDRESS=192.168.12.41:8008
       - PATRONI_POSTGRESQL_CONNECT_ADDRESS=192.168.12.41:5432
       - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
-      - PATRONI_ETCD3_HOSTS=192.168.12.40:2379,192.168.12.41:2379,192.168.12.42:2379
+      - PATRONI_ETCD3_HOSTS=192.168.12.40:2379,192.168.12.41:2379,192.168.12.42:2379,192.168.12.53:2379,192.168.12.54:2379
       - PATRONI_SUPERUSER_PASSWORD_FILE=/run/secrets/pg_superuser_password
       - PATRONI_REPLICATION_PASSWORD_FILE=/run/secrets/pg_replication_password
       - PATRONI_ADMIN_PASSWORD_FILE=/run/secrets/pg_admin_password
@@ -350,7 +362,7 @@ services:
       - PATRONI_RESTAPI_CONNECT_ADDRESS=192.168.12.42:8008
       - PATRONI_POSTGRESQL_CONNECT_ADDRESS=192.168.12.42:5432
       - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
-      - PATRONI_ETCD3_HOSTS=192.168.12.40:2379,192.168.12.41:2379,192.168.12.42:2379
+      - PATRONI_ETCD3_HOSTS=192.168.12.40:2379,192.168.12.41:2379,192.168.12.42:2379,192.168.12.53:2379,192.168.12.54:2379
       - PATRONI_SUPERUSER_PASSWORD_FILE=/run/secrets/pg_superuser_password
       - PATRONI_REPLICATION_PASSWORD_FILE=/run/secrets/pg_replication_password
       - PATRONI_ADMIN_PASSWORD_FILE=/run/secrets/pg_admin_password

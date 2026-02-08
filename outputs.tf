@@ -5,10 +5,12 @@
 output "cluster_overview" {
   description = "Docker Swarm cluster overview"
   value = {
-    cluster_type = "Docker Swarm (3 Managers + 1 Management LXC)"
-    total_nodes  = length(var.infra_nodes) + 1  # infra nodes + swarm-control
-    infra_nodes  = length(var.infra_nodes)
-    storage      = var.storage_pool
+    cluster_type      = "Docker Swarm (3 Managers + 1 Management LXC + 2 etcd LXC)"
+    total_nodes       = length(var.infra_nodes) + 1 + length(var.etcd_nodes)
+    infra_nodes       = length(var.infra_nodes)
+    etcd_lxc_nodes    = length(var.etcd_nodes)
+    etcd_cluster_size = length(var.infra_nodes) + length(var.etcd_nodes)
+    storage           = var.storage_pool
     networks = {
       cluster = "VLAN ${var.vlan_id} (192.168.4.0/24)"
       storage = "VLAN ${var.vlan_id_storage} (192.168.12.0/24)"

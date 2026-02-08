@@ -4,13 +4,14 @@ version: '3.8'
 # Portainer CE Stack for Docker Swarm
 # =============================================================================
 # Deploy with: docker stack deploy -c portainer-stack.yml portainer
-# Access UI at: https://<swarmpit-ip>:9443
+# Access UI at: https://<any-manager-ip>:9443
 #
 # Architecture:
-# - Portainer Server: Pinned to "swarmpit" node (label: portainer.data=true)
+# - Portainer Server: Runs on any manager node (CephFS shared storage)
 # - Portainer Agent: Global mode (runs on ALL nodes)
 #
-# IMPORTANT: Server uses local BoltDB - must stay on same node for persistence!
+# Storage: /mnt/cephfs/portainer (CephFS, replicated 3x across pve01-03)
+# BoltDB persists across node failovers — Portainer follows Swarm scheduling.
 # =============================================================================
 
 services:
@@ -40,10 +41,10 @@ services:
           memory: 32M
 
   # ===========================================================================
-  # Portainer Server - Pinned to "swarmpit" node
+  # Portainer Server - Any Swarm manager (CephFS shared storage)
   # ===========================================================================
   # Central management server with web UI.
-  # Uses BoltDB (local file) - MUST stay on same node for data persistence.
+  # BoltDB stored on CephFS — available on all 3 infra nodes simultaneously.
   portainer:
     image: portainer/portainer-ce:2.21.5
     command: -H tcp://tasks.agent:9001 --tlsskipverify
@@ -52,7 +53,7 @@ services:
       - "9000:9000"   # HTTP Web UI (optional, can be removed for security)
       - "8000:8000"   # Edge Agent Tunnel (for remote/edge deployments)
     volumes:
-      - portainer_data:/data
+      - /mnt/cephfs/portainer:/data   # CephFS bind mount (replicated 3x)
     networks:
       - agent_network
     deploy:
@@ -60,10 +61,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          # Pin to swarmpit-mgmt node using hostname constraint
-          - node.hostname == swarm-control
-          # Alternative: Use label constraint (set via deploy script)
-          # - node.labels.portainer.data == true
+          - node.role == manager        # Any manager (CephFS available on all)
       resources:
         limits:
           cpus: '1.0'
@@ -74,11 +72,10 @@ services:
       update_config:
         parallelism: 1
         delay: 10s
-        failure_action: rollback
+        failure_action: continue
       restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
+        condition: any
+        delay: 10s
         window: 120s
 
 networks:
@@ -87,7 +84,3 @@ networks:
     attachable: true
     driver_opts:
       encrypted: "true"  # Encrypt overlay network traffic
-
-volumes:
-  portainer_data:
-    driver: local

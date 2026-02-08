@@ -229,3 +229,72 @@ variable "swarm_control_disk_size" {
   type        = number
   default     = 30
 }
+
+# ============================================================================
+# DEDICATED ETCD LXC CONTAINERS (etcd-4, etcd-5)
+# ============================================================================
+# Native etcd on systemd — immune to Docker Swarm rollback-induced restart
+# policy regressions. Combined with the 3 Docker Swarm etcd instances this
+# forms a 5-node etcd cluster (quorum=3, tolerates 2 failures).
+
+variable "etcd_nodes" {
+  description = "Dedicated etcd LXC container configuration"
+  type = map(object({
+    node         = string
+    vm_id        = number
+    ip_vlan4     = string
+    ip_vlan12    = string
+    storage_pool = optional(string)  # Override storage pool (default: local-lvm)
+  }))
+  default = {
+    "4" = {
+      node         = "pve02"
+      vm_id        = 4301
+      ip_vlan4     = "192.168.4.53"
+      ip_vlan12    = "192.168.12.53"
+      storage_pool = "tank"  # local-lvm thin pool full on pve02
+    }
+    "5" = {
+      node         = "pve03"
+      vm_id        = 4302
+      ip_vlan4     = "192.168.4.54"
+      ip_vlan12    = "192.168.12.54"
+    }
+  }
+}
+
+variable "etcd_node_cores" {
+  description = "CPU cores for dedicated etcd LXC containers"
+  type        = number
+  default     = 1
+}
+
+variable "etcd_node_memory" {
+  description = "Memory in MB for dedicated etcd LXC containers"
+  type        = number
+  default     = 512
+}
+
+variable "etcd_node_disk_size" {
+  description = "Disk size in GB for dedicated etcd LXC containers"
+  type        = number
+  default     = 8
+}
+
+variable "etcd_version" {
+  description = "etcd version for dedicated LXC containers"
+  type        = string
+  default     = "v3.5.15"
+}
+
+variable "etcd_cluster_token" {
+  description = "etcd cluster token (must match Docker Swarm etcd services)"
+  type        = string
+  default     = "patroni-etcd-cluster"
+}
+
+variable "etcd_initial_cluster_state" {
+  description = "Initial cluster state for new etcd members (existing = join running cluster)"
+  type        = string
+  default     = "existing"
+}
