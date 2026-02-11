@@ -158,8 +158,66 @@
       loop: "{{ postgres_dirs }}"
 
     # =========================================================================
-    # Docker Configuration
+    # Docker Configuration — data-root on data disk
     # =========================================================================
+    # Move Docker storage from /var/lib/docker (small root partition) to
+    # /srv/data/docker (large data disk).  If the daemon.json already has
+    # "data-root" nothing changes; otherwise we stop Docker, migrate the
+    # data, update daemon.json, and start Docker again.
+    # =========================================================================
+
+    - name: Read current daemon.json
+      slurp:
+        src: /etc/docker/daemon.json
+      register: daemon_json_raw
+      failed_when: false
+
+    - name: Parse daemon.json
+      set_fact:
+        daemon_json: "{{ (daemon_json_raw.content | b64decode | from_json) if daemon_json_raw is not failed and daemon_json_raw.content is defined else {} }}"
+
+    - name: Check if data-root already configured
+      set_fact:
+        docker_data_root_configured: "{{ daemon_json.get('data-root', '') == data_mount + '/docker' }}"
+
+    - name: Migrate Docker data-root to data disk
+      when: not docker_data_root_configured and disk_check.stat.exists
+      block:
+        - name: Stop Docker for data-root migration
+          service:
+            name: "{{ item }}"
+            state: stopped
+          loop:
+            - docker.socket
+            - docker.service
+
+        - name: Create Docker data directory on data disk
+          file:
+            path: "{{ data_mount }}/docker"
+            state: directory
+            mode: '0711'
+
+        - name: Rsync Docker data to data disk
+          command: rsync -aHAXxS /var/lib/docker/ {{ data_mount }}/docker/
+          args:
+            creates: "{{ data_mount }}/docker/overlay2"
+
+        - name: Update daemon.json with data-root
+          copy:
+            content: "{{ daemon_json | combine({'data-root': data_mount + '/docker'}) | to_nice_json }}"
+            dest: /etc/docker/daemon.json
+            mode: '0644'
+
+        - name: Start Docker after data-root migration
+          service:
+            name: docker
+            state: started
+            enabled: yes
+
+        - name: Remove old Docker data from root partition
+          file:
+            path: /var/lib/docker
+            state: absent
 
     - name: Ensure Docker is running
       service:
@@ -220,16 +278,19 @@
     infra_nodes:
       - hostname: docker-infra-1
         labels:
+          app: "true"
           infra_node: "1"
           storage: "seaweedfs"
           database: "patroni"
       - hostname: docker-infra-2
         labels:
+          app: "true"
           infra_node: "2"
           storage: "seaweedfs"
           database: "patroni"
       - hostname: docker-infra-3
         labels:
+          app: "true"
           infra_node: "3"
           storage: "seaweedfs"
           database: "patroni"
