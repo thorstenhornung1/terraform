@@ -298,3 +298,36 @@ variable "etcd_initial_cluster_state" {
   type        = string
   default     = "existing"
 }
+
+# ============================================================================
+# DEDICATED INFLUXDB VM (air_rescue_tracker + Home Assistant)
+# ============================================================================
+# Standalone InfluxDB 2.7 instance on pve03 with ZFS Tank storage.
+# Stores rescue-helicopter telemetry (2.3GB, infinite retention) and
+# Home Assistant metrics (1.7GB, 1yr retention).
+# Accessed by: rescue-tracker (Swarm), Grafana (Swarm), Home Assistant (192.168.2.5)
+
+variable "influxdb_rescue" {
+  description = "Dedicated InfluxDB VM configuration"
+  type = object({
+    node         = string
+    vm_id        = number
+    ip_vlan4     = string
+    ip_vlan12    = string
+    cores        = number
+    memory       = number
+    disk_size    = number
+    storage_pool = string
+  })
+  default = {
+    node         = "pve03"
+    vm_id        = 4400
+    ip_vlan4     = "192.168.4.55"
+    ip_vlan12    = "192.168.12.55"
+    cores        = 2
+    memory       = 4096
+    disk_size    = 30
+    storage_pool = "tank"
+  }
+}
+

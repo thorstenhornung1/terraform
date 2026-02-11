@@ -1,0 +1,275 @@
+#cloud-config
+# ============================================================================
+# Dedicated InfluxDB VM Cloud-Init Configuration
+# ============================================================================
+# Purpose: Standalone InfluxDB 2.7 host for air_rescue_tracker + Home Assistant
+# Features: Docker CE, InfluxDB container (systemd), LDAP/SSSD, dual VLAN
+# Template vars: vm_hostname, ghcr_user, ghcr_pat
+# InfluxDB init credentials are temporary — overwritten by backup restore (Step 2)
+
+package_update: true
+package_upgrade: false
+locale: en_US.UTF-8
+timezone: Europe/Berlin
+
+hostname: ${vm_hostname}
+fqdn: ${vm_hostname}.hornung-bn.de
+manage_etc_hosts: true
+
+keyboard:
+  layout: de
+  variant: ''
+
+users:
+  - name: ansible
+    groups: sudo, docker
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHDiYk2/cmfKjky19j+RQCDjNK1r0xd8VYi4VpR6tX/P thorsten@hornung-bn.de
+
+ssh_authorized_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHDiYk2/cmfKjky19j+RQCDjNK1r0xd8VYi4VpR6tX/P thorsten@hornung-bn.de
+
+ssh_pwauth: false
+disable_root: false
+
+write_files:
+  # APT Proxy Configuration
+  - path: /etc/apt/apt.conf.d/01proxy
+    content: |
+      Acquire::http::Proxy "http://apt-cacher.hornung-bn.de:3142";
+    owner: root:root
+    permissions: '0644'
+
+  # German Keyboard Configuration
+  - path: /etc/default/keyboard
+    content: |
+      XKBMODEL="pc105"
+      XKBLAYOUT="de"
+      XKBVARIANT=""
+      XKBOPTIONS=""
+      BACKSPACE="guess"
+    owner: root:root
+    permissions: '0644'
+
+  # SSSD Configuration for LDAP Integration
+  - path: /etc/sssd/sssd.conf
+    content: |
+      [sssd]
+      domains = default
+      config_file_version = 2
+      services = nss, pam
+
+      [domain/default]
+      id_provider = ldap
+      auth_provider = ldap
+      ldap_uri = ldap://ldap.hornung-bn.de
+      ldap_search_base = dc=ldap,dc=hornung-bn,dc=de
+      ldap_default_bind_dn = uid=root,cn=users,dc=ldap,dc=hornung-bn,dc=de
+      ldap_default_authtok = jyFD6gS1eyWAYCOe
+
+      ldap_tls_reqcert = never
+
+      cache_credentials = true
+      enumerate = true
+      entry_cache_timeout = 300
+
+      ldap_id_mapping = false
+      ldap_user_uid_number = uidNumber
+      ldap_user_gid_number = gidNumber
+      ldap_group_gid_number = gidNumber
+
+      ldap_user_search_base = cn=users,dc=ldap,dc=hornung-bn,dc=de
+      ldap_group_search_base = cn=groups,dc=ldap,dc=hornung-bn,dc=de
+
+      override_homedir = /home/%u
+      default_shell = /bin/bash
+      fallback_homedir = /home/%u
+
+      ldap_pwd_policy = none
+      debug_level = 0x0070
+    owner: root:root
+    permissions: '0600'
+
+  # PAM SSHD Configuration for LDAP
+  - path: /etc/pam.d/common-session
+    content: |
+      session [default=1]   pam_permit.so
+      session requisite     pam_deny.so
+      session required      pam_permit.so
+      session optional      pam_umask.so
+      session required      pam_unix.so
+      session optional      pam_sss.so
+      session required      pam_mkhomedir.so skel=/etc/skel umask=0022
+      session optional      pam_systemd.so
+    owner: root:root
+    permissions: '0644'
+
+  # NSSwitch Configuration for LDAP
+  - path: /etc/nsswitch.conf
+    content: |
+      passwd:         files sss systemd
+      group:          files sss systemd
+      shadow:         files sss
+      gshadow:        files
+      hosts:          files dns
+      networks:       files
+      protocols:      db files
+      services:       db files sss
+      ethers:         db files
+      rpc:            db files
+      netgroup:       nis sss
+      automount:      sss
+    owner: root:root
+    permissions: '0644'
+
+  # Docker daemon configuration
+  - path: /etc/docker/daemon.json
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "100m",
+          "max-file": "3"
+        },
+        "storage-driver": "overlay2",
+        "default-address-pools": [
+          {"base": "172.20.0.0/16", "size": 24}
+        ]
+      }
+    owner: root:root
+    permissions: '0644'
+
+  # Remote Syslog to Loki/Promtail
+  - path: /etc/rsyslog.d/60-loki.conf
+    content: |
+      # Forward all logs to Loki/Promtail syslog receiver
+      # Using TCP for reliability
+      *.* @@loki.hornung-bn.de:1514
+
+      # Also send via UDP as backup
+      *.* @loki.hornung-bn.de:1514
+    owner: root:root
+    permissions: '0644'
+
+  # Sysctl settings for Docker networking
+  - path: /etc/sysctl.d/99-docker.conf
+    content: |
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward = 1
+      net.ipv4.conf.all.forwarding = 1
+      vm.swappiness = 10
+    owner: root:root
+    permissions: '0644'
+
+  # InfluxDB systemd unit file (Docker container)
+  - path: /etc/systemd/system/influxdb.service
+    content: |
+      [Unit]
+      Description=InfluxDB 2.7 Container
+      Requires=docker.service
+      After=docker.service
+
+      [Service]
+      Type=simple
+      Restart=always
+      RestartSec=10
+      ExecStartPre=-/usr/bin/docker rm -f influxdb
+      ExecStart=/usr/bin/docker run \
+        --name influxdb \
+        --restart=no \
+        -p 8086:8086 \
+        -v /var/lib/influxdb2:/var/lib/influxdb2 \
+        -v /etc/influxdb2:/etc/influxdb2 \
+        -e DOCKER_INFLUXDB_INIT_MODE=setup \
+        -e DOCKER_INFLUXDB_INIT_USERNAME=admin \
+        -e DOCKER_INFLUXDB_INIT_PASSWORD=temp-init-password \
+        -e DOCKER_INFLUXDB_INIT_ORG=rescue-org \
+        -e DOCKER_INFLUXDB_INIT_BUCKET=rescue-helicopters \
+        -e DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=temp-init-token \
+        -e DOCKER_INFLUXDB_INIT_RETENTION=0 \
+        influxdb:2.7
+      ExecStop=/usr/bin/docker stop influxdb
+      TimeoutStartSec=120
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+packages:
+  - qemu-guest-agent
+  - curl
+  - wget
+  - gnupg
+  - ca-certificates
+  - apt-transport-https
+  - software-properties-common
+  - sssd
+  - sssd-ldap
+  - sssd-tools
+  - libnss-sss
+  - libpam-sss
+  - oddjob-mkhomedir
+  - jq
+  - htop
+  - iotop
+  - net-tools
+
+runcmd:
+  # Configure keyboard
+  - setupcon --save-only
+  - loadkeys de
+
+  # Enable and start QEMU guest agent
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+
+  # Configure SSSD
+  - chmod 600 /etc/sssd/sssd.conf
+  - systemctl enable sssd
+  - systemctl restart sssd
+
+  # Enable PAM mkhomedir
+  - pam-auth-update --enable mkhomedir
+
+  # Install Docker CE from official Ubuntu repository
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+  # Configure Docker
+  - systemctl enable docker
+  - systemctl start docker
+  - usermod -aG docker ansible
+
+  # Authenticate to GitHub Container Registry (GHCR)
+  - echo '${ghcr_pat}' | docker login ghcr.io -u '${ghcr_user}' --password-stdin
+  - mkdir -p /home/ansible/.docker
+  - cp /root/.docker/config.json /home/ansible/.docker/config.json
+  - chown -R ansible:ansible /home/ansible/.docker
+
+  # Apply sysctl settings
+  - sysctl --system
+
+  # Create InfluxDB data directories
+  - mkdir -p /var/lib/influxdb2
+  - mkdir -p /etc/influxdb2
+
+  # Configure remote syslog to Loki
+  - systemctl restart rsyslog
+
+  # Enable and start InfluxDB container via systemd
+  - systemctl daemon-reload
+  - systemctl enable influxdb
+  - systemctl start influxdb
+
+  # Signal cloud-init completion
+  - echo "Cloud-init completed for ${vm_hostname}" > /var/log/cloud-init-complete.log
+
+final_message: "InfluxDB host ${vm_hostname} ready after $UPTIME seconds"
