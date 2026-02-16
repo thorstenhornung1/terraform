@@ -4,6 +4,7 @@
 *.tfstate.*
 *.tfvars
 *.tfplan
+tfplan*
 crash.log
 crash.*.log
 override.tf
@@ -36,6 +37,9 @@ Thumbs.db
 *.backup
 *.bak
 *.old
+
+# Temporary uploads / large data files
+upload/
 
 # Claude local settings (keep project config, ignore local settings)
 .claude/settings.local.json
