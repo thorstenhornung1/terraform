@@ -4,14 +4,15 @@ version: '3.8'
 # Portainer CE Stack for Docker Swarm
 # =============================================================================
 # Deploy with: docker stack deploy -c portainer-stack.yml portainer
-# Access UI at: https://<any-manager-ip>:9443
+# Access UI at: https://portainer.hornung-bn.de (Traefik) or https://<any-manager-ip>:9443 (direct)
 #
 # Architecture:
 # - Portainer Server: Runs on any manager node (CephFS shared storage)
 # - Portainer Agent: Global mode (runs on ALL nodes)
 #
-# Storage: /mnt/cephfs/portainer (CephFS, replicated 3x across pve01-03)
+# Storage: /mnt/cephfs/swarm-state/stack-portainer (CephFS, replicated 3x across pve01-03)
 # BoltDB persists across node failovers — Portainer follows Swarm scheduling.
+# Backed up to PBS every 2 hours via backup stack.
 # =============================================================================
 
 services:
@@ -53,15 +54,30 @@ services:
       - "9000:9000"   # HTTP Web UI (optional, can be removed for security)
       - "8000:8000"   # Edge Agent Tunnel (for remote/edge deployments)
     volumes:
-      - /mnt/cephfs/portainer:/data   # CephFS bind mount (replicated 3x)
+      - /mnt/cephfs/swarm-state/stack-portainer:/data   # CephFS bind mount (replicated 3x)
     networks:
       - agent_network
+      - traefik_public
     deploy:
       mode: replicated
       replicas: 1
       placement:
         constraints:
           - node.role == manager        # Any manager (CephFS available on all)
+      labels:
+        # Traefik HTTPS routing
+        - traefik.enable=true
+        - "traefik.http.routers.portainer.rule=Host(`portainer.hornung-bn.de`)"
+        - traefik.http.routers.portainer.entrypoints=websecure
+        - traefik.http.routers.portainer.tls=true
+        - traefik.http.routers.portainer.tls.certresolver=dns
+        - traefik.http.services.portainer.loadbalancer.server.port=9000
+        # HTTP -> HTTPS redirect
+        - "traefik.http.routers.portainer-http.rule=Host(`portainer.hornung-bn.de`)"
+        - traefik.http.routers.portainer-http.entrypoints=web
+        - traefik.http.routers.portainer-http.middlewares=portainer-redirect
+        - traefik.http.middlewares.portainer-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.portainer-redirect.redirectscheme.permanent=true
       resources:
         limits:
           cpus: '1.0'
@@ -84,3 +100,5 @@ networks:
     attachable: true
     driver_opts:
       encrypted: "true"  # Encrypt overlay network traffic
+  traefik_public:
+    external: true

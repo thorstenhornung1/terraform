@@ -1,0 +1,129 @@
+# =============================================================================
+# Deploy Changed Stacks to Docker Swarm via Portainer
+# =============================================================================
+# Triggers on push to main when stack files or webhooks.conf change.
+# Connects to the internal network via Tailscale subnet routing,
+# then calls Portainer webhooks for each changed stack.
+#
+# Required GitHub Secrets:
+#   TS_AUTHKEY  — Tailscale auth key (reusable, ephemeral, tagged)
+#
+# Required GitHub Variables:
+#   PORTAINER_URL — e.g. https://192.168.4.40:9443  (optional, has default)
+# =============================================================================
+
+name: Deploy stacks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'stacks/**'
+      - 'webhooks.conf'
+      - '.github/workflows/deploy-stacks.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need parent commit for diff
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+
+      - name: Wait for Tailscale connectivity
+        run: |
+          echo "Waiting for Tailscale to establish routes..."
+          for i in $(seq 1 30); do
+            if tailscale status | grep -q "offers exit node"; then
+              break
+            fi
+            # Try to ping Portainer target
+            if curl -sk --connect-timeout 2 \
+                 "${{ vars.PORTAINER_URL || 'https://192.168.4.40:9443' }}/api/system/status" \
+                 >/dev/null 2>&1; then
+              echo "Portainer reachable after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          tailscale status
+
+      - name: Determine changed files
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual trigger: redeploy ALL stacks in webhooks.conf
+            echo "trigger=manual" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch — will redeploy all configured stacks"
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'stacks/' || true)
+            echo "changed<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$CHANGED" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "trigger=push" >> "$GITHUB_OUTPUT"
+            echo "Changed stack files:"
+            echo "$CHANGED"
+          fi
+
+      - name: Trigger Portainer webhooks
+        env:
+          PORTAINER_URL: ${{ vars.PORTAINER_URL || 'https://192.168.4.40:9443' }}
+        run: |
+          CONF="webhooks.conf"
+          if [ ! -f "$CONF" ]; then
+            echo "::error::webhooks.conf not found"
+            exit 1
+          fi
+
+          TRIGGERED=0
+          FAILED=0
+
+          while IFS='=' read -r stack_path webhook_uuid; do
+            # Skip comments and empty lines
+            [[ "$stack_path" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "$stack_path" || -z "$webhook_uuid" ]] && continue
+
+            # Trim whitespace
+            stack_path=$(echo "$stack_path" | xargs)
+            webhook_uuid=$(echo "$webhook_uuid" | xargs)
+
+            # Check if this stack was changed (or manual trigger)
+            if [ "${{ steps.changes.outputs.trigger }}" = "push" ]; then
+              if ! echo "${{ steps.changes.outputs.changed }}" | grep -qF "$stack_path"; then
+                echo "SKIP: $stack_path (not changed)"
+                continue
+              fi
+            fi
+
+            echo "DEPLOY: $stack_path → webhook $webhook_uuid"
+            HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
+              -X POST "${PORTAINER_URL}/api/stacks/webhooks/${webhook_uuid}")
+
+            if [ "$HTTP_CODE" = "204" ]; then
+              echo "  ✓ OK (HTTP $HTTP_CODE)"
+              TRIGGERED=$((TRIGGERED + 1))
+            else
+              echo "  ✗ FAILED (HTTP $HTTP_CODE)"
+              FAILED=$((FAILED + 1))
+            fi
+          done < "$CONF"
+
+          echo ""
+          echo "Summary: $TRIGGERED deployed, $FAILED failed"
+
+          if [ "$FAILED" -gt 0 ]; then
+            exit 1
+          fi
+
+          if [ "$TRIGGERED" -eq 0 ]; then
+            echo "No matching stacks found for changed files"
+          fi

@@ -1,0 +1,59 @@
+version: '3.8'
+
+# =============================================================================
+# PBS Backup Client Stack for Docker Swarm
+# =============================================================================
+# Backs up /mnt/cephfs/swarm-state/ to Proxmox Backup Server every 2 hours.
+#
+# Deploy via Portainer UI → Stacks → Add stack
+# Or: docker stack deploy -c pbs-backup-stack.yml backup
+#
+# Prerequisites:
+#   1. Docker secret "pbs_backup_password" created (PBS user password)
+#   2. CephFS mounted at /mnt/cephfs on all manager nodes
+#   3. PBS datastore "swarm-datastore" configured
+#   4. PBS user "backup-swarm@pbs" with DatastoreBackup role
+#
+# PBS repository: backup-swarm@pbs@pbs.hornung-bn.de:swarm-datastore
+# =============================================================================
+
+services:
+  pbs-backup-client:
+    image: ghcr.io/thorstenhornung1/swarm-stacks/pbs-backup-client:latest
+    hostname: swarm-backup-client
+    command: cron
+    environment:
+      PBS_REPOSITORY: "backup-swarm@pbs@pbs.hornung-bn.de:swarm-datastore"
+      BACKUP_SCHEDULE: "0 */2 * * *"
+    volumes:
+      - /mnt/cephfs/swarm-state:/backup-source:ro
+      - pbs-cache:/root/.cache/proxmox-backup
+    secrets:
+      - pbs_password
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 5
+        window: 120s
+
+secrets:
+  pbs_password:
+    external: true
+    name: pbs_backup_password
+
+volumes:
+  pbs-cache:
+    driver: local

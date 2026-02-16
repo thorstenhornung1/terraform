@@ -50,7 +50,6 @@
           - parted
           - python3-psycopg2
         state: present
-        update_cache: yes
 
     - name: Ensure qemu-guest-agent is running
       service:
@@ -218,6 +217,25 @@
           file:
             path: /var/lib/docker
             state: absent
+
+    # Portainer Agent compatibility — /var/lib/docker/volumes symlink
+    # The data-root migration above removes /var/lib/docker entirely, but
+    # the Portainer Agent bind-mounts /var/lib/docker/volumes.  This symlink
+    # keeps that path valid without duplicating data.
+    - name: Create /var/lib/docker directory for symlink
+      file:
+        path: /var/lib/docker
+        state: directory
+        mode: '0711'
+      when: docker_data_root_configured
+
+    - name: Create Portainer Agent symlink (/var/lib/docker/volumes → data disk)
+      file:
+        src: "{{ data_mount }}/docker/volumes"
+        dest: /var/lib/docker/volumes
+        state: link
+        force: true
+      when: docker_data_root_configured
 
     - name: Ensure Docker is running
       service:

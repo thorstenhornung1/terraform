@@ -1,0 +1,41 @@
+[
+  {
+    "id": "github-push",
+    "execute-command": "/scripts/redeploy.sh",
+    "command-working-directory": "/tmp",
+    "response-message": "Redeployment triggered",
+    "response-headers": [
+      { "name": "Content-Type", "value": "application/json" }
+    ],
+    "pass-file-to-command": [
+      {
+        "source": "entire-payload",
+        "envname": "GITHUB_PAYLOAD"
+      }
+    ],
+    "trigger-rule": {
+      "and": [
+        {
+          "match": {
+            "type": "payload-hmac-sha256",
+            "secret": "{{ getenv "GITHUB_WEBHOOK_SECRET" }}",
+            "parameter": {
+              "source": "header",
+              "name": "X-Hub-Signature-256"
+            }
+          }
+        },
+        {
+          "match": {
+            "type": "value",
+            "value": "refs/heads/main",
+            "parameter": {
+              "source": "payload",
+              "name": "ref"
+            }
+          }
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,70 @@
+version: "3.8"
+
+# =============================================================================
+# Uptime Kuma v2 Stack — GitOps managed via Portainer webhook
+# =============================================================================
+# Self-hosted monitoring tool — tracks uptime of websites, APIs, DNS, etc.
+#
+# External dependencies:
+#   - Traefik (traefik_public network) — TLS termination + routing
+#   - CephFS (/mnt/cephfs/swarm-state/stack-uptime-kuma/) — persistent data
+#
+# CephFS directories (create on any infra node before deploying):
+#   mkdir -p /mnt/cephfs/swarm-state/stack-uptime-kuma/data
+#   chown -R 1000:1000 /mnt/cephfs/swarm-state/stack-uptime-kuma
+#
+# Access: https://uptime.hornung-bn.de
+# =============================================================================
+
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:2
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-uptime-kuma/data:/app/data
+    networks:
+      - traefik_public
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/entry-page || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        # Traefik HTTPS routing
+        - traefik.enable=true
+        - "traefik.http.routers.uptime-kuma.rule=Host(`uptime.hornung-bn.de`)"
+        - traefik.http.routers.uptime-kuma.entrypoints=websecure
+        - traefik.http.routers.uptime-kuma.tls=true
+        - traefik.http.routers.uptime-kuma.tls.certresolver=dns
+        - traefik.http.services.uptime-kuma.loadbalancer.server.port=3001
+        # HTTP -> HTTPS redirect
+        - "traefik.http.routers.uptime-kuma-http.rule=Host(`uptime.hornung-bn.de`)"
+        - traefik.http.routers.uptime-kuma-http.entrypoints=web
+        - traefik.http.routers.uptime-kuma-http.middlewares=uptime-redirect
+        - traefik.http.middlewares.uptime-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.uptime-redirect.redirectscheme.permanent=true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1024M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: any
+        delay: 10s
+
+networks:
+  traefik_public:
+    external: true

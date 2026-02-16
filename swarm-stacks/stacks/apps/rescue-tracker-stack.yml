@@ -1,0 +1,131 @@
+version: "3.8"
+
+# =============================================================================
+# Air Rescue Tracker Stack — GitOps managed via Portainer webhook
+# =============================================================================
+# Access: https://rescue.hornung-bn.de (tracker), https://rescue-grafana.hornung-bn.de (dashboards)
+# Services:
+#   - rescue-tracker: Python app collecting rescue helicopter telemetry
+#   - grafana: Visualization dashboards for rescue + HA data
+#
+# External dependencies:
+#   - InfluxDB VM (influxdb.hornung-bn.de:8086) — dedicated Terraform-managed VM
+#   - Traefik (traefik_public network) — TLS termination + routing
+#   - CephFS (/mnt/cephfs/swarm-state/stack-rescue-tracker/) — persistent data
+#
+# Secrets (create in Portainer UI before deploying):
+#   - grafana_rescue_admin_password: Grafana admin password
+#
+# Stack environment variables (set in Portainer UI):
+#   - INFLUXDB_TOKEN: InfluxDB API token for rescue-tracker
+#
+# CephFS directories (create on any infra node):
+#   mkdir -p /mnt/cephfs/swarm-state/stack-rescue-tracker/{grafana,tracker-logs}
+#   chown -R 472:472 /mnt/cephfs/swarm-state/stack-rescue-tracker/grafana
+#   chown -R 1000:1000 /mnt/cephfs/swarm-state/stack-rescue-tracker/tracker-logs
+# =============================================================================
+
+services:
+  rescue-tracker:
+    image: ghcr.io/thorstenhornung1/rescue-tracker:latest
+    environment:
+      - INFLUXDB_URL=http://influxdb.hornung-bn.de:8086
+      - INFLUXDB_ORG=rescue-org
+      - INFLUXDB_BUCKET=rescue-helicopters
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
+      - LOG_LEVEL=INFO
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-rescue-tracker/tracker-logs:/app/logs
+    networks:
+      - traefik_public
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - traefik.enable=true
+        - "traefik.http.routers.rescue-tracker.rule=Host(`rescue.hornung-bn.de`)"
+        - traefik.http.routers.rescue-tracker.entrypoints=websecure
+        - traefik.http.routers.rescue-tracker.tls=true
+        - traefik.http.routers.rescue-tracker.tls.certresolver=dns
+        - traefik.http.services.rescue-tracker.loadbalancer.server.port=8000
+        # HTTP -> HTTPS redirect
+        - "traefik.http.routers.rescue-tracker-http.rule=Host(`rescue.hornung-bn.de`)"
+        - traefik.http.routers.rescue-tracker-http.entrypoints=web
+        - traefik.http.routers.rescue-tracker-http.middlewares=rescue-redirect
+        - traefik.http.middlewares.rescue-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.rescue-redirect.redirectscheme.permanent=true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      restart_policy:
+        condition: any
+        delay: 10s
+
+  grafana:
+    image: grafana/grafana:10.2.2
+    environment:
+      - GF_INSTALL_PLUGINS=grafana-worldmap-panel,grafana-piechart-panel
+      - GF_FEATURE_TOGGLES_ENABLE=publicDashboards
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_rescue_admin_password
+    secrets:
+      - grafana_rescue_admin_password
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-rescue-tracker/grafana:/var/lib/grafana
+    networks:
+      - traefik_public
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - traefik.enable=true
+        - "traefik.http.routers.rescue-grafana.rule=Host(`rescue-grafana.hornung-bn.de`)"
+        - traefik.http.routers.rescue-grafana.entrypoints=websecure
+        - traefik.http.routers.rescue-grafana.tls=true
+        - traefik.http.routers.rescue-grafana.tls.certresolver=dns
+        - traefik.http.services.rescue-grafana.loadbalancer.server.port=3000
+        # HTTP -> HTTPS redirect
+        - "traefik.http.routers.rescue-grafana-http.rule=Host(`rescue-grafana.hornung-bn.de`)"
+        - traefik.http.routers.rescue-grafana-http.entrypoints=web
+        - traefik.http.routers.rescue-grafana-http.middlewares=grafana-redirect
+        - traefik.http.middlewares.grafana-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.grafana-redirect.redirectscheme.permanent=true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 10s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  traefik_public:
+    external: true
+
+secrets:
+  grafana_rescue_admin_password:
+    external: true
