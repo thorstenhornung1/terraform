@@ -878,6 +878,91 @@ The Crunchy Operator will automatically:
 4. ExternalSecret controller will automatically overwrite manually edited secrets
 5. Test volume provisioning immediately after deployment to verify configuration
 
+## Standard LXC Provisioning Patterns (2026-02-14)
+
+When creating new LXC containers, ALWAYS include the following standard configurations.
+LXC containers do NOT support `user_data_file_id` (Cloud-Init user data). Instead, use
+`null_resource` + `remote-exec` with a setup script template (`setup-*.sh.tpl`).
+
+### Mandatory Components for Every LXC Container
+
+1. **APT Proxy (apt-cacher-ng)**
+   ```bash
+   cat > /etc/apt/apt.conf.d/01proxy << 'EOF'
+   Acquire::http::Proxy "http://apt-cacher.hornung-bn.de:3142";
+   EOF
+   ```
+   - Must be configured BEFORE `apt-get update`
+   - DNS resolution requires Pi-hole (192.168.2.4, 192.168.4.5, 192.168.4.6)
+
+2. **LDAP/SSSD Authentication**
+   - Packages: `sssd sssd-ldap libnss-sss libpam-sss`
+   - LDAP URI: `ldap://ldap.hornung-bn.de`
+   - Search Base: `dc=ldap,dc=hornung-bn,dc=de`
+   - Bind DN: `uid=root,cn=users,dc=ldap,dc=hornung-bn,dc=de`
+   - Config: `/etc/sssd/sssd.conf` (chmod 600!)
+   - NSSwitch: `/etc/nsswitch.conf` → add `sss` to passwd/group/shadow
+   - PAM: `/etc/pam.d/common-session` → add `pam_mkhomedir.so`
+
+3. **Logging — rsyslog → Loki/Promtail**
+   ```bash
+   cat > /etc/rsyslog.d/60-loki.conf << 'EOF'
+   *.* @@loki.hornung-bn.de:1514
+   *.* @loki.hornung-bn.de:1514
+   EOF
+   ```
+   - TCP (`@@`) for reliability, UDP (`@`) as fallback
+   - Port 1514 on loki.hornung-bn.de
+
+4. **SSH Access**
+   - SSH key set via `initialization.user_account.keys`
+   - Password set via `initialization.user_account.password` (var.vm_password)
+   - SSH public key: `var.ssh_public_key_path`
+
+### LXC Container Terraform Pattern
+
+```hcl
+# Template download (one per Proxmox node)
+resource "proxmox_virtual_environment_download_file" "template_name" {
+  for_each     = var.node_map
+  content_type = "vztmpl"
+  datastore_id = "local"
+  node_name    = each.value.node
+  url          = "http://download.proxmox.com/images/system/..."
+  file_name    = "template-filename.tar.zst"
+  overwrite_unmanaged = false
+}
+
+# Container resource
+resource "proxmox_virtual_environment_container" "nodes" {
+  for_each  = var.node_map
+  node_name = each.value.node
+  vm_id     = each.value.vm_id
+  # ... cpu, memory, disk, network_interface ...
+  initialization {
+    hostname = "name"
+    ip_config { ipv4 { address = "x.x.x.x/24"; gateway = var.network_gateway } }
+    dns { servers = var.dns_servers }
+    user_account { keys = [file(var.ssh_public_key_path)]; password = var.vm_password }
+  }
+}
+
+# Provisioning via remote-exec (NOT cloud-init)
+resource "null_resource" "setup" {
+  for_each = var.node_map
+  connection { type = "ssh"; host = each.value.ip; user = "root"; private_key = file(...) }
+  provisioner "file" { content = templatefile("terraform/service/setup.sh.tpl", {...}); destination = "/tmp/setup.sh" }
+  provisioner "remote-exec" { inline = ["chmod +x /tmp/setup.sh", "/tmp/setup.sh", "rm -f /tmp/setup.sh"] }
+}
+```
+
+### Existing LXC Containers (Reference)
+| Container | Type | VM IDs | Nodes | Storage | File |
+|-----------|------|--------|-------|---------|------|
+| dns1/2/3 | Unprivileged (Ubuntu 24.04) | 4100-4102 | pve01/02/03 | tank | `dns-cluster.tf` |
+| swarm-control | Privileged (Ubuntu 24.04) | 4300 | pve01 | tank | `swarmpit.tf` |
+| etcd-4/5 | Unprivileged (Ubuntu 24.04) | 4301-4302 | pve02/03 | tank/local-lvm | `etcd-cluster.tf` |
+
 ## Storage Architecture
 
 ### Storage Tiers (docs/STORAGE_TIERS.md)

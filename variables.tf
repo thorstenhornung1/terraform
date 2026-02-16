@@ -307,6 +307,68 @@ variable "etcd_initial_cluster_state" {
 # Home Assistant metrics (1.7GB, 1yr retention).
 # Accessed by: rescue-tracker (Swarm), Grafana (Swarm), Home Assistant (192.168.2.5)
 
+# ============================================================================
+# TECHNITIUM DNS CLUSTER (3-Node LXC)
+# ============================================================================
+# Authoritative + recursive DNS cluster on Debian 12 LXC containers.
+# Replaces/augments existing Pi-hole DNS with full-featured DNS server.
+# Cluster mode: dns1 = primary, dns2/dns3 = secondary (join to primary).
+# All nodes on VLAN 4 — no storage VLAN needed.
+
+variable "dns_nodes" {
+  description = "Technitium DNS cluster LXC container configuration"
+  type = map(object({
+    node         = string
+    vm_id        = number
+    ip           = string
+    storage_pool = optional(string)  # Override storage pool (default: var.storage_pool / tank)
+  }))
+  default = {
+    "1" = {
+      node  = "pve01"
+      vm_id = 4100
+      ip    = "192.168.4.2"
+    }
+    "2" = {
+      node  = "pve02"
+      vm_id = 4101
+      ip    = "192.168.4.3"
+      storage_pool = "tank"  # local-lvm thin pool full on pve02
+    }
+    "3" = {
+      node  = "pve03"
+      vm_id = 4102
+      ip    = "192.168.4.4"
+    }
+  }
+}
+
+variable "dns_node_cores" {
+  description = "CPU cores for DNS LXC containers"
+  type        = number
+  default     = 1
+}
+
+variable "dns_node_memory" {
+  description = "Memory in MB for DNS LXC containers"
+  type        = number
+  default     = 512
+}
+
+variable "dns_node_disk_size" {
+  description = "Disk size in GB for DNS LXC containers"
+  type        = number
+  default     = 8
+}
+
+# ============================================================================
+# DEDICATED INFLUXDB VM (air_rescue_tracker + Home Assistant)
+# ============================================================================
+# Standalone InfluxDB 2.7 instance on pve03 with ZFS Tank storage.
+# Stores rescue-helicopter telemetry (2.3GB, infinite retention) and
+# Home Assistant metrics (1.7GB, 1yr retention).
+# Accessed by: rescue-tracker (Swarm), Grafana (Swarm), Home Assistant (192.168.2.5)
+
 variable "influxdb_rescue" {
   description = "Dedicated InfluxDB VM configuration"
   type = object({

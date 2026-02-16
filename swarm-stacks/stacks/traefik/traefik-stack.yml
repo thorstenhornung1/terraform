@@ -41,6 +41,10 @@ services:
       - --providers.swarm.endpoint=tcp://docker-socket-proxy:2375
       - --providers.swarm.exposedbydefault=false
 
+      # File Provider (external backends like Technitium DNS)
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+
       # EntryPoints
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
@@ -68,6 +72,10 @@ services:
         published: 443
         protocol: tcp
         mode: ingress
+
+    configs:
+      - source: dns_dynamic_config
+        target: /etc/traefik/dynamic/dns.yml
 
     volumes:
       - traefik_letsencrypt:/letsencrypt
@@ -109,6 +117,10 @@ networks:
 
 volumes:
   traefik_letsencrypt:
+
+configs:
+  dns_dynamic_config:
+    file: ./dns-external.yml
 
 secrets:
   traefik_dns_api_token:

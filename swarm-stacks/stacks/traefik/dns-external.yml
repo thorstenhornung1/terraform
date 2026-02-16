@@ -1,0 +1,54 @@
+# =============================================================================
+# Traefik Dynamic Config: Technitium DNS WebUI (External Backends)
+# =============================================================================
+# Routes dns.hornung-bn.de to all 3 Technitium DNS nodes.
+# Backends are LXC containers outside Docker Swarm — requires file provider.
+#
+# Nodes:
+#   dns1: 192.168.4.2:5380 (Primary)
+#   dns2: 192.168.4.3:5380 (Secondary)
+#   dns3: 192.168.4.4:5380 (Secondary)
+# =============================================================================
+
+http:
+  routers:
+    # HTTPS Router — dns.hornung-bn.de
+    dns-websecure:
+      rule: "Host(`dns.hornung-bn.de`)"
+      entryPoints:
+        - websecure
+      service: dns-webui
+      tls:
+        certResolver: dns
+
+    # HTTP → HTTPS Redirect
+    dns-web:
+      rule: "Host(`dns.hornung-bn.de`)"
+      entryPoints:
+        - web
+      middlewares:
+        - dns-redirect-https
+      service: dns-webui
+
+  middlewares:
+    dns-redirect-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+  services:
+    dns-webui:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.4.2:5380"
+          - url: "http://192.168.4.3:5380"
+          - url: "http://192.168.4.4:5380"
+        healthCheck:
+          path: /
+          interval: "30s"
+          timeout: "5s"
+        sticky:
+          cookie:
+            name: dns_node
+            secure: true
+            httpOnly: true
