@@ -1,0 +1,124 @@
+version: "3.8"
+
+# =============================================================================
+# Frigate 0.17 Beta Stack — GitOps managed via Portainer webhook
+# =============================================================================
+# NVR for 8 cameras with CPU detection, MQTT/Home Assistant integration.
+#
+# External dependencies:
+#   - Traefik (traefik_public network) — TLS termination + routing
+#   - CephFS (/mnt/cephfs/swarm-state/stack-frigate-beta/) — DB + model cache
+#   - ZFS NFS mount (/srv/frigate-recordings) — video recordings on docker-infra-3
+#   - Docker secrets: frigate_camera_credentials, frigate_mqtt_user, frigate_mqtt_password
+#
+# CephFS directories (create on any infra node before deploying):
+#   mkdir -p /mnt/cephfs/swarm-state/stack-frigate-beta/{db,model-cache}
+#
+# Docker secrets (create via Portainer UI or create-secrets.sh):
+#   ./create-secrets.sh
+#
+# Access: https://frigate.beta.hornung-bn.de
+# RTSP: rtsp://<docker-infra-3-ip>:8554/<camera>
+# WebRTC: port 8555 TCP+UDP on docker-infra-3
+# =============================================================================
+
+services:
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:0.17.0-beta2
+    entrypoint: /config/entrypoint.sh
+    command: ["python3", "-u", "-m", "frigate"]
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-frigate-beta/db:/config/db
+      - /mnt/cephfs/swarm-state/stack-frigate-beta/model-cache:/config/model_cache
+      - /srv/frigate-recordings:/media/frigate/recordings
+    tmpfs:
+      - /dev/shm:rw,nosuid,nodev,noexec,size=256m
+    configs:
+      - source: frigate_config
+        target: /config/config.yml
+        mode: 0644
+      - source: frigate_entrypoint
+        target: /config/entrypoint.sh
+        mode: 0755
+    secrets:
+      - frigate_camera_credentials
+      - frigate_mqtt_user
+      - frigate_mqtt_password
+    environment:
+      TZ: Europe/Berlin
+    ports:
+      # RTSP restream — host mode for low-latency direct access
+      - target: 8554
+        published: 8554
+        protocol: tcp
+        mode: host
+      # WebRTC — host mode for peer-to-peer connectivity
+      - target: 8555
+        published: 8555
+        protocol: tcp
+        mode: host
+      - target: 8555
+        published: 8555
+        protocol: udp
+        mode: host
+    networks:
+      - traefik_public
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8971/api/version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 3
+      labels:
+        # Traefik HTTPS routing
+        - traefik.enable=true
+        - "traefik.http.routers.frigate-beta.rule=Host(`frigate.beta.hornung-bn.de`)"
+        - traefik.http.routers.frigate-beta.entrypoints=websecure
+        - traefik.http.routers.frigate-beta.tls=true
+        - traefik.http.routers.frigate-beta.tls.certresolver=dns
+        - traefik.http.services.frigate-beta.loadbalancer.server.port=8971
+        # HTTP -> HTTPS redirect
+        - "traefik.http.routers.frigate-beta-http.rule=Host(`frigate.beta.hornung-bn.de`)"
+        - traefik.http.routers.frigate-beta-http.entrypoints=web
+        - traefik.http.routers.frigate-beta-http.middlewares=frigate-redirect
+        - traefik.http.middlewares.frigate-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.frigate-redirect.redirectscheme.permanent=true
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4096M
+        reservations:
+          cpus: '1'
+          memory: 1024M
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: stop-first
+        failure_action: rollback
+      restart_policy:
+        condition: any
+        delay: 15s
+
+configs:
+  frigate_config:
+    file: ./config.yml
+  frigate_entrypoint:
+    file: ./entrypoint.sh
+
+secrets:
+  frigate_camera_credentials:
+    external: true
+  frigate_mqtt_user:
+    external: true
+  frigate_mqtt_password:
+    external: true
+
+networks:
+  traefik_public:
+    external: true

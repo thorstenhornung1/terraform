@@ -1,0 +1,128 @@
+# =============================================================================
+# Frigate 0.17 Beta Configuration — GitOps managed
+# =============================================================================
+# Environment variable substitution: Frigate replaces {ENVVAR} in this file.
+# MQTT vars come from Docker secrets (frigate_mqtt_user, frigate_mqtt_password).
+# Camera passwords come from the "frigate_camera_credentials" secret — a
+# key=value file sourced by entrypoint.sh. See entrypoint.sh for details.
+#
+# Per-camera credentials example:
+#   In the Docker secret "frigate_camera_credentials":
+#     FRIGATE_CAM_FRONT_DOOR_PW=password1
+#     FRIGATE_CAM_GARAGE_PW=password2
+#     FRIGATE_CAM_GARDEN_PW=password3
+#
+#   Then use in camera config below:
+#     path: rtsp://admin:{FRIGATE_CAM_FRONT_DOOR_PW}@192.168.x.x:554/stream1
+#
+#   If multiple cameras share the same password, just use the same env var.
+# =============================================================================
+
+mqtt:
+  enabled: true
+  host: 192.168.2.5
+  port: 1883
+  user: "{FRIGATE_MQTT_USER}"
+  password: "{FRIGATE_MQTT_PASSWORD}"
+  topic_prefix: frigate
+
+database:
+  path: /config/db/frigate.db
+
+detectors:
+  cpu_1:
+    type: cpu
+    num_threads: 2
+  cpu_2:
+    type: cpu
+    num_threads: 2
+
+# Apple Silicon Detector (future — uncomment when mac-mini is ready):
+# detectors:
+#   apple_silicon:
+#     type: remote
+#     url: http://mac-mini.hornung-bn.de:50051
+
+model:
+  path: /config/model_cache
+  width: 320
+  height: 320
+
+ffmpeg:
+  hwaccel_args: []
+  output_args:
+    record: preset-record-generic-audio-aac
+
+record:
+  enabled: true
+  retain:
+    days: 7
+    mode: motion
+  events:
+    retain:
+      default: 14
+      mode: active_objects
+
+snapshots:
+  enabled: true
+  retain:
+    default: 14
+
+detect:
+  enabled: true
+  width: 1280
+  height: 720
+  fps: 5
+
+objects:
+  track:
+    - person
+    - car
+    - dog
+    - cat
+  filters:
+    person:
+      min_area: 5000
+      max_area: 100000
+      threshold: 0.7
+
+# =============================================================================
+# Cameras
+# =============================================================================
+# Add cameras below. Each camera references its own env var from the
+# "frigate_camera_credentials" Docker secret.
+#
+# Example with per-camera passwords:
+#
+#   front_door:
+#     ffmpeg:
+#       inputs:
+#         - path: rtsp://admin:{FRIGATE_CAM_FRONT_DOOR_PW}@192.168.3.10:554/stream1
+#           roles: [detect]
+#         - path: rtsp://admin:{FRIGATE_CAM_FRONT_DOOR_PW}@192.168.3.10:554/stream2
+#           roles: [record]
+#     detect:
+#       width: 1280
+#       height: 720
+#       fps: 5
+#     record:
+#       enabled: true
+#     snapshots:
+#       enabled: true
+#
+# Example where multiple cameras share one password:
+#
+#   garage:
+#     ffmpeg:
+#       inputs:
+#         - path: rtsp://admin:{FRIGATE_CAM_SHARED_PW}@192.168.3.20:554/stream1
+#           roles: [detect, record]
+#
+#   garden:
+#     ffmpeg:
+#       inputs:
+#         - path: rtsp://admin:{FRIGATE_CAM_SHARED_PW}@192.168.3.21:554/stream1
+#           roles: [detect, record]
+# =============================================================================
+
+cameras: {}
