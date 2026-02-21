@@ -9,7 +9,8 @@ version: "3.8"
 #   - Traefik (traefik_public network) — TLS termination + routing
 #   - CephFS (/mnt/cephfs/swarm-state/stack-frigate-beta/) — DB + model cache
 #   - ZFS NFS mount (/srv/frigate-recordings) — video recordings on docker-infra-3
-#   - Docker secrets: frigate_camera_credentials, frigate_mqtt_user, frigate_mqtt_password
+#   - Docker secrets: frigate_mqtt_user, frigate_mqtt_password
+#   - (Later) frigate_camera_credentials — see entrypoint.sh for per-camera password pattern
 #
 # CephFS directories (create on any infra node before deploying):
 #   mkdir -p /mnt/cephfs/swarm-state/stack-frigate-beta/{db,model-cache}
@@ -41,7 +42,6 @@ services:
         target: /config/entrypoint.sh
         mode: 0755
     secrets:
-      - frigate_camera_credentials
       - frigate_mqtt_user
       - frigate_mqtt_password
     environment:
@@ -112,12 +112,13 @@ configs:
     file: ./entrypoint.sh
 
 secrets:
-  frigate_camera_credentials:
-    external: true
   frigate_mqtt_user:
     external: true
   frigate_mqtt_password:
     external: true
+  # Add when configuring cameras:
+  # frigate_camera_credentials:
+  #   external: true
 
 networks:
   traefik_public:
