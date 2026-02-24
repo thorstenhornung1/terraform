@@ -44,7 +44,7 @@ services:
     networks:
       - traefik_public
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -o /dev/null http://127.0.0.1:9000/ || [ $? -ne 7 ]"]
+      test: ["CMD-SHELL", "curl -sf -o /dev/null http://127.0.0.1:9000/ || [ $$? -ne 7 ]"]
       interval: 30s
       timeout: 5s
       retries: 3
