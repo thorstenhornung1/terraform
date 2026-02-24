@@ -95,7 +95,7 @@ terraform apply -target=proxmox_virtual_environment_vm.seaweedfs -parallelism=2
 **Network Configuration:**
 - VLAN 4: Cluster network (192.168.4.0/24)
 - VLAN 12: Storage network (192.168.12.0/24)
-- DNS: Pi-hole cluster (192.168.2.4, 192.168.4.5, 192.168.4.6)
+- DNS: Technitium DNS cluster (192.168.4.2, 192.168.2.3, 192.168.2.4, 192.168.2.5)
 
 **VM Distribution:**
 ```

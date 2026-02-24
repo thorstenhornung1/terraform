@@ -48,9 +48,9 @@ variable "network_gateway_storage" {
 }
 
 variable "dns_servers" {
-  description = "DNS servers (Pi-hole cluster)"
+  description = "DNS servers (Technitium DNS cluster)"
   type        = list(string)
-  default     = ["192.168.2.4", "192.168.4.5", "192.168.4.6"]
+  default     = ["192.168.4.2", "192.168.4.3", "192.168.4.4"]
 }
 
 # ============================================================================

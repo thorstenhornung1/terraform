@@ -128,24 +128,49 @@ lpr:
 classification:
   bird:
     enabled: false
+  custom:
+    Mülltonne:
+      enabled: true
+      name: Mülltonne
+      threshold: 0.8
+      object_config:
+        objects:
+          - waste_bin
+        classification_type: sub_label
 
 # =============================================================================
 # Cameras
 # =============================================================================
 # Each camera uses individual Docker secrets for credentials and IP.
-# garage:   Reolink E1 Pro Outdoor — H.264 only (RTSP)
-# garten:   Reolink CX810 4K 8MP  — H.265 main, H.264 sub (RTSP)
 # doorbird: Doorbird D2101V        — MJPEG over HTTP
+# garten:   Reolink CX810 4K 8MP  — H.265 main, H.264 sub (RTSP)
+# garage:   Reolink E1 Pro Outdoor — H.264 only (RTSP)
 # =============================================================================
 
 cameras:
-  garage:
+  doorbird:
     ffmpeg:
       inputs:
-        - path: "rtsp://{FRIGATE_GARAGE_USER}:{FRIGATE_GARAGE_PASSWORD}@{FRIGATE_GARAGE_IP}/h264Preview_01_sub"
+        - path: "http://{FRIGATE_DOORBIRD_USER}:{FRIGATE_DOORBIRD_PASSWORD}@{FRIGATE_DOORBIRD_URL}/bha-api/video.cgi"
+          input_args: -f mpjpeg
           roles: [detect]
-        - path: "rtsp://{FRIGATE_GARAGE_USER}:{FRIGATE_GARAGE_PASSWORD}@{FRIGATE_GARAGE_IP}/h264Preview_01_main"
-          roles: [record]
+    detect:
+      width: 1280
+      height: 720
+      fps: 2
+    objects:
+      mask: 0.45,0.992,0.462,0.007,0.004,0.002,-0.001,0.997
+      filters:
+        car:
+          mask:
+            0.996,0.913,0.916,0.841,0.924,0.693,0.882,0.662,0.771,0.708,0.711,0.652,0.691,0.638,0.523,0.648,0.525,0.449,0.899,0.325,0.935,0.461,0.943,0.472,0.999,0.474
+        person:
+          mask:
+            0.996,0.913,0.916,0.841,0.924,0.693,0.882,0.662,0.771,0.708,0.711,0.652,0.691,0.638,0.523,0.648,0.525,0.449,0.899,0.325,0.935,0.461,0.943,0.472,0.999,0.474
+    zones:
+      auto:
+        coordinates:
+          0.996,0.913,0.916,0.841,0.924,0.693,0.882,0.662,0.771,0.708,0.711,0.652,0.691,0.638,0.523,0.648,0.525,0.449,0.899,0.325,0.935,0.461,0.943,0.472,0.999,0.474
 
   garten:
     ffmpeg:
@@ -161,23 +186,10 @@ cameras:
             - 0.661,0.044,0.671,0.279,0.782,0.285,0.777,0.033
             - 0.673,0.662,0.669,0.802,0.768,0.834,0.772,0.682
 
-
-  doorbird:
+  garage:
     ffmpeg:
       inputs:
-        - path: "http://{FRIGATE_DOORBIRD_USER}:{FRIGATE_DOORBIRD_PASSWORD}@{FRIGATE_DOORBIRD_URL}/bha-api/video.cgi"
-          input_args: -f mpjpeg
+        - path: "rtsp://{FRIGATE_GARAGE_USER}:{FRIGATE_GARAGE_PASSWORD}@{FRIGATE_GARAGE_IP}/h264Preview_01_sub"
           roles: [detect]
-    detect:
-      width: 1280
-      height: 720
-      fps: 2
-    objects:
-      mask: 0.45,0.992,0.462,0.007,0.004,0.002,-0.001,0.997
-      filters:
-        car:
-          mask: 
-            0.996,0.913,0.916,0.841,0.924,0.693,0.882,0.662,0.771,0.708,0.711,0.652,0.691,0.638,0.523,0.648,0.525,0.449,0.899,0.325,0.935,0.461,0.943,0.472,0.999,0.474
-        person:
-          mask: 
-            0.996,0.913,0.916,0.841,0.924,0.693,0.882,0.662,0.771,0.708,0.711,0.652,0.691,0.638,0.523,0.648,0.525,0.449,0.899,0.325,0.935,0.461,0.943,0.472,0.999,0.474
+        - path: "rtsp://{FRIGATE_GARAGE_USER}:{FRIGATE_GARAGE_PASSWORD}@{FRIGATE_GARAGE_IP}/h264Preview_01_main"
+          roles: [record]

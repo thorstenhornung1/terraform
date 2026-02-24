@@ -239,26 +239,26 @@ Changed repository URLs from `/linux/debian` to `/linux/ubuntu`:
 - Missing Pi-hole cluster DNS servers from VLAN 4
 
 **Fix Applied:**
-Added Pi-hole cluster DNS servers to variables.tf for proper local DNS resolution:
+Added Technitium DNS servers to variables.tf for proper local DNS resolution:
 ```hcl
 variable "dns_servers" {
-  description = "DNS servers (Pi-hole cluster for local DNS resolution)"
+  description = "DNS servers (Technitium DNS cluster)"
   type        = list(string)
-  default     = ["192.168.2.4", "192.168.4.5", "192.168.4.6"]  # Primary + VLAN 4 cluster
+  default     = ["192.168.4.2", "192.168.2.3", "192.168.2.4", "192.168.2.5"]
 }
 ```
 
 APT proxy re-enabled in cloud-init with updated documentation:
 ```yaml
 # APT Proxy Configuration
-# Uses apt-cacher.hornung-bn.de (requires local DNS resolution via Pi-hole)
-# DNS servers configured via Terraform: 192.168.2.4, 192.168.4.5, 192.168.4.6
+# Uses apt-cacher.hornung-bn.de (requires local DNS resolution via Technitium DNS)
+# DNS servers configured via Terraform: 192.168.4.2, 192.168.2.3, 192.168.2.4, 192.168.2.5
 - path: /etc/apt/apt.conf.d/01proxy
   content: |
     Acquire::http::Proxy "http://apt-cacher.hornung-bn.de:3142";
 ```
 
-**Result:** APT cacher now works with proper DNS resolution from Pi-hole cluster
+**Result:** APT cacher now works with proper DNS resolution from Technitium DNS cluster
 
 #### Production Workaround (Already Applied - No Longer Needed)
 
@@ -286,7 +286,7 @@ Bootstrap host (192.168.4.20) was manually recovered during debugging:
 - ✅ No manual intervention needed
 - ✅ CI/CD compliance restored
 - ✅ APT cacher operational (faster package installation)
-- ✅ Local DNS resolution via Pi-hole cluster (192.168.2.4, 192.168.4.5, 192.168.4.6)
+- ✅ Local DNS resolution via Technitium DNS cluster (192.168.4.2, 192.168.2.3, 192.168.2.4, 192.168.2.5)
 - ✅ Docker installed from correct Ubuntu repositories
 
 #### Testing Checklist
@@ -893,7 +893,7 @@ LXC containers do NOT support `user_data_file_id` (Cloud-Init user data). Instea
    EOF
    ```
    - Must be configured BEFORE `apt-get update`
-   - DNS resolution requires Pi-hole (192.168.2.4, 192.168.4.5, 192.168.4.6)
+   - DNS resolution requires Technitium DNS (192.168.4.2, 192.168.2.3, 192.168.2.4, 192.168.2.5)
 
 2. **LDAP/SSSD Authentication**
    - Packages: `sssd sssd-ldap libnss-sss libpam-sss`
