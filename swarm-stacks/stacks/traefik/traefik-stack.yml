@@ -55,6 +55,7 @@ services:
       - --certificatesresolvers.dns.acme.dnschallenge=true
       - --certificatesresolvers.dns.acme.dnschallenge.provider=cloudflare
       - --certificatesresolvers.dns.acme.dnschallenge.delaybeforecheck=10
+      - --certificatesresolvers.dns.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
 
       # Dashboard
       - --api.dashboard=true

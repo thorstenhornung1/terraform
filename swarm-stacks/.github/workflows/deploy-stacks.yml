@@ -1,15 +1,29 @@
 # =============================================================================
-# Deploy Changed Stacks to Docker Swarm via Portainer
+# Deploy Changed Stacks to Docker Swarm via Portainer or SSH
 # =============================================================================
 # Triggers on push to main when stack files or webhooks.conf change.
-# Connects to the internal network via Tailscale subnet routing,
-# then calls Portainer webhooks for each changed stack.
+# Connects to the internal network via Tailscale subnet routing.
+#
+# Two deployment modes (configured in webhooks.conf):
+#   Default:       Calls Portainer webhook (simple docker stack deploy)
+#   ssh-deploy:    SSH to Swarm manager → content-hash deploy
+#                  Required for stacks with Docker configs (immutable objects)
+#
+# Content-Hash Config-Naming (ssh-deploy mode):
+#   Docker configs are immutable — same name = cannot update content.
+#   This pipeline computes SHA256 hashes of config files and injects them
+#   into the compose file as environment variables:
+#     name: frigate_config_${CONFIG_HASH:-latest}
+#   Each content change → new config name → docker stack deploy --prune.
+#   No docker stack rm needed → zero-downtime updates.
 #
 # Required GitHub Secrets:
-#   TS_AUTHKEY  — Tailscale auth key (reusable, ephemeral, tagged)
+#   TS_AUTHKEY          — Tailscale auth key (reusable, ephemeral, tagged)
+#   SWARM_SSH_KEY       — SSH private key for root@docker-infra-1
 #
 # Required GitHub Variables:
-#   PORTAINER_URL — e.g. https://192.168.4.40:9443  (optional, has default)
+#   PORTAINER_URL       — e.g. https://192.168.4.40:9443  (optional, has default)
+#   SWARM_MANAGER_HOST  — e.g. 192.168.4.40               (optional, has default)
 # =============================================================================
 
 name: Deploy stacks
@@ -57,6 +71,14 @@ jobs:
           done
           tailscale status
 
+      - name: Setup SSH for Swarm manager
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SWARM_SSH_KEY }}" > ~/.ssh/swarm_key
+          chmod 600 ~/.ssh/swarm_key
+          MANAGER="${{ vars.SWARM_MANAGER_HOST || '192.168.4.40' }}"
+          ssh-keyscan -H "$MANAGER" >> ~/.ssh/known_hosts 2>/dev/null || true
+
       - name: Determine changed files
         id: changes
         run: |
@@ -74,9 +96,10 @@ jobs:
             echo "$CHANGED"
           fi
 
-      - name: Trigger Portainer webhooks
+      - name: Deploy stacks
         env:
           PORTAINER_URL: ${{ vars.PORTAINER_URL || 'https://192.168.4.40:9443' }}
+          SWARM_MANAGER: ${{ vars.SWARM_MANAGER_HOST || '192.168.4.40' }}
         run: |
           CONF="webhooks.conf"
           if [ ! -f "$CONF" ]; then
@@ -87,33 +110,109 @@ jobs:
           TRIGGERED=0
           FAILED=0
 
-          while IFS='=' read -r stack_path webhook_uuid; do
+          while IFS='=' read -r stack_path webhook_spec; do
             # Skip comments and empty lines
             [[ "$stack_path" =~ ^[[:space:]]*# ]] && continue
-            [[ -z "$stack_path" || -z "$webhook_uuid" ]] && continue
+            [[ -z "$stack_path" || -z "$webhook_spec" ]] && continue
 
             # Trim whitespace
             stack_path=$(echo "$stack_path" | xargs)
-            webhook_uuid=$(echo "$webhook_uuid" | xargs)
+            webhook_spec=$(echo "$webhook_spec" | xargs)
 
-            # Check if this stack was changed (or manual trigger)
+            # Parse flags: uuid[,flag1,flag2]
+            webhook_uuid=$(echo "$webhook_spec" | cut -d',' -f1)
+            flags=$(echo "$webhook_spec" | cut -d',' -f2- -s)
+
+            # Determine the stack directory for multi-file matching
+            stack_dir=$(dirname "$stack_path")
+
+            # Check if this stack or any file in its directory was changed
             if [ "${{ steps.changes.outputs.trigger }}" = "push" ]; then
-              if ! echo "${{ steps.changes.outputs.changed }}" | grep -qF "$stack_path"; then
+              MATCH=false
+              while IFS= read -r changed_file; do
+                [ -z "$changed_file" ] && continue
+                # Match exact stack file OR any file in the same directory
+                if [ "$changed_file" = "$stack_path" ] || \
+                   [[ "$changed_file" == "$stack_dir"/* ]]; then
+                  MATCH=true
+                  break
+                fi
+              done <<< "${{ steps.changes.outputs.changed }}"
+
+              if [ "$MATCH" = "false" ]; then
                 echo "SKIP: $stack_path (not changed)"
                 continue
               fi
             fi
 
-            echo "DEPLOY: $stack_path → webhook $webhook_uuid"
-            HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
-              -X POST "${PORTAINER_URL}/api/stacks/webhooks/${webhook_uuid}")
+            # Determine deploy mode
+            if echo "$flags" | grep -q "ssh-deploy"; then
+              # --- SSH Deploy with Content-Hash Config-Naming ---
+              # Docker configs are immutable. We use content-hash naming
+              # so each config change creates a new config object.
+              # docker stack deploy --prune removes old unused configs.
+              # No docker stack rm needed → zero-downtime.
+              stack_name=$(basename "$stack_path" | sed 's/-stack\.yml$//')
 
-            if [ "$HTTP_CODE" = "204" ]; then
-              echo "  ✓ OK (HTTP $HTTP_CODE)"
-              TRIGGERED=$((TRIGGERED + 1))
+              echo "SSH-DEPLOY: $stack_path (stack: $stack_name)"
+
+              # Compute content hashes for all config files in the stack directory.
+              # Docker configs are immutable — content-hash naming creates a new
+              # config object for each change, so docker stack deploy can update
+              # without docker stack rm (zero-downtime).
+              ENV_FILE=$(mktemp)
+              for cfg_file in "$stack_dir"/*.yml "$stack_dir"/*.sh; do
+                [ -f "$cfg_file" ] || continue
+                cfg_basename=$(basename "$cfg_file")
+                # Skip the stack compose file itself
+                [[ "$cfg_basename" == *-stack.yml ]] && continue
+                # Compute hash: config.yml → CONFIG_HASH, entrypoint.sh → ENTRYPOINT_HASH
+                hash_name=$(echo "$cfg_basename" | sed 's/\.[^.]*$//' | tr '[:lower:].-' '[:upper:]__')_HASH
+                hash_value=$(sha256sum "$cfg_file" | cut -c1-8)
+                echo "export ${hash_name}=${hash_value}" >> "$ENV_FILE"
+                echo "  Config hash: ${hash_name}=${hash_value} (${cfg_basename})"
+              done
+
+              # Copy stack files + env file to Swarm manager
+              ssh -i ~/.ssh/swarm_key root@"$SWARM_MANAGER" "mkdir -p /tmp/gitops-deploy"
+              scp -i ~/.ssh/swarm_key -r "$stack_dir"/* root@"$SWARM_MANAGER":/tmp/gitops-deploy/
+              scp -i ~/.ssh/swarm_key "$ENV_FILE" root@"$SWARM_MANAGER":/tmp/gitops-deploy/.env.hashes
+              rm -f "$ENV_FILE"
+
+              COMPOSE_BASENAME="$(basename "$stack_path")"
+              # Deploy with content-hash env vars (no docker stack rm!)
+              ssh -i ~/.ssh/swarm_key root@"$SWARM_MANAGER" bash -s <<DEPLOY_EOF
+                set -e
+                cd /tmp/gitops-deploy
+                source .env.hashes
+
+                echo "Deploying stack $stack_name with content-hash configs..."
+                docker stack deploy -c "$COMPOSE_BASENAME" --prune "$stack_name"
+
+                echo "Cleaning up..."
+                rm -rf /tmp/gitops-deploy
+          DEPLOY_EOF
+
+              if [ $? -eq 0 ]; then
+                echo "  ✓ SSH deploy OK"
+                TRIGGERED=$((TRIGGERED + 1))
+              else
+                echo "  ✗ SSH deploy FAILED"
+                FAILED=$((FAILED + 1))
+              fi
             else
-              echo "  ✗ FAILED (HTTP $HTTP_CODE)"
-              FAILED=$((FAILED + 1))
+              # --- Portainer Webhook Deploy ---
+              echo "DEPLOY: $stack_path → webhook $webhook_uuid"
+              HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
+                -X POST "${PORTAINER_URL}/api/stacks/webhooks/${webhook_uuid}")
+
+              if [ "$HTTP_CODE" = "204" ]; then
+                echo "  ✓ OK (HTTP $HTTP_CODE)"
+                TRIGGERED=$((TRIGGERED + 1))
+              else
+                echo "  ✗ FAILED (HTTP $HTTP_CODE)"
+                FAILED=$((FAILED + 1))
+              fi
             fi
           done < "$CONF"
 

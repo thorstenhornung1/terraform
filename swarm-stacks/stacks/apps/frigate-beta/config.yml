@@ -1,21 +1,20 @@
 # =============================================================================
-# Frigate 0.17 Beta Configuration — GitOps managed
+# Frigate 0.17 RC3 Configuration — GitOps managed
 # =============================================================================
-# Environment variable substitution: Frigate replaces {ENVVAR} in this file.
-# MQTT vars come from Docker secrets (frigate_mqtt_user, frigate_mqtt_password).
-# Camera passwords come from the "frigate_camera_credentials" secret — a
-# key=value file sourced by entrypoint.sh. See entrypoint.sh for details.
+# Environment variable substitution: entrypoint.sh resolves {ENVVAR} placeholders
+# before Frigate starts (ruamel.yaml does NOT do native substitution).
 #
-# Per-camera credentials example:
-#   In the Docker secret "frigate_camera_credentials":
-#     FRIGATE_CAM_FRONT_DOOR_PW=password1
-#     FRIGATE_CAM_GARAGE_PW=password2
-#     FRIGATE_CAM_GARDEN_PW=password3
-#
-#   Then use in camera config below:
-#     path: rtsp://admin:{FRIGATE_CAM_FRONT_DOOR_PW}@192.168.x.x:554/stream1
-#
-#   If multiple cameras share the same password, just use the same env var.
+# Secrets are mounted as individual Docker secrets and exported by entrypoint.sh:
+#   frigate_mqtt_user        → {FRIGATE_MQTT_USER}
+#   frigate_mqtt_password    → {FRIGATE_MQTT_PASSWORD}
+#   frigate_garage_user      → {FRIGATE_GARAGE_USER}
+#   frigate_garage_password  → {FRIGATE_GARAGE_PASSWORD}
+#   frigate_garage_ip        → {FRIGATE_GARAGE_IP}  (includes port, e.g. 192.168.x.x:554)
+#   frigate_garten_user      → {FRIGATE_GARTEN_USER}
+#   frigate_garten_password  → {FRIGATE_GARTEN_PASSWORD}
+#   frigate_garten_ip        → {FRIGATE_GARTEN_IP}
+#   frigate_plus_api_key     → {FRIGATE_PLUS_API_KEY}
+#   frigate_plus_modelid     → {FRIGATE_PLUS_MODELID}
 # =============================================================================
 
 mqtt:
@@ -24,29 +23,23 @@ mqtt:
   port: 1883
   user: "{FRIGATE_MQTT_USER}"
   password: "{FRIGATE_MQTT_PASSWORD}"
+  client_id: frigate-beta
   topic_prefix: frigate
 
 database:
   path: /config/db/frigate.db
 
 detectors:
-  cpu_1:
-    type: cpu
-    num_threads: 2
-  cpu_2:
-    type: cpu
-    num_threads: 2
+  apple_silicon:
+    type: zmq
+    endpoint: "tcp://192.168.2.236:5555"
 
-# Apple Silicon Detector (future — uncomment when mac-mini is ready):
-# detectors:
-#   apple_silicon:
-#     type: remote
-#     url: http://mac-mini.hornung-bn.de:50051
-
+# Frigate+ custom yolov9s 640x640 model with ZMQ support
+# Model ID from Docker secret: frigate_plus_modelid_2026.1
+# Downloaded via plus:// and transferred to Apple Silicon client via ZMQ.
+# Model metadata (width, height, labelmap, model_type) auto-loaded from Frigate+ API.
 model:
-  path: /config/model_cache
-  width: 320
-  height: 320
+  path: "plus://{FRIGATE_PLUS_MODELID}"
 
 ffmpeg:
   hwaccel_args: []
@@ -55,18 +48,29 @@ ffmpeg:
 
 record:
   enabled: true
-  retain:
-    days: 7
-    mode: motion
-  events:
+  alerts:
     retain:
-      default: 14
+      days: 14
       mode: active_objects
+  detections:
+    retain:
+      days: 2
+      mode: active_objects
+  continuous:
+    days: 2
+  motion:
+    days: 2
 
 snapshots:
   enabled: true
   retain:
-    default: 14
+    default: 28
+    objects:
+      person: 28
+      car: 7
+      dog: 7
+      cat: 7
+      bird: 7
 
 detect:
   enabled: true
@@ -76,53 +80,104 @@ detect:
 
 objects:
   track:
+    # People
     - person
+    - face
+
+    # Vehicles
     - car
+    - bicycle
+    - motorcycle
+    - license_plate
+    - garbage_truck
+
+    # Logos (Lieferdienste DE)
+    - amazon
+    - dhl
+    - dpd
+    - gls
+    - fedex
+    - ups
+    - hermes        # Candidate Label - noch experimentell
+
+    # Animals
     - dog
     - cat
-  filters:
-    person:
-      min_area: 5000
-      max_area: 100000
-      threshold: 0.7
+    - deer
+    - fox
+    - raccoon
+    - hedgehog      # Candidate Label - noch experimentell
+
+    # Other
+    - package
+    - waste_bin
+    - baby_stroller # Candidate Label - noch experimentell
+
+
+semantic_search:
+  enabled: true
+  model_size: large
+
+face_recognition:
+  enabled: true
+  model_size: large
+
+lpr:
+  enabled: true
+
+classification:
+  bird:
+    enabled: false
 
 # =============================================================================
 # Cameras
 # =============================================================================
-# Add cameras below. Each camera references its own env var from the
-# "frigate_camera_credentials" Docker secret.
-#
-# Example with per-camera passwords:
-#
-#   front_door:
-#     ffmpeg:
-#       inputs:
-#         - path: rtsp://admin:{FRIGATE_CAM_FRONT_DOOR_PW}@192.168.3.10:554/stream1
-#           roles: [detect]
-#         - path: rtsp://admin:{FRIGATE_CAM_FRONT_DOOR_PW}@192.168.3.10:554/stream2
-#           roles: [record]
-#     detect:
-#       width: 1280
-#       height: 720
-#       fps: 5
-#     record:
-#       enabled: true
-#     snapshots:
-#       enabled: true
-#
-# Example where multiple cameras share one password:
-#
-#   garage:
-#     ffmpeg:
-#       inputs:
-#         - path: rtsp://admin:{FRIGATE_CAM_SHARED_PW}@192.168.3.20:554/stream1
-#           roles: [detect, record]
-#
-#   garden:
-#     ffmpeg:
-#       inputs:
-#         - path: rtsp://admin:{FRIGATE_CAM_SHARED_PW}@192.168.3.21:554/stream1
-#           roles: [detect, record]
+# Each camera uses individual Docker secrets for credentials and IP.
+# garage:   Reolink E1 Pro Outdoor — H.264 only (RTSP)
+# garten:   Reolink CX810 4K 8MP  — H.265 main, H.264 sub (RTSP)
+# doorbird: Doorbird D2101V        — MJPEG over HTTP
 # =============================================================================
 
-cameras: {}
+cameras:
+  garage:
+    ffmpeg:
+      inputs:
+        - path: "rtsp://{FRIGATE_GARAGE_USER}:{FRIGATE_GARAGE_PASSWORD}@{FRIGATE_GARAGE_IP}/h264Preview_01_sub"
+          roles: [detect]
+        - path: "rtsp://{FRIGATE_GARAGE_USER}:{FRIGATE_GARAGE_PASSWORD}@{FRIGATE_GARAGE_IP}/h264Preview_01_main"
+          roles: [record]
+
+  garten:
+    ffmpeg:
+      inputs:
+        - path: "rtsp://{FRIGATE_GARTEN_USER}:{FRIGATE_GARTEN_PASSWORD}@{FRIGATE_GARTEN_IP}/h264Preview_01_sub"
+          roles: [detect]
+        - path: "rtsp://{FRIGATE_GARTEN_USER}:{FRIGATE_GARTEN_PASSWORD}@{FRIGATE_GARTEN_IP}/h265Preview_01_main"
+          roles: [record]
+    objects:
+      filters:
+        all:
+          mask:
+            - 0.661,0.044,0.671,0.279,0.782,0.285,0.777,0.033
+            - 0.673,0.662,0.669,0.802,0.768,0.834,0.772,0.682
+
+
+  doorbird:
+    ffmpeg:
+      inputs:
+        - path: "http://{FRIGATE_DOORBIRD_USER}:{FRIGATE_DOORBIRD_PASSWORD}@{FRIGATE_DOORBIRD_URL}/bha-api/video.cgi"
+          input_args: -f mpjpeg
+          roles: [detect]
+    detect:
+      width: 1280
+      height: 720
+      fps: 2
+    objects:
+      mask: 0.45,0.992,0.462,0.007,0.004,0.002,-0.001,0.997
+      filters:
+        car:
+          mask: 
+            0.996,0.913,0.916,0.841,0.924,0.693,0.882,0.662,0.771,0.708,0.711,0.652,0.691,0.638,0.523,0.648,0.525,0.449,0.899,0.325,0.935,0.461,0.943,0.472,0.999,0.474
+        person:
+          mask: 
+            0.996,0.913,0.916,0.841,0.924,0.693,0.882,0.662,0.771,0.708,0.711,0.652,0.691,0.638,0.523,0.648,0.525,0.449,0.899,0.325,0.935,0.461,0.943,0.472,0.999,0.474

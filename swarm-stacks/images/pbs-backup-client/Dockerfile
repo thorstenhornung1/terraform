@@ -12,8 +12,9 @@
 # Secrets:
 #   /run/secrets/pbs_password - PBS user password or API token
 #
-# Volumes:
-#   /backup-source:ro - Mount CephFS swarm-state directory here
+# Volumes (mount as /backup-<name> — each becomes a separate pxar archive):
+#   /backup-swarm-state:ro  - CephFS swarm-state directory
+#   /backup-frigate-config:ro - Ceph RBD frigate /config (DB + model cache)
 # =============================================================================
 
 FROM debian:bookworm-slim

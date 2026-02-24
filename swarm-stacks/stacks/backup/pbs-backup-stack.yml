@@ -26,7 +26,8 @@ services:
       PBS_REPOSITORY: "backup-swarm@pbs@pbs.hornung-bn.de:swarm-datastore"
       BACKUP_SCHEDULE: "0 */2 * * *"
     volumes:
-      - /mnt/cephfs/swarm-state:/backup-source:ro
+      - /mnt/cephfs/swarm-state:/backup-swarm-state:ro
+      - /mnt/rbd/frigate-config:/backup-frigate-config:ro
       - pbs-cache:/root/.cache/proxmox-backup
     secrets:
       - pbs_password
@@ -35,7 +36,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.role == manager
+          - node.labels.infra_node == 3
       resources:
         limits:
           cpus: '0.5'

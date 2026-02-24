@@ -10,7 +10,6 @@ set -euo pipefail
 #   restore  - Restore from a specific snapshot (requires RESTORE_SNAPSHOT env)
 # =============================================================================
 
-BACKUP_SOURCE="${BACKUP_SOURCE:-/backup-source}"
 BACKUP_SCHEDULE="${BACKUP_SCHEDULE:-0 */2 * * *}"
 PBS_REPOSITORY="${PBS_REPOSITORY:?PBS_REPOSITORY environment variable is required}"
 
@@ -28,24 +27,30 @@ log() {
 }
 
 run_backup() {
-    log "Starting backup of ${BACKUP_SOURCE} to ${PBS_REPOSITORY}"
+    # Build pxar arguments from all /backup-* mount points
+    local pxar_args=()
+    for dir in /backup-*; do
+        [ -d "$dir" ] || continue
+        local name
+        name=$(basename "$dir" | sed 's/^backup-//')
+        local file_count
+        file_count=$(find "$dir" -type f 2>/dev/null | wc -l)
+        log "Source ${dir} (${name}): ${file_count} files"
+        if [ "${file_count}" -gt 0 ]; then
+            pxar_args+=("${name}.pxar:${dir}")
+        else
+            log "WARNING: Skipping empty source ${dir}"
+        fi
+    done
 
-    if [ ! -d "${BACKUP_SOURCE}" ]; then
-        log "ERROR: Backup source directory ${BACKUP_SOURCE} does not exist"
+    if [ ${#pxar_args[@]} -eq 0 ]; then
+        log "ERROR: No backup sources found (mount volumes as /backup-<name>)"
         return 1
     fi
 
-    local file_count
-    file_count=$(find "${BACKUP_SOURCE}" -type f 2>/dev/null | wc -l)
-    log "Found ${file_count} files in ${BACKUP_SOURCE}"
-
-    if [ "${file_count}" -eq 0 ]; then
-        log "WARNING: No files found in ${BACKUP_SOURCE}, skipping backup"
-        return 0
-    fi
-
+    log "Starting backup of ${#pxar_args[@]} source(s) to ${PBS_REPOSITORY}"
     proxmox-backup-client backup \
-        "swarm-state.pxar:${BACKUP_SOURCE}" \
+        "${pxar_args[@]}" \
         --repository "${PBS_REPOSITORY}" \
         2>&1
 
@@ -78,7 +83,9 @@ run_restore() {
 run_cron() {
     log "Starting cron mode with schedule: ${BACKUP_SCHEDULE}"
     log "PBS repository: ${PBS_REPOSITORY}"
-    log "Backup source: ${BACKUP_SOURCE}"
+    for dir in /backup-*; do
+        [ -d "$dir" ] && log "Backup source: ${dir}"
+    done
 
     # Run an initial backup on startup
     log "Running initial backup..."
@@ -87,10 +94,9 @@ run_cron() {
     # Write cron job — export env vars so cron subprocess inherits them
     local cron_file="/etc/cron.d/pbs-backup"
     cat > "${cron_file}" <<CRON
-# PBS backup of Docker Swarm CephFS state
+# PBS backup of Docker Swarm state (CephFS + RBD volumes)
 PBS_REPOSITORY=${PBS_REPOSITORY}
 PBS_PASSWORD=${PBS_PASSWORD}
-BACKUP_SOURCE=${BACKUP_SOURCE}
 
 ${BACKUP_SCHEDULE} root /usr/local/bin/entrypoint.sh backup >> /proc/1/fd/1 2>&1
 CRON

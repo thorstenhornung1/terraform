@@ -7,13 +7,14 @@ version: "3.8"
 #
 # External dependencies:
 #   - Traefik (traefik_public network) — TLS termination + routing
-#   - CephFS (/mnt/cephfs/swarm-state/stack-frigate-beta/) — DB + model cache
+#   - Ceph RBD (/mnt/rbd/frigate-config) — /config (DB + model cache) on ext4
+#   - CephFS (/mnt/cephfs/swarm-state/stack-frigate-beta/) — clips/thumbnails
 #   - ZFS NFS mount (/srv/frigate-recordings) — video recordings on docker-infra-3
-#   - Docker secrets: frigate_mqtt_user, frigate_mqtt_password
-#   - (Later) frigate_camera_credentials — see entrypoint.sh for per-camera password pattern
+#   - Docker secrets: frigate_mqtt_*, frigate_garage_*, frigate_plus_*
 #
-# CephFS directories (create on any infra node before deploying):
-#   mkdir -p /mnt/cephfs/swarm-state/stack-frigate-beta/{db,model-cache}
+# RBD volume (mapped + mounted via systemd on infra nodes):
+#   /mnt/rbd/frigate-config — Ceph RBD block device (ext4), 10GB
+#   Contains: /config/db/frigate.db + /config/model_cache/
 #
 # Docker secrets (create via Portainer UI or create-secrets.sh):
 #   ./create-secrets.sh
@@ -25,15 +26,18 @@ version: "3.8"
 
 services:
   frigate:
-    image: ghcr.io/blakeblackshear/frigate:0.17.0-beta2
+    image: ghcr.io/blakeblackshear/frigate:0.17.0-rc3
     entrypoint: /config/entrypoint.sh
-    command: ["python3", "-u", "-m", "frigate"]
     volumes:
-      - /mnt/cephfs/swarm-state/stack-frigate-beta/db:/config/db
-      - /mnt/cephfs/swarm-state/stack-frigate-beta/model-cache:/config/model_cache
+      - /mnt/rbd/frigate-config:/config
+      - /mnt/cephfs/swarm-state/stack-frigate-beta/clips:/media/frigate/clips
       - /srv/frigate-recordings:/media/frigate/recordings
-    tmpfs:
-      - /dev/shm:rw,nosuid,nodev,noexec,size=256m
+      - type: tmpfs
+        target: /dev/shm
+        tmpfs:
+          size: 268435456
+    # Note: tmpfs short-form and shm_size are ignored by Docker Swarm.
+    # SHM for Frigate frame processing is configured as tmpfs volume mount below.
     configs:
       - source: frigate_config
         target: /config/config.yml
@@ -44,6 +48,19 @@ services:
     secrets:
       - frigate_mqtt_user
       - frigate_mqtt_password
+      - frigate_garage_user
+      - frigate_garage_password
+      - frigate_garage_ip
+      - frigate_garten_user
+      - frigate_garten_password
+      - frigate_garten_ip
+      - frigate_doorbird_user
+      - frigate_doorbird_password
+      - frigate_doorbird_url
+      - frigate_plus_api_key
+      - frigate_plus_modelid
+      - source: frigate_plus_modelid_2026.1
+        target: frigate_plus_modelid_2026.1
     environment:
       TZ: Europe/Berlin
     ports:
@@ -64,10 +81,12 @@ services:
     networks:
       - traefik_public
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8971/api/version || exit 1"]
+      # Test uvicorn directly (port 5001, 127.0.0.1 only) — not nginx (5000).
+      # Detects event loop stalls from synchronous embedding operations.
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:5001/ || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 3
       start_period: 120s
     deploy:
       mode: replicated
@@ -82,7 +101,7 @@ services:
         - traefik.http.routers.frigate-beta.entrypoints=websecure
         - traefik.http.routers.frigate-beta.tls=true
         - traefik.http.routers.frigate-beta.tls.certresolver=dns
-        - traefik.http.services.frigate-beta.loadbalancer.server.port=8971
+        - traefik.http.services.frigate-beta.loadbalancer.server.port=5000
         # HTTP -> HTTPS redirect
         - "traefik.http.routers.frigate-beta-http.rule=Host(`frigate.beta.hornung-bn.de`)"
         - traefik.http.routers.frigate-beta-http.entrypoints=web
@@ -107,8 +126,10 @@ services:
 
 configs:
   frigate_config:
+    name: frigate_config_${CONFIG_HASH:-latest}
     file: ./config.yml
   frigate_entrypoint:
+    name: frigate_entrypoint_${ENTRYPOINT_HASH:-latest}
     file: ./entrypoint.sh
 
 secrets:
@@ -116,9 +137,30 @@ secrets:
     external: true
   frigate_mqtt_password:
     external: true
-  # Add when configuring cameras:
-  # frigate_camera_credentials:
-  #   external: true
+  frigate_garage_user:
+    external: true
+  frigate_garage_password:
+    external: true
+  frigate_garage_ip:
+    external: true
+  frigate_garten_user:
+    external: true
+  frigate_garten_password:
+    external: true
+  frigate_garten_ip:
+    external: true
+  frigate_doorbird_user:
+    external: true
+  frigate_doorbird_password:
+    external: true
+  frigate_doorbird_url:
+    external: true
+  frigate_plus_api_key:
+    external: true
+  frigate_plus_modelid:
+    external: true
+  frigate_plus_modelid_2026.1:
+    external: true
 
 networks:
   traefik_public:
