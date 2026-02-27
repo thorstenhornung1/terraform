@@ -166,7 +166,7 @@ resource "null_resource" "frigate_test_igpu_passthrough" {
 
   connection {
     type        = "ssh"
-    host        = "192.168.2.12"  # pve03 management IP
+    host        = var.frigate_test.node == "pve01" ? "192.168.2.10" : var.frigate_test.node == "pve02" ? "192.168.2.11" : "192.168.2.12"
     user        = "root"
     private_key = file(replace(var.ssh_public_key_path, ".pub", ""))
     timeout     = "2m"
@@ -177,7 +177,7 @@ resource "null_resource" "frigate_test_igpu_passthrough" {
       "echo '=== Configuring iGPU passthrough for LXC ${var.frigate_test.vm_id} ==='",
 
       # Check if iGPU is available on the host
-      "test -e /dev/dri/renderD128 || (echo 'ERROR: /dev/dri/renderD128 not found on pve03! Run: modprobe i915' && exit 1)",
+      "test -e /dev/dri/renderD128 || (echo 'ERROR: /dev/dri/renderD128 not found on ${var.frigate_test.node}! Run: modprobe i915' && exit 1)",
 
       # Append cgroup + mount entries (only if not already present)
       "grep -q 'lxc.cgroup2.devices.allow: c 226:0' /etc/pve/lxc/${var.frigate_test.vm_id}.conf 2>/dev/null || echo 'lxc.cgroup2.devices.allow: c 226:0 rwm' >> /etc/pve/lxc/${var.frigate_test.vm_id}.conf",

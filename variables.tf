@@ -414,7 +414,7 @@ variable "frigate_test" {
     storage_pool = string
   })
   default = {
-    node         = "pve03"
+    node         = "pve02"
     vm_id        = 4500
     ip           = "192.168.4.60"
     cores        = 4
