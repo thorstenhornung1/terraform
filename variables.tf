@@ -393,3 +393,91 @@ variable "influxdb_rescue" {
   }
 }
 
+# ============================================================================
+# FRIGATE OPENVINO TEST LXC (pve03 — Intel iGPU)
+# ============================================================================
+# Dedicated test container to evaluate Intel iGPU (OpenVINO) for local
+# object detection in Frigate 0.17. Replaces/supplements the remote
+# Apple Silicon ZMQ detector (192.168.2.236:5555).
+# Privileged LXC with /dev/dri passthrough for GPU compute access.
+# NOT for production — start_on_boot = false.
+
+variable "frigate_test" {
+  description = "Frigate OpenVINO test LXC configuration"
+  type = object({
+    node         = string
+    vm_id        = number
+    ip           = string
+    cores        = number
+    memory       = number
+    disk_size    = number
+    storage_pool = string
+  })
+  default = {
+    node         = "pve03"
+    vm_id        = 4500
+    ip           = "192.168.4.60"
+    cores        = 4
+    memory       = 4096
+    disk_size    = 30
+    storage_pool = "tank"
+  }
+}
+
+# ============================================================================
+# FRIGATE PRODUCTION LXC (pve03 — Intel iGPU + Ceph Storage)
+# ============================================================================
+# Dedicated production Frigate NVR on privileged LXC with Intel iGPU (OpenVINO)
+# for local object detection. Replaces Docker Swarm frigate-beta stack.
+#
+# Storage architecture:
+#   - CephFS: /config (yml+sh), /clips, /exports (3x replicated)
+#   - Ceph RBD: /recordings (1 TB, replica 1), /db (10 GB, replica 3)
+#   - Local tmpfs: frame processing cache
+#
+# Network: Dual-NIC — VLAN 4 (cluster) + VLAN 12 (Ceph storage)
+# iGPU: Intel HD Graphics 630 via /dev/dri passthrough
+# start_on_boot = true (production service)
+
+variable "frigate_prod" {
+  description = "Frigate production LXC with OpenVINO iGPU + Ceph storage"
+  type = object({
+    node         = string
+    vm_id        = number
+    ip_vlan4     = string
+    ip_vlan12    = string
+    cores        = number
+    memory       = number
+    disk_size    = number
+    storage_pool = string
+  })
+  default = {
+    node         = "pve03"
+    vm_id        = 4501
+    ip_vlan4     = "192.168.4.61"
+    ip_vlan12    = "192.168.12.61"
+    cores        = 4
+    memory       = 8192
+    disk_size    = 30
+    storage_pool = "tank"
+  }
+}
+
+# ============================================================================
+# CEPH STORAGE CREDENTIALS (for Frigate Production LXC)
+# ============================================================================
+# Separate Ceph client for frigate-prod — not reusing docker-swarm client.
+# Values provided via terraform.tfvars (gitignored).
+
+variable "ceph_frigate_key" {
+  description = "CephX key for client.frigate-prod (base64)"
+  type        = string
+  sensitive   = true
+}
+
+variable "ceph_fsid" {
+  description = "Ceph cluster FSID (from ceph fsid)"
+  type        = string
+}
+
+

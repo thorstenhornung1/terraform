@@ -200,6 +200,56 @@ jobs:
                 echo "  ✗ SSH deploy FAILED"
                 FAILED=$((FAILED + 1))
               fi
+            elif echo "$flags" | grep -q "lxc-deploy"; then
+              # --- LXC Deploy via SSH + Docker Compose ---
+              # Deploys to a dedicated LXC container (NOT Swarm).
+              # Copies stack files via SCP, then config to CephFS, then docker compose up.
+              LXC_HOST=$(echo "$flags" | grep -o 'host=[^ ,]*' | cut -d= -f2)
+
+              if [ -z "$LXC_HOST" ]; then
+                echo "  ERROR: lxc-deploy requires host=<ip> flag"
+                FAILED=$((FAILED + 1))
+                continue
+              fi
+
+              echo "LXC-DEPLOY: $stack_path → $LXC_HOST"
+
+              # Add LXC host to known_hosts
+              ssh-keyscan -H "$LXC_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+              # Copy stack files to LXC
+              ssh -i ~/.ssh/swarm_key root@"$LXC_HOST" "mkdir -p /opt/frigate-prod/compose"
+              scp -i ~/.ssh/swarm_key -r "$stack_dir"/* root@"$LXC_HOST":/opt/frigate-prod/compose/
+
+              # Copy config + entrypoint to CephFS config dir, then compose up
+              ssh -i ~/.ssh/swarm_key root@"$LXC_HOST" bash -s <<LXC_DEPLOY_EOF
+                set -e
+                CEPHFS_CONFIG="/mnt/cephfs/swarm-state/stack-frigate-prod/config"
+
+                # Copy config and entrypoint to CephFS (if CephFS is mounted)
+                if mountpoint -q /mnt/cephfs; then
+                  mkdir -p "\$CEPHFS_CONFIG"
+                  cp /opt/frigate-prod/compose/config.yml "\$CEPHFS_CONFIG/config.yml"
+                  cp /opt/frigate-prod/compose/entrypoint.sh "\$CEPHFS_CONFIG/entrypoint.sh"
+                  chmod +x "\$CEPHFS_CONFIG/entrypoint.sh"
+                  echo "  Config copied to CephFS"
+                else
+                  echo "  WARNING: CephFS not mounted — config NOT updated on shared storage"
+                fi
+
+                # Deploy with docker compose
+                cd /opt/frigate-prod/compose
+                docker compose up -d --remove-orphans
+                echo "  Docker Compose deployed"
+          LXC_DEPLOY_EOF
+
+              if [ $? -eq 0 ]; then
+                echo "  OK LXC deploy successful"
+                TRIGGERED=$((TRIGGERED + 1))
+              else
+                echo "  FAILED LXC deploy"
+                FAILED=$((FAILED + 1))
+              fi
             else
               # --- Portainer Webhook Deploy ---
               echo "DEPLOY: $stack_path → webhook $webhook_uuid"
