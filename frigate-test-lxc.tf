@@ -184,6 +184,10 @@ resource "null_resource" "frigate_test_igpu_passthrough" {
       "grep -q 'lxc.cgroup2.devices.allow: c 226:128' /etc/pve/lxc/${var.frigate_test.vm_id}.conf 2>/dev/null || echo 'lxc.cgroup2.devices.allow: c 226:128 rwm' >> /etc/pve/lxc/${var.frigate_test.vm_id}.conf",
       "grep -q 'lxc.mount.entry: /dev/dri' /etc/pve/lxc/${var.frigate_test.vm_id}.conf 2>/dev/null || echo 'lxc.mount.entry: /dev/dri dev/dri none bind,optional,create=dir' >> /etc/pve/lxc/${var.frigate_test.vm_id}.conf",
 
+      # ZFS bind-mount for recordings (host-specific, optimized for video write amplification)
+      # Dataset: tank/frigate/recordings (recordsize=1M, compression=off, sync=disabled)
+      "grep -q 'mp0:' /etc/pve/lxc/${var.frigate_test.vm_id}.conf 2>/dev/null || echo 'mp0: /tank/frigate/recordings,mp=/mnt/recordings,backup=0' >> /etc/pve/lxc/${var.frigate_test.vm_id}.conf",
+
       # Restart container to apply mount entries (pct stop + pct start, NOT reboot)
       "pct stop ${var.frigate_test.vm_id} || true",
       "sleep 3",

@@ -219,7 +219,9 @@ set -euo pipefail
 echo "=== Starting Frigate OpenVINO GPU Test ==="
 
 # Create test directory structure
-mkdir -p /opt/frigate-test/config /opt/frigate-test/media
+# Recordings go to /mnt/recordings (ZFS bind-mount from host: tank/frigate/recordings)
+# optimized for video: recordsize=1M, compression=off, sync=disabled
+mkdir -p /opt/frigate-test/config /opt/frigate-test/clips /mnt/recordings
 
 # Create minimal Frigate config for OpenVINO test
 cat > /opt/frigate-test/config/config.yml << 'FRIGATE_CFG'
@@ -253,7 +255,8 @@ docker run -d \
   --device /dev/dri:/dev/dri \
   --shm-size=256m \
   -v /opt/frigate-test/config:/config \
-  -v /opt/frigate-test/media:/media \
+  -v /mnt/recordings:/media/frigate/recordings \
+  -v /opt/frigate-test/clips:/media/frigate/clips \
   -p 5001:5001 \
   -p 8554:8554 \
   -p 8555:8555/tcp \
