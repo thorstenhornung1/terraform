@@ -24,7 +24,7 @@ services:
     hostname: vaultwarden
     networks:
       - traefik_public
-      - postgres-ha_postgres-network
+      - postgres-ha-stack_postgres-network
     volumes:
       - /mnt/cephfs/swarm-state/stack-vaultwarden/data:/data
     secrets:
@@ -97,7 +97,7 @@ services:
 networks:
   traefik_public:
     external: true
-  postgres-ha_postgres-network:
+  postgres-ha-stack_postgres-network:
     external: true
 
 # =============================================================================
