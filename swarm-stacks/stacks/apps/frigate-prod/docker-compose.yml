@@ -13,7 +13,7 @@
 #   /mnt/rbd/frigate-recordings                        → video recordings (1 TB, replica 1)
 #   /mnt/rbd/frigate-db                                → frigate.db SQLite (10 GB, replica 3)
 #
-# Secrets: .env.secrets file with camera credentials + Frigate+ API key
+# Secrets: /etc/frigate/secrets.env (synced from Vaultwarden by frigate-secrets-sync)
 # Deploy: docker compose up -d (from /opt/frigate-prod/compose/)
 # GitOps: GitHub Actions → lxc-deploy mode → SCP + docker compose up -d
 #
@@ -78,7 +78,7 @@ services:
       - traefik.http.routers.frigate.tls.certresolver=http
       - traefik.http.services.frigate.loadbalancer.server.port=5000
     env_file:
-      - .env.secrets
+      - /etc/frigate/secrets.env
     environment:
       TZ: Europe/Berlin
     healthcheck:

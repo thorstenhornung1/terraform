@@ -544,6 +544,7 @@ services:
     secrets:
       - pg_superuser_password
       - ha_recorder_db_password
+      - vaultwarden_db_password
     environment:
       - PGHOST=pg-haproxy
       - PGPORT=5433
@@ -675,4 +676,6 @@ secrets:
   pg_admin_password:
     external: true
   ha_recorder_db_password:
+    external: true
+  vaultwarden_db_password:
     external: true

@@ -10,6 +10,7 @@
 #
 # Currently managed databases:
 #   - homeassistant (user: homeassistant, db: homeassistant)
+#   - vaultwarden   (user: vaultwarden,   db: vaultwarden)
 #
 # To add a new application:
 #   1. Add a Docker secret: <app>_db_password
@@ -86,6 +87,10 @@ EOSQL
 # --- Home Assistant Recorder ---
 HA_PASS=$(cat /run/secrets/ha_recorder_db_password)
 init_app "homeassistant" "$HA_PASS" "homeassistant"
+
+# --- Vaultwarden (Password Manager) ---
+VW_PASS=$(cat /run/secrets/vaultwarden_db_password)
+init_app "vaultwarden" "$VW_PASS" "vaultwarden"
 
 # --- Add future applications here ---
 # MYAPP_PASS=$(cat /run/secrets/myapp_db_password)

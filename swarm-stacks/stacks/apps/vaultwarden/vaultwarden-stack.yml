@@ -1,0 +1,117 @@
+# =============================================================================
+# Vaultwarden Stack — Self-Hosted Bitwarden-Compatible Password Manager
+# =============================================================================
+# Central secrets store for infrastructure credentials.
+# PostgreSQL backend via Patroni HA cluster (pg-haproxy:5433).
+# CephFS /data for attachments/icons (auto-included in PBS backup).
+#
+# Access: https://vault.hornung-bn.de (internal only, DNS-01 cert)
+# Admin:  https://vault.hornung-bn.de/admin (token-protected)
+#
+# Deployment:
+#   1. Create secrets:  ./create-secrets.sh
+#   2. Create DB:       Redeploy postgres-ha stack (db-init creates vaultwarden DB)
+#   3. CephFS dir:      mkdir -p /mnt/cephfs/swarm-state/stack-vaultwarden/data
+#   4. DNS entry:       vault.hornung-bn.de -> Traefik VIP (Technitium)
+#   5. Deploy:          docker stack deploy -c vaultwarden-stack.yml vaultwarden
+# =============================================================================
+
+version: '3.8'
+
+services:
+  vaultwarden:
+    image: vaultwarden/server:1.35.4
+    hostname: vaultwarden
+    networks:
+      - traefik_public
+      - postgres-ha_postgres-network
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-vaultwarden/data:/data
+    secrets:
+      - vaultwarden_admin_token
+      - vaultwarden_db_password
+    entrypoint: /entrypoint-wrapper.sh
+    configs:
+      - source: entrypoint_wrapper
+        target: /entrypoint-wrapper.sh
+        mode: 0755
+    environment:
+      # Rocket web server
+      ROCKET_PORT: "8080"
+      # Security
+      SIGNUPS_ALLOWED: "false"
+      INVITATIONS_ALLOWED: "true"
+      LOG_LEVEL: "warn"
+      # Domain (used for TOTP issuer, email links, etc.)
+      DOMAIN: "https://vault.hornung-bn.de"
+      # WebSocket notifications (for browser extension live sync)
+      WEBSOCKET_ENABLED: "true"
+      # Disable emergency access (not needed for infra secrets)
+      EMERGENCY_ACCESS_ALLOWED: "false"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      labels:
+        # --- Traefik HTTPS Router ---
+        - traefik.enable=true
+        - "traefik.http.routers.vaultwarden.rule=Host(`vault.hornung-bn.de`)"
+        - traefik.http.routers.vaultwarden.entrypoints=websecure
+        - traefik.http.routers.vaultwarden.tls=true
+        - traefik.http.routers.vaultwarden.tls.certresolver=dns
+        - traefik.http.services.vaultwarden.loadbalancer.server.port=8080
+        # --- HTTP -> HTTPS Redirect ---
+        - "traefik.http.routers.vaultwarden-http.rule=Host(`vault.hornung-bn.de`)"
+        - traefik.http.routers.vaultwarden-http.entrypoints=web
+        - traefik.http.routers.vaultwarden-http.middlewares=vaultwarden-redirect
+        - traefik.http.middlewares.vaultwarden-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.vaultwarden-redirect.redirectscheme.permanent=true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/alive || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  traefik_public:
+    external: true
+  postgres-ha_postgres-network:
+    external: true
+
+# =============================================================================
+# CONFIGS
+# =============================================================================
+configs:
+  entrypoint_wrapper:
+    file: ./entrypoint-wrapper.sh
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  vaultwarden_admin_token:
+    external: true
+  vaultwarden_db_password:
+    external: true
