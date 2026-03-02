@@ -32,7 +32,7 @@ services:
       - vaultwarden_db_password
     entrypoint: /entrypoint-wrapper.sh
     configs:
-      - source: entrypoint_wrapper
+      - source: entrypoint_wrapper_${ENTRYPOINT_WRAPPER_HASH:-latest}
         target: /entrypoint-wrapper.sh
         mode: 0755
     environment:
@@ -106,7 +106,7 @@ networks:
 # CONFIGS
 # =============================================================================
 configs:
-  entrypoint_wrapper:
+  entrypoint_wrapper_${ENTRYPOINT_WRAPPER_HASH:-latest}:
     file: ./entrypoint-wrapper.sh
 
 # =============================================================================
