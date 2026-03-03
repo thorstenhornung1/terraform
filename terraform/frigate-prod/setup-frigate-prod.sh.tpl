@@ -441,132 +441,60 @@ apt-get remove -y apparmor 2>/dev/null || true
 echo "[15b/18] AppArmor removed (LXC limitation)"
 
 # =============================================================================
-# 16. Bitwarden CLI (bw) for Vaultwarden secrets sync
+# 16. Frigate secrets — boot-time copy from CephFS
+# =============================================================================
+# Secrets are managed as Docker Swarm secrets (frigate_*) and synced to CephFS
+# by sync-frigate-secrets.sh on the Swarm manager. This section sets up a
+# boot-time copy from CephFS to /etc/frigate/secrets.env (fail-safe: local
+# copy survives CephFS outages and reboots).
 # =============================================================================
 
-# Install bw CLI (official static binary from GitHub releases)
-BW_VERSION="2025.1.3"
-curl -fsSL "https://github.com/bitwarden/clients/releases/download/cli-v$${BW_VERSION}/bw-linux-$${BW_VERSION}.zip" -o /tmp/bw.zip
-apt-get install -y -qq unzip
-unzip -o /tmp/bw.zip -d /usr/local/bin/
-chmod 755 /usr/local/bin/bw
-rm -f /tmp/bw.zip
-
-echo "[16/18] Bitwarden CLI installed (v$${BW_VERSION})"
-
-# =============================================================================
-# 17. Frigate secrets sync infrastructure
-# =============================================================================
-
-# Create secrets directory
 mkdir -p /etc/frigate
 chmod 700 /etc/frigate
 
-# Create placeholder secrets.env so Frigate can start before first sync
+# Placeholder secrets.env (Frigate starts, cameras will fail until real secrets arrive)
 cat > /etc/frigate/secrets.env << 'PLACEHOLDER_EOF'
-# Placeholder — will be populated by frigate-secrets-sync after Vaultwarden bootstrap
-# Frigate starts with empty env vars; cameras will fail but the container runs
+# Placeholder — will be populated from CephFS after sync-frigate-secrets.sh runs
 PLACEHOLDER=true
 PLACEHOLDER_EOF
 chmod 600 /etc/frigate/secrets.env
 
-# Create empty bw-api.env (will be populated by init-frigate-lxc.sh from Swarm manager)
-touch /etc/frigate/bw-api.env
-chmod 600 /etc/frigate/bw-api.env
+# Boot-copy script: CephFS -> local (fail-safe)
+cat > /usr/local/sbin/frigate-secrets-copy << 'COPY_SCRIPT'
+#!/bin/sh
+SRC="/mnt/cephfs/swarm-state/stack-frigate-prod/secrets.env"
+DST="/etc/frigate/secrets.env"
 
-# Deploy sync script
-cat > /usr/local/sbin/frigate-secrets-sync << 'SYNC_SCRIPT_EOF'
-#!/bin/bash
-# Deployed by Terraform — see swarm-stacks/stacks/apps/frigate-prod/frigate-secrets-sync
-# for the canonical version. This copy is embedded for initial provisioning.
-set -euo pipefail
-SECRETS_DIR="/etc/frigate"
-SECRETS_FILE="$SECRETS_DIR/secrets.env"
-SECRETS_TMP="$SECRETS_DIR/secrets.env.tmp"
-API_ENV="$SECRETS_DIR/bw-api.env"
-BW="/usr/local/bin/bw"
-COLLECTION_NAME="frigate"
-VAULTWARDEN_URL="https://vault.hornung-bn.de"
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [frigate-secrets-sync] $*"; }
-log_err() { echo "$(date '+%Y-%m-%d %H:%M:%S') [frigate-secrets-sync] ERROR: $*" >&2; }
-cleanup() {
-  if [ -n "${BW_SESSION:-}" ]; then $BW logout --quiet 2>/dev/null || true; fi
-  rm -f "$SECRETS_TMP"
-}
-trap cleanup EXIT
-[ -x "$BW" ] || { log_err "bw CLI not found at $BW"; exit 1; }
-[ -f "$API_ENV" ] || { log_err "API credentials not found at $API_ENV"; exit 1; }
-. "$API_ENV"
-for var in BW_CLIENTID BW_CLIENTSECRET BW_PASSWORD; do
-  if [ -z "${!var:-}" ]; then log_err "Missing $var in $API_ENV"; exit 1; fi
-done
-log "Configuring Vaultwarden server..."
-$BW config server "$VAULTWARDEN_URL" --quiet
-log "Logging in with API key..."
-export BW_CLIENTID BW_CLIENTSECRET
-$BW login --apikey --quiet 2>/dev/null
-log "Unlocking vault..."
-export BW_SESSION
-BW_SESSION=$($BW unlock --passwordenv BW_PASSWORD --raw)
-log "Syncing vault..."
-$BW sync --session "$BW_SESSION" --quiet
-log "Looking up collection '$COLLECTION_NAME'..."
-COLLECTION_ID=$($BW list collections --session "$BW_SESSION" | \
-  jq -r --arg name "$COLLECTION_NAME" '.[] | select(.name == $name) | .id')
-[ -n "$COLLECTION_ID" ] || { log_err "Collection '$COLLECTION_NAME' not found"; exit 1; }
-log "Collection ID: $COLLECTION_ID"
-log "Reading items from collection..."
-ITEMS_JSON=$($BW list items --collectionid "$COLLECTION_ID" --session "$BW_SESSION")
-echo "# Frigate secrets — synced from Vaultwarden $(date '+%Y-%m-%d %H:%M:%S')" > "$SECRETS_TMP"
-echo "# DO NOT EDIT — managed by frigate-secrets-sync" >> "$SECRETS_TMP"
-echo "" >> "$SECRETS_TMP"
-KEY_COUNT=0
-while IFS=$'\t' read -r name password; do
-  [ -z "$password" ] || [ "$password" = "null" ] && continue
-  echo "${name}=${password}" >> "$SECRETS_TMP"
-  KEY_COUNT=$((KEY_COUNT + 1))
-done < <(echo "$ITEMS_JSON" | jq -r '.[] | select(.login != null) | [.name, .login.password] | @tsv')
-[ "$KEY_COUNT" -gt 0 ] || { log_err "No secrets found — refusing to write empty file"; exit 1; }
-chmod 600 "$SECRETS_TMP"
-mv "$SECRETS_TMP" "$SECRETS_FILE"
-log "SUCCESS: Synced $KEY_COUNT keys to $SECRETS_FILE"
-SYNC_SCRIPT_EOF
-chmod 750 /usr/local/sbin/frigate-secrets-sync
+if [ -f "$SRC" ]; then
+  cp "$SRC" "$DST"
+  chmod 600 "$DST"
+  echo "frigate-secrets-copy: copied $(grep -c '=' "$DST") keys from CephFS"
+else
+  echo "frigate-secrets-copy: $SRC not found, keeping existing $DST"
+fi
+COPY_SCRIPT
+chmod 755 /usr/local/sbin/frigate-secrets-copy
 
-# Deploy systemd units
-cat > /etc/systemd/system/frigate-secrets-sync.service << 'SVC_EOF'
+# systemd oneshot: runs before Docker starts
+cat > /etc/systemd/system/frigate-secrets-copy.service << 'SVC'
 [Unit]
-Description=Sync Frigate secrets from Vaultwarden
-Wants=network-online.target
-After=network-online.target
+Description=Copy Frigate secrets from CephFS to local
+After=mnt-cephfs.mount
+Requires=mnt-cephfs.mount
+Before=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/frigate-secrets-sync
-ProtectSystem=strict
-ReadWritePaths=/etc/frigate
-PrivateTmp=yes
-NoNewPrivileges=yes
-SVC_EOF
-
-cat > /etc/systemd/system/frigate-secrets-sync.timer << 'TIMER_EOF'
-[Unit]
-Description=Daily Frigate secrets sync from Vaultwarden
-
-[Timer]
-OnCalendar=*-*-* 03:00:00
-RandomizedDelaySec=1800
-Persistent=true
+ExecStart=/usr/local/sbin/frigate-secrets-copy
 
 [Install]
-WantedBy=timers.target
-TIMER_EOF
+WantedBy=multi-user.target
+SVC
 
 systemctl daemon-reload
-# Timer is enabled but NOT started — init-frigate-lxc.sh starts it after bootstrap
-systemctl enable frigate-secrets-sync.timer
+systemctl enable frigate-secrets-copy.service
 
-echo "[17/18] Frigate secrets sync infrastructure deployed"
+echo "[16/18] Frigate secrets boot-copy configured"
 
 # =============================================================================
 # 18. GPU Verification + Status
@@ -597,7 +525,8 @@ echo " Next steps:"
 echo "   1. Create Ceph pool + RBD images (Phase 1 in plan)"
 echo "   2. Restart RBD mounts: systemctl start rbd-map-frigate-*.service"
 echo "   3. Copy config + entrypoint to /mnt/cephfs/swarm-state/stack-frigate-prod/config/"
-echo "   4. Deploy Vaultwarden on Swarm + run init-frigate-lxc.sh from Swarm manager"
-echo "   5. Place docker-compose.yml in /opt/frigate-prod/compose/"
-echo "   6. docker compose -f /opt/frigate-prod/compose/docker-compose.yml up -d"
+echo "   4. Run sync-frigate-secrets.sh on Swarm manager (writes secrets.env to CephFS)"
+echo "   5. Run /usr/local/sbin/frigate-secrets-copy on LXC (copies CephFS -> local)"
+echo "   6. Place docker-compose.yml in /opt/frigate-prod/compose/"
+echo "   7. docker compose -f /opt/frigate-prod/compose/docker-compose.yml up -d"
 echo ""

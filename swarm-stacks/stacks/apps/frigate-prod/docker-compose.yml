@@ -13,7 +13,7 @@
 #   /mnt/rbd/frigate-recordings                        → video recordings (1 TB, replica 1)
 #   /mnt/rbd/frigate-db                                → frigate.db SQLite (10 GB, replica 3)
 #
-# Secrets: /etc/frigate/secrets.env (synced from Vaultwarden by frigate-secrets-sync)
+# Secrets: /etc/frigate/secrets.env (synced from Docker Swarm secrets via CephFS)
 # Deploy: docker compose up -d (from /opt/frigate-prod/compose/)
 # GitOps: GitHub Actions → lxc-deploy mode → SCP + docker compose up -d
 #
