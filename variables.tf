@@ -440,7 +440,7 @@ variable "frigate_test" {
 # start_on_boot = true (production service)
 
 variable "frigate_prod" {
-  description = "Frigate production LXC with OpenVINO iGPU + Ceph storage"
+  description = "Frigate production LXC with OpenVINO iGPU + Ceph storage (BETA — 192.168.4.61)"
   type = object({
     node         = string
     vm_id        = number
@@ -456,6 +456,38 @@ variable "frigate_prod" {
     vm_id        = 4501
     ip_vlan4     = "192.168.4.61"
     ip_vlan12    = "192.168.12.61"
+    cores        = 4
+    memory       = 8192
+    disk_size    = 30
+    storage_pool = "tank"
+  }
+}
+
+# ============================================================================
+# FRIGATE PRODUCTION LXC (pve03 — Intel iGPU + Ceph Storage) — NEW
+# ============================================================================
+# Clean production Frigate NVR replacing the beta instance on 192.168.4.61.
+# Domain: frigate.hornung-bn.de (DNS already pointing to 192.168.4.70)
+# Same architecture: privileged LXC, OpenVINO iGPU, CephFS + RBD storage.
+# Deployed via GitHub Actions lxc-deploy pipeline.
+
+variable "frigate" {
+  description = "Frigate production LXC — frigate.hornung-bn.de (192.168.4.70)"
+  type = object({
+    node         = string
+    vm_id        = number
+    ip_vlan4     = string
+    ip_vlan12    = string
+    cores        = number
+    memory       = number
+    disk_size    = number
+    storage_pool = string
+  })
+  default = {
+    node         = "pve03"
+    vm_id        = 4502
+    ip_vlan4     = "192.168.4.70"
+    ip_vlan12    = "192.168.12.70"
     cores        = 4
     memory       = 8192
     disk_size    = 30

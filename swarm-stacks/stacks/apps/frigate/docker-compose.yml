@@ -1,0 +1,96 @@
+# =============================================================================
+# Frigate Production Stack — LXC Container (NOT Docker Swarm)
+# =============================================================================
+# Runs on dedicated LXC 4502 (frigate, pve03) with:
+#   - Intel HD Graphics 630 iGPU for OpenVINO object detection
+#   - Traefik sidecar for HTTPS (Let's Encrypt HTTP-01 challenge)
+#   - CephFS + Ceph RBD + local ZFS storage
+#
+# Storage mounts (pre-configured by Terraform setup script + host bind-mounts):
+#   /mnt/cephfs/swarm-state/stack-frigate/config  -> config.yml + entrypoint.sh (CephFS 3x)
+#   /mnt/cephfs/swarm-state/stack-frigate/clips   -> event clips + thumbnails (CephFS 3x)
+#   /mnt/cephfs/swarm-state/stack-frigate/exports -> export directory (CephFS 3x)
+#   /mnt/rbd/frigate-db                           -> frigate.db SQLite (Ceph RBD 3x, ext4)
+#   /mnt/frigate-recordings                       -> video recordings (ZFS tank, local pve03)
+#
+# Secrets: /etc/frigate/secrets.env (synced from Docker Swarm secrets via CephFS)
+# Deploy: docker compose up -d (from /opt/frigate/compose/)
+# GitOps: GitHub Actions -> lxc-deploy mode -> SCP + docker compose up -d
+#
+# Access: https://frigate.hornung-bn.de
+# RTSP:   rtsp://192.168.4.70:8554/<camera>
+# WebRTC: port 8555 TCP+UDP on 192.168.4.70
+# =============================================================================
+
+services:
+  traefik:
+    image: traefik:v3.6
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /opt/frigate/traefik:/etc/traefik:ro
+      - traefik-certs:/letsencrypt
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:0.17.0-rc3
+    container_name: frigate
+    restart: unless-stopped
+    security_opt:
+      - apparmor=unconfined
+    entrypoint: /config/entrypoint.sh
+    devices:
+      - /dev/dri:/dev/dri
+    shm_size: 512m
+    volumes:
+      # CephFS (3x replicated) — config, clips, exports
+      - /mnt/cephfs/swarm-state/stack-frigate/config:/config
+      - /mnt/cephfs/swarm-state/stack-frigate/clips:/media/frigate/clips
+      - /mnt/cephfs/swarm-state/stack-frigate/exports:/media/frigate/exports
+      # RBD — SQLite DB (3x replicated, local ext4 semantics)
+      - /mnt/rbd/frigate-db:/db
+      # ZFS — Recordings (local tank/frigate-recordings on pve03, replicated via zfs send/recv)
+      - /mnt/frigate-recordings:/media/frigate/recordings
+      # tmpfs — frame processing cache
+      - type: tmpfs
+        target: /tmp/cache
+        tmpfs:
+          size: 268435456  # 256 MB
+    ports:
+      - "8971:8971"             # Authenticated UI (nginx -> Traefik backend)
+      - "127.0.0.1:5001:5001"   # FastAPI — local only, Traefik proxies via 8971
+      - "8554:8554"             # RTSP restream
+      - "8555:8555/tcp"         # WebRTC TCP
+      - "8555:8555/udp"         # WebRTC UDP
+    labels:
+      - traefik.enable=true
+      - "traefik.http.routers.frigate.rule=Host(`frigate.hornung-bn.de`)"
+      - traefik.http.routers.frigate.entrypoints=websecure
+      - traefik.http.routers.frigate.tls=true
+      - traefik.http.routers.frigate.tls.certresolver=http
+      - traefik.http.services.frigate.loadbalancer.server.port=8971
+      - traefik.http.services.frigate.loadbalancer.server.scheme=https
+    env_file:
+      - /etc/frigate/secrets.env
+    environment:
+      TZ: Europe/Berlin
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:5001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    depends_on:
+      traefik:
+        condition: service_healthy
+
+volumes:
+  traefik-certs:

@@ -212,25 +212,30 @@ jobs:
                 continue
               fi
 
-              echo "LXC-DEPLOY: $stack_path → $LXC_HOST"
+              # Derive stack name from directory (e.g. "frigate", "frigate-prod")
+              STACK_NAME=$(basename "$stack_dir")
+              DEPLOY_DIR="/opt/$STACK_NAME/compose"
+              CEPHFS_CONFIG="/mnt/cephfs/swarm-state/stack-$STACK_NAME/config"
+
+              echo "LXC-DEPLOY: $stack_path → $LXC_HOST (stack: $STACK_NAME, dir: $DEPLOY_DIR)"
 
               # Add LXC host to known_hosts
               ssh-keyscan -H "$LXC_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
               # Copy stack files to LXC
-              ssh -i ~/.ssh/swarm_key root@"$LXC_HOST" "mkdir -p /opt/frigate-prod/compose"
-              scp -i ~/.ssh/swarm_key -r "$stack_dir"/* root@"$LXC_HOST":/opt/frigate-prod/compose/
+              ssh -i ~/.ssh/swarm_key root@"$LXC_HOST" "mkdir -p $DEPLOY_DIR"
+              scp -i ~/.ssh/swarm_key -r "$stack_dir"/* root@"$LXC_HOST":"$DEPLOY_DIR"/
 
               # Copy config + entrypoint to CephFS config dir, then compose up
               ssh -i ~/.ssh/swarm_key root@"$LXC_HOST" bash -s <<LXC_DEPLOY_EOF
                 set -e
-                CEPHFS_CONFIG="/mnt/cephfs/swarm-state/stack-frigate-prod/config"
+                CEPHFS_CONFIG="$CEPHFS_CONFIG"
 
                 # Copy config and entrypoint to CephFS (if CephFS is mounted)
                 if mountpoint -q /mnt/cephfs; then
                   mkdir -p "\$CEPHFS_CONFIG"
-                  cp /opt/frigate-prod/compose/config.yml "\$CEPHFS_CONFIG/config.yml"
-                  cp /opt/frigate-prod/compose/entrypoint.sh "\$CEPHFS_CONFIG/entrypoint.sh"
+                  cp $DEPLOY_DIR/config.yml "\$CEPHFS_CONFIG/config.yml"
+                  cp $DEPLOY_DIR/entrypoint.sh "\$CEPHFS_CONFIG/entrypoint.sh"
                   chmod +x "\$CEPHFS_CONFIG/entrypoint.sh"
                   echo "  Config copied to CephFS"
                 else
@@ -238,7 +243,7 @@ jobs:
                 fi
 
                 # Deploy with docker compose
-                cd /opt/frigate-prod/compose
+                cd $DEPLOY_DIR
                 docker compose up -d --remove-orphans
                 echo "  Docker Compose deployed"
           LXC_DEPLOY_EOF

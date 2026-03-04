@@ -1,0 +1,187 @@
+# =============================================================================
+# Frigate 0.17 RC3 Configuration — Production LXC with OpenVINO iGPU
+# =============================================================================
+# Environment variable substitution: entrypoint.sh resolves {ENVVAR} placeholders
+# before Frigate starts (ruamel.yaml does NOT do native substitution).
+#
+# Secrets loaded from .env.secrets (NOT Docker Swarm secrets):
+#   FRIGATE_MQTT_USER, FRIGATE_MQTT_PASSWORD
+#   FRIGATE_GARAGE_USER, FRIGATE_GARAGE_PASSWORD, FRIGATE_GARAGE_IP
+#   FRIGATE_GARTEN_USER, FRIGATE_GARTEN_PASSWORD, FRIGATE_GARTEN_IP
+#   FRIGATE_DOORBIRD_USER, FRIGATE_DOORBIRD_PASSWORD, FRIGATE_DOORBIRD_URL
+#   FRIGATE_PLUS_API_KEY, FRIGATE_PLUS_MODELID
+#
+# Key changes vs. frigate-prod beta:
+#   - mqtt.client_id: frigate (not frigate-beta)
+#   - model.path: direct plus:// URL (not env var)
+# =============================================================================
+
+mqtt:
+  enabled: true
+  host: 192.168.2.5
+  port: 1883
+  user: "{FRIGATE_MQTT_USER}"
+  password: "{FRIGATE_MQTT_PASSWORD}"
+  client_id: frigate
+  topic_prefix: frigate
+
+database:
+  path: /db/frigate.db
+
+detectors:
+  openvino_gpu:
+    type: openvino
+    device: AUTO
+
+# Frigate+ custom yolov9s 640x640 model with OpenVINO support
+# Model metadata (width, height, labelmap, model_type) auto-loaded from Frigate+ API.
+model:
+  path: "plus://e9522af02e230e52b8fc1cc763c6e2bf"
+
+ffmpeg:
+  hwaccel_args: preset-vaapi
+  output_args:
+    record: preset-record-generic-audio-aac
+
+record:
+  enabled: true
+  alerts:
+    retain:
+      days: 14
+      mode: active_objects
+  detections:
+    retain:
+      days: 2
+      mode: active_objects
+  continuous:
+    days: 2
+  motion:
+    days: 2
+
+snapshots:
+  enabled: true
+  retain:
+    default: 28
+    objects:
+      person: 28
+      car: 7
+      dog: 7
+      cat: 7
+      bird: 7
+
+detect:
+  enabled: true
+  width: 1280
+  height: 720
+  fps: 5
+
+objects:
+  track:
+    # People
+    - person
+    - face
+
+    # Vehicles
+    - car
+    - bicycle
+    - motorcycle
+    - license_plate
+    - garbage_truck
+
+    # Logos (Lieferdienste DE)
+    - amazon
+    - dhl
+    - dpd
+    - gls
+    - fedex
+    - ups
+    - hermes
+
+    # Animals
+    - dog
+    - cat
+    - deer
+    - fox
+    - raccoon
+    - hedgehog
+
+    # Other
+    - package
+    - waste_bin
+    - baby_stroller
+
+
+semantic_search:
+  enabled: true
+  model_size: large
+
+face_recognition:
+  enabled: true
+  model_size: large
+
+lpr:
+  enabled: true
+
+classification:
+  bird:
+    enabled: false
+  custom:
+    Muelltonne:
+      enabled: true
+      name: Muelltonne
+      threshold: 0.8
+      object_config:
+        objects:
+          - waste_bin
+        classification_type: sub_label
+
+# =============================================================================
+# Cameras
+# =============================================================================
+
+cameras:
+  doorbird:
+    ffmpeg:
+      inputs:
+        - path: "http://{FRIGATE_DOORBIRD_USER}:{FRIGATE_DOORBIRD_PASSWORD}@{FRIGATE_DOORBIRD_URL}/bha-api/video.cgi"
+          input_args: -f mpjpeg
+          roles: [detect]
+    detect:
+      width: 1280
+      height: 720
+      fps: 2
+    objects:
+      mask: 0.45,0.992,0.462,0.007,0.004,0.002,-0.001,0.997
+      filters:
+        car:
+          mask:
+            0.996,0.913,0.916,0.841,0.924,0.693,0.882,0.662,0.771,0.708,0.711,0.652,0.691,0.638,0.523,0.648,0.525,0.449,0.899,0.325,0.935,0.461,0.943,0.472,0.999,0.474
+        person:
+          mask:
+            0.996,0.913,0.916,0.841,0.924,0.693,0.882,0.662,0.771,0.708,0.711,0.652,0.691,0.638,0.523,0.648,0.525,0.449,0.899,0.325,0.935,0.461,0.943,0.472,0.999,0.474
+    zones:
+      auto:
+        coordinates:
+          0.996,0.913,0.916,0.841,0.924,0.693,0.882,0.662,0.771,0.708,0.711,0.652,0.691,0.638,0.523,0.648,0.525,0.449,0.899,0.325,0.935,0.461,0.943,0.472,0.999,0.474
+
+  garten:
+    ffmpeg:
+      inputs:
+        - path: "rtsp://{FRIGATE_GARTEN_USER}:{FRIGATE_GARTEN_PASSWORD}@{FRIGATE_GARTEN_IP}/h264Preview_01_sub"
+          roles: [detect]
+        - path: "rtsp://{FRIGATE_GARTEN_USER}:{FRIGATE_GARTEN_PASSWORD}@{FRIGATE_GARTEN_IP}/h265Preview_01_main"
+          roles: [record]
+    objects:
+      filters:
+        all:
+          mask:
+            - 0.661,0.044,0.671,0.279,0.782,0.285,0.777,0.033
+            - 0.673,0.662,0.669,0.802,0.768,0.834,0.772,0.682
+
+  garage:
+    ffmpeg:
+      inputs:
+        - path: "rtsp://{FRIGATE_GARAGE_USER}:{FRIGATE_GARAGE_PASSWORD}@{FRIGATE_GARAGE_IP}/h264Preview_01_sub"
+          roles: [detect]
+        - path: "rtsp://{FRIGATE_GARAGE_USER}:{FRIGATE_GARAGE_PASSWORD}@{FRIGATE_GARAGE_IP}/h264Preview_01_main"
+          roles: [record]
