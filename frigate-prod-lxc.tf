@@ -85,12 +85,17 @@ resource "proxmox_virtual_environment_container" "frigate_prod" {
   }
 
   # =========================================================================
-  # Container Features — Docker Support (nesting + keyctl)
+  # Container Features — Docker + ceph-fuse (nesting + keyctl + fuse)
+  # =========================================================================
+  # fuse=1: Required for ceph-fuse CephFS mount inside LXC.
+  # The kernel CephFS client gets ENETUNREACH from the host namespace;
+  # ceph-fuse runs in userspace and uses the container's network stack.
   # =========================================================================
 
   features {
     nesting = true
     keyctl  = true
+    fuse    = true
   }
 
   # =========================================================================

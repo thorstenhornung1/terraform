@@ -200,7 +200,7 @@ echo "[10/16] Intel GPU runtime installed"
 # 11. Install Ceph Client + Configuration
 # =============================================================================
 
-apt-get install -y -qq ceph-common
+apt-get install -y -qq ceph-common ceph-fuse
 
 # Ceph configuration
 cat > /etc/ceph/ceph.conf << CEPH_CONF_EOF
@@ -226,53 +226,38 @@ chmod 600 /etc/ceph/ceph.client.$CEPH_CLIENT.keyring
 echo "[11/16] Ceph client configured"
 
 # =============================================================================
-# 12. CephFS systemd mount — /mnt/cephfs
+# 12. CephFS systemd mount — /mnt/cephfs (ceph-fuse)
+# =============================================================================
+# IMPORTANT: LXC containers cannot use the kernel CephFS client (Type=ceph)
+# because the kernel module runs in the host namespace and gets ENETUNREACH
+# errors when trying to reach MONs on VLAN 12 from the LXC network namespace.
+# ceph-fuse runs in userspace and uses the container's network stack correctly.
+# Requires: fuse=1 in LXC features (set in Terraform container config).
 # =============================================================================
 
 mkdir -p /mnt/cephfs
 
 cat > /etc/systemd/system/mnt-cephfs.mount << MOUNT_EOF
 [Unit]
-Description=CephFS Mount (swarm-shared)
-After=network-online.target
+Description=CephFS Mount (swarm-shared) via ceph-fuse
+After=network-online.target ceph-fuse.target
 Wants=network-online.target
 
 [Mount]
-What=$CEPH_CLIENT@.$CEPH_FSID=/
+What=ceph-fuse
 Where=/mnt/cephfs
-Type=ceph
-Options=name=$CEPH_CLIENT,secretfile=/etc/ceph/ceph.client.$CEPH_CLIENT.keyring,_netdev
+Type=fuse.ceph-fuse
+Options=_netdev,id=$CEPH_CLIENT
 
 [Install]
 WantedBy=multi-user.target
 MOUNT_EOF
 
-# Create secret file for CephFS mount (fstab-compatible format)
-echo "$CEPH_KEY" > /etc/ceph/ceph.client.$CEPH_CLIENT.secret
-chmod 600 /etc/ceph/ceph.client.$CEPH_CLIENT.secret
-
-# Fix mount options to use secret file directly
-cat > /etc/systemd/system/mnt-cephfs.mount << MOUNT_EOF2
-[Unit]
-Description=CephFS Mount (swarm-shared)
-After=network-online.target
-Wants=network-online.target
-
-[Mount]
-What=$CEPH_MON:/
-Where=/mnt/cephfs
-Type=ceph
-Options=name=$CEPH_CLIENT,secret=$CEPH_KEY,_netdev
-
-[Install]
-WantedBy=multi-user.target
-MOUNT_EOF2
-
 systemctl daemon-reload
 systemctl enable mnt-cephfs.mount
 systemctl start mnt-cephfs.mount || echo "WARNING: CephFS mount failed — may need manual retry after Ceph pool/client is created"
 
-echo "[12/16] CephFS mount configured"
+echo "[12/16] CephFS ceph-fuse mount configured"
 
 # =============================================================================
 # 13. RBD systemd mounts — /mnt/rbd/frigate-recordings + /mnt/rbd/frigate-db
@@ -420,6 +405,11 @@ entryPoints:
 providers:
   docker:
     exposedByDefault: false
+
+# Frigate 0.17 nginx on port 8971 uses self-signed TLS internally.
+# Traefik must skip certificate verification when proxying to the backend.
+serversTransport:
+  insecureSkipVerify: true
 
 certificatesResolvers:
   http:
