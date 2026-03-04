@@ -75,8 +75,10 @@ log "Creating one-shot secrets-writer service..."
 
 # shellcheck disable=SC2086
 docker service create \
+  --detach \
   --name "$SERVICE_NAME" \
   --restart-condition none \
+  --constraint 'node.role == manager' \
   --mount type=bind,source="$OUTPUT_DIR",target=/output \
   $SECRET_FLAGS \
   alpine:3.21 sh -c '
@@ -99,34 +101,41 @@ docker service create \
   '
 
 # -------------------------------------------------------------------------
-# 6. Wait for service completion (max 30s)
+# 6. Wait for service completion (max 60s)
 # -------------------------------------------------------------------------
 log "Waiting for secrets-writer to complete..."
-TIMEOUT=30
+TIMEOUT=60
 ELAPSED=0
 
 while [ $ELAPSED -lt $TIMEOUT ]; do
-  STATE=$(docker service ps "$SERVICE_NAME" --format '{{.CurrentState}}' 2>/dev/null | head -1)
+  # Get the desired state + current state of the most recent task
+  DESIRED=$(docker service ps "$SERVICE_NAME" --format '{{.DesiredState}}' 2>/dev/null | head -1)
+  CURRENT=$(docker service ps "$SERVICE_NAME" --format '{{.CurrentState}}' 2>/dev/null | head -1)
 
-  case "$STATE" in
-    Complete*|Shutdown*)
-      log "Service completed successfully"
-      break
-      ;;
-    Failed*|Rejected*)
-      log_err "Service failed!"
-      docker service logs "$SERVICE_NAME" 2>/dev/null || true
-      docker service rm "$SERVICE_NAME" 2>/dev/null || true
-      exit 1
+  case "$DESIRED" in
+    Shutdown)
+      case "$CURRENT" in
+        Complete*)
+          log "Service completed successfully"
+          break
+          ;;
+        Failed*|Rejected*)
+          log_err "Service failed! State: $CURRENT"
+          docker service logs "$SERVICE_NAME" 2>/dev/null || true
+          docker service rm "$SERVICE_NAME" 2>/dev/null || true
+          exit 1
+          ;;
+      esac
       ;;
   esac
 
-  sleep 1
-  ELAPSED=$((ELAPSED + 1))
+  sleep 2
+  ELAPSED=$((ELAPSED + 2))
 done
 
 if [ $ELAPSED -ge $TIMEOUT ]; then
   log_err "Timeout waiting for service (${TIMEOUT}s)"
+  docker service ps "$SERVICE_NAME" --no-trunc 2>/dev/null || true
   docker service rm "$SERVICE_NAME" 2>/dev/null || true
   exit 1
 fi
