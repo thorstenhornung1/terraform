@@ -298,8 +298,7 @@ mkdir -p /opt/frigate/compose
 
 cat > /opt/frigate/traefik/traefik.yml << 'TRAEFIK_EOF'
 # Traefik v3 — Frigate Production Reverse Proxy
-# Let's Encrypt HTTP-01 challenge for TLS certificates
-# DNS entry: frigate.hornung-bn.de -> 192.168.4.70
+# Self-signed TLS (internes Netzwerk, kein öffentliches DNS)
 
 ping: {}
 
@@ -323,13 +322,8 @@ providers:
 serversTransport:
   insecureSkipVerify: true
 
-certificatesResolvers:
-  http:
-    acme:
-      email: thorsten@hornung-bn.de
-      storage: /letsencrypt/acme.json
-      httpChallenge:
-        entryPoint: web
+# Kein certificatesResolvers — Traefik nutzt Default self-signed Cert
+# (frigate.hornung-bn.de existiert nur im privaten Technitium DNS)
 TRAEFIK_EOF
 
 echo "[15/16] Traefik configured"
