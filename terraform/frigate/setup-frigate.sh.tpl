@@ -298,7 +298,8 @@ mkdir -p /opt/frigate/compose
 
 cat > /opt/frigate/traefik/traefik.yml << 'TRAEFIK_EOF'
 # Traefik v3 — Frigate Production Reverse Proxy
-# Self-signed TLS (internes Netzwerk, kein öffentliches DNS)
+# Let's Encrypt DNS-01 challenge via Cloudflare
+# (frigate.hornung-bn.de is private DNS — DNS-01 works without public A record)
 
 ping: {}
 
@@ -322,8 +323,17 @@ providers:
 serversTransport:
   insecureSkipVerify: true
 
-# Kein certificatesResolvers — Traefik nutzt Default self-signed Cert
-# (frigate.hornung-bn.de existiert nur im privaten Technitium DNS)
+certificatesResolvers:
+  dns:
+    acme:
+      email: admin@hornung-bn.de
+      storage: /letsencrypt/acme.json
+      dnsChallenge:
+        provider: cloudflare
+        delayBeforeCheck: 10
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"
 TRAEFIK_EOF
 
 echo "[15/16] Traefik configured"
