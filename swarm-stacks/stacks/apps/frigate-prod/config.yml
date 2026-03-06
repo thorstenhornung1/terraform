@@ -37,7 +37,7 @@ detectors:
 # Frigate+ custom yolov9s 640x640 model with OpenVINO support
 # Model metadata (width, height, labelmap, model_type) auto-loaded from Frigate+ API.
 model:
-  path: "plus://{FRIGATE_PLUS_MODELID}"
+  path: "plus://{FRIGATE_PLUS_MODELID_2}"
 
 ffmpeg:
   hwaccel_args: preset-vaapi

@@ -257,9 +257,11 @@ jobs:
                 fi
 
                 # Deploy with docker compose
+                # --force-recreate ensures config changes in mounted files are picked up
+                # (compose up alone won't restart if only bind-mounted configs changed)
                 cd $DEPLOY_DIR
-                docker compose up -d --remove-orphans
-                echo "  Docker Compose deployed"
+                docker compose up -d --remove-orphans --force-recreate
+                echo "  Docker Compose deployed (force-recreated)"
 
                 # Restart Traefik if its config changed (compose up alone won't pick up static config changes)
                 if [ "\$TRAEFIK_RESTART" = "true" ]; then
