@@ -9,11 +9,11 @@
 #   FRIGATE_GARAGE_USER, FRIGATE_GARAGE_PASSWORD, FRIGATE_GARAGE_IP
 #   FRIGATE_GARTEN_USER, FRIGATE_GARTEN_PASSWORD, FRIGATE_GARTEN_IP
 #   FRIGATE_DOORBIRD_USER, FRIGATE_DOORBIRD_PASSWORD, FRIGATE_DOORBIRD_URL
-#   FRIGATE_PLUS_API_KEY, FRIGATE_PLUS_MODELID
+#   FRIGATE_PLUS_API_KEY, FRIGATE_PLUS_MODELID_2
 #
 # Key changes vs. frigate-prod beta:
 #   - mqtt.client_id: frigate (not frigate-beta)
-#   - model.path: direct plus:// URL (not env var)
+#   - model.path: resolved from {FRIGATE_PLUS_MODELID_2} env var via entrypoint.sh
 # =============================================================================
 
 auth:
@@ -47,7 +47,7 @@ detectors:
 # Frigate+ custom yolov9s 640x640 model with OpenVINO support
 # Model metadata (width, height, labelmap, model_type) auto-loaded from Frigate+ API.
 model:
-  path: "plus://e9522af02e230e52b8fc1cc763c6e2bf"
+  path: "plus://{FRIGATE_PLUS_MODELID_2}"
 
 ffmpeg:
   hwaccel_args: preset-vaapi
@@ -156,7 +156,7 @@ cameras:
       inputs:
         - path: "http://{FRIGATE_DOORBIRD_USER}:{FRIGATE_DOORBIRD_PASSWORD}@{FRIGATE_DOORBIRD_URL}/bha-api/video.cgi"
           input_args: -f mpjpeg
-          roles: [detect]
+          roles: [detect, record]
     detect:
       width: 1280
       height: 720
@@ -180,7 +180,7 @@ cameras:
       inputs:
         - path: "rtsp://{FRIGATE_GARTEN_USER}:{FRIGATE_GARTEN_PASSWORD}@{FRIGATE_GARTEN_IP}/h264Preview_01_sub"
           roles: [detect]
-        - path: "rtsp://{FRIGATE_GARTEN_USER}:{FRIGATE_GARTEN_PASSWORD}@{FRIGATE_GARTEN_IP}/h265Preview_01_main"
+        - path: "rtsp://{FRIGATE_GARTEN_USER}:{FRIGATE_GARTEN_PASSWORD}@{FRIGATE_GARTEN_IP}/h264Preview_01_main"
           roles: [record]
     objects:
       filters:
