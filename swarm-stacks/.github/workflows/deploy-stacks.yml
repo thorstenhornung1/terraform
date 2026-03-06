@@ -242,10 +242,29 @@ jobs:
                   echo "  WARNING: CephFS not mounted — config NOT updated on shared storage"
                 fi
 
+                # Copy traefik.yml to Traefik config dir (if present in stack)
+                TRAEFIK_RESTART=false
+                if [ -f "$DEPLOY_DIR/traefik.yml" ]; then
+                  TRAEFIK_DIR="/opt/$STACK_NAME/traefik"
+                  mkdir -p "\$TRAEFIK_DIR"
+                  if ! diff -q "$DEPLOY_DIR/traefik.yml" "\$TRAEFIK_DIR/traefik.yml" >/dev/null 2>&1; then
+                    cp "$DEPLOY_DIR/traefik.yml" "\$TRAEFIK_DIR/traefik.yml"
+                    TRAEFIK_RESTART=true
+                    echo "  Traefik config updated"
+                  else
+                    echo "  Traefik config unchanged"
+                  fi
+                fi
+
                 # Deploy with docker compose
                 cd $DEPLOY_DIR
                 docker compose up -d --remove-orphans
                 echo "  Docker Compose deployed"
+
+                # Restart Traefik if its config changed (compose up alone won't pick up static config changes)
+                if [ "\$TRAEFIK_RESTART" = "true" ]; then
+                  docker restart traefik 2>/dev/null && echo "  Traefik restarted (config changed)" || true
+                fi
           LXC_DEPLOY_EOF
 
               if [ $? -eq 0 ]; then
