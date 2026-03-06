@@ -83,11 +83,12 @@ services:
       - traefik.http.routers.frigate-viewer.middlewares=viewer-ipwhitelist,viewer-headers
       - traefik.http.routers.frigate-viewer.service=frigate-backend
 
-      # --- Router: Admin (admin.frigate.hornung-bn.de) — Frigates eigenes Login ---
+      # --- Router: Admin (admin.frigate.hornung-bn.de) — BasicAuth + Admin-Rolle ---
       - "traefik.http.routers.frigate-admin.rule=Host(`admin.frigate.hornung-bn.de`)"
       - traefik.http.routers.frigate-admin.entrypoints=websecure
       - traefik.http.routers.frigate-admin.tls=true
       - traefik.http.routers.frigate-admin.tls.certresolver=dns
+      - traefik.http.routers.frigate-admin.middlewares=admin-basicauth,admin-headers
       - traefik.http.routers.frigate-admin.service=frigate-backend
 
       # --- Shared Service ---
@@ -99,6 +100,13 @@ services:
 
       # --- Middleware: Viewer-Headers (Remote-User für Proxy-Auth) ---
       - traefik.http.middlewares.viewer-headers.headers.customrequestheaders.Remote-User=homeassistant
+
+      # --- Middleware: Admin-BasicAuth ---
+      - "traefik.http.middlewares.admin-basicauth.basicauth.users=admin:$$2y$$05$$qmN8KtwHQeIDb.8ma9lBPeMuMtlIuabMk4UE/uLTnTtOV49m52Q86"
+
+      # --- Middleware: Admin-Headers (Admin-Rolle injizieren) ---
+      - traefik.http.middlewares.admin-headers.headers.customrequestheaders.Remote-User=homeassistant
+      - traefik.http.middlewares.admin-headers.headers.customrequestheaders.Remote-Role=admin
     env_file:
       - /etc/frigate/secrets.env
     environment:
