@@ -68,7 +68,7 @@ services:
           size: 268435456  # 256 MB
     ports:
       - "8971:8971"             # Authenticated UI (nginx -> Traefik backend)
-      - "127.0.0.1:5001:5001"   # FastAPI — internal only, nginx proxies via 8971
+      - "5001:5001"             # FastAPI API — HA Frigate Integration connects here
       - "8554:8554"             # RTSP restream
       - "8555:8555/tcp"         # WebRTC TCP
       - "8555:8555/udp"         # WebRTC UDP
