@@ -74,12 +74,31 @@ services:
       - "8555:8555/udp"         # WebRTC UDP
     labels:
       - traefik.enable=true
-      - "traefik.http.routers.frigate.rule=Host(`frigate.hornung-bn.de`)"
-      - traefik.http.routers.frigate.entrypoints=websecure
-      - traefik.http.routers.frigate.tls=true
-      - traefik.http.routers.frigate.tls.certresolver=dns
-      - traefik.http.services.frigate.loadbalancer.server.port=8971
-      - traefik.http.services.frigate.loadbalancer.server.scheme=https
+
+      # --- Router: Viewer (frigate.hornung-bn.de) — internes Netz, Proxy-Auth ---
+      - "traefik.http.routers.frigate-viewer.rule=Host(`frigate.hornung-bn.de`)"
+      - traefik.http.routers.frigate-viewer.entrypoints=websecure
+      - traefik.http.routers.frigate-viewer.tls=true
+      - traefik.http.routers.frigate-viewer.tls.certresolver=dns
+      - traefik.http.routers.frigate-viewer.middlewares=viewer-ipwhitelist,viewer-headers
+      - traefik.http.routers.frigate-viewer.service=frigate-backend
+
+      # --- Router: Admin (admin.frigate.hornung-bn.de) — Frigates eigenes Login ---
+      - "traefik.http.routers.frigate-admin.rule=Host(`admin.frigate.hornung-bn.de`)"
+      - traefik.http.routers.frigate-admin.entrypoints=websecure
+      - traefik.http.routers.frigate-admin.tls=true
+      - traefik.http.routers.frigate-admin.tls.certresolver=dns
+      - traefik.http.routers.frigate-admin.service=frigate-backend
+
+      # --- Shared Service ---
+      - traefik.http.services.frigate-backend.loadbalancer.server.port=8971
+      - traefik.http.services.frigate-backend.loadbalancer.server.scheme=https
+
+      # --- Middleware: IP-Whitelist (nur internes Netz) ---
+      - "traefik.http.middlewares.viewer-ipwhitelist.ipallowlist.sourcerange=192.168.0.0/16,172.16.0.0/12,10.0.0.0/8"
+
+      # --- Middleware: Viewer-Headers (Remote-User für Proxy-Auth) ---
+      - traefik.http.middlewares.viewer-headers.headers.customrequestheaders.Remote-User=homeassistant
     env_file:
       - /etc/frigate/secrets.env
     environment:

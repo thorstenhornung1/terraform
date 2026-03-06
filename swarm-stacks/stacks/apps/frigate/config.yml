@@ -16,6 +16,16 @@
 #   - model.path: direct plus:// URL (not env var)
 # =============================================================================
 
+auth:
+  enabled: true
+  trusted_proxies:
+    - 172.16.0.0/12     # Docker Bridge-Netzwerke (Traefik → Frigate)
+
+proxy:
+  header_map:
+    user: Remote-User
+  default_role: viewer
+
 mqtt:
   enabled: true
   host: 192.168.2.5
