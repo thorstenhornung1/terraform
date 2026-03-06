@@ -24,7 +24,7 @@ auth:
 proxy:
   header_map:
     user: Remote-User
-    role: Remote-Role
+    role: Remote-Groups
   default_role: viewer
 
 mqtt:

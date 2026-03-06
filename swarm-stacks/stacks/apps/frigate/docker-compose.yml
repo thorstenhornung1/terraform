@@ -106,7 +106,7 @@ services:
 
       # --- Middleware: Admin-Headers (Admin-Rolle injizieren) ---
       - traefik.http.middlewares.admin-headers.headers.customrequestheaders.Remote-User=homeassistant
-      - traefik.http.middlewares.admin-headers.headers.customrequestheaders.Remote-Role=admin
+      - traefik.http.middlewares.admin-headers.headers.customrequestheaders.Remote-Groups=admin
     env_file:
       - /etc/frigate/secrets.env
     environment:
