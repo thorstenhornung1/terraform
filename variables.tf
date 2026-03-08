@@ -362,6 +362,89 @@ variable "dns_node_disk_size" {
 }
 
 # ============================================================================
+# TAILSCALE HA SUBNET ROUTER CLUSTER (2-Node LXC + BGP/FRR)
+# ============================================================================
+# Two privileged LXC containers with FRR BGP for HA subnet routing.
+# Provides persistent remote access via Tailscale to VLAN 4, 12, and 2.
+# State stored on local ZFS tank (NOT CephFS — per MEMORY.md).
+#
+# Secrets flow: Docker Swarm Secrets → CephFS → Terraform copies to LXC
+# NO secret variables here — secrets come via CephFS bootstrap container.
+#
+# BGP topology (eBGP — each node has its own AS):
+#   sowi10-1: pve01 / 192.168.4.56 (AS 64512, MED 0   — Primary)
+#   sowi10-2: pve02 / 192.168.4.57 (AS 64513, MED 100 — Backup)
+#   UniFi UDM-Pro: 192.168.4.1    (AS 65000 — BGP peer)
+#
+# Both nodes announce 100.64.0.0/10 (Tailscale CGNAT range).
+# UniFi selects sowi10-1 (lower MED). BFD provides sub-second failover.
+
+variable "tailscale_nodes" {
+  description = "Tailscale subnet router LXC cluster configuration"
+  type = map(object({
+    node         = string
+    vm_id        = number
+    ip           = string
+    asn          = number
+    bgp_med      = number
+    storage_pool = optional(string)
+  }))
+  default = {
+    "1" = {
+      node     = "pve01"
+      vm_id    = 4503
+      ip       = "192.168.4.56"
+      asn      = 64512
+      bgp_med  = 0      # Primary
+    }
+    "2" = {
+      node     = "pve02"
+      vm_id    = 4504
+      ip       = "192.168.4.57"
+      asn      = 64513
+      bgp_med  = 100    # Backup
+      storage_pool = "tank"  # local-lvm thin pool full on pve02
+    }
+  }
+}
+
+variable "tailscale_bgp_asn_unifi" {
+  description = "BGP AS number for UniFi UDM-Pro"
+  type        = number
+  default     = 65000
+}
+
+variable "tailscale_bgp_peer_ip" {
+  description = "UniFi gateway IP (BGP neighbor)"
+  type        = string
+  default     = "192.168.4.1"
+}
+
+variable "tailscale_advertise_routes" {
+  description = "CIDR subnets to advertise via Tailscale subnet routing"
+  type        = string
+  default     = "192.168.2.0/24,192.168.4.0/24,192.168.5.0/24,192.168.40.0/21,192.168.48.0/21,192.168.90.0/24,192.168.176.0/21"
+}
+
+variable "tailscale_node_cores" {
+  description = "CPU cores for Tailscale LXC containers"
+  type        = number
+  default     = 1
+}
+
+variable "tailscale_node_memory" {
+  description = "Memory in MB for Tailscale LXC containers"
+  type        = number
+  default     = 256
+}
+
+variable "tailscale_node_disk_size" {
+  description = "Disk size in GB for Tailscale LXC containers"
+  type        = number
+  default     = 8
+}
+
+# ============================================================================
 # DEDICATED INFLUXDB VM (air_rescue_tracker + Home Assistant)
 # ============================================================================
 # Standalone InfluxDB 2.7 instance on pve03 with ZFS Tank storage.
