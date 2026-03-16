@@ -33,6 +33,10 @@ services:
       AUTHENTIK_POSTGRESQL__USER: authentik
       AUTHENTIK_POSTGRESQL__NAME: authentik
       AUTHENTIK_POSTGRESQL__PASSWORD: "file:///run/secrets/authentik_db_password"
+      # Connection pooler settings (HAProxy kills idle connections after ~30min)
+      AUTHENTIK_POSTGRESQL__CONN_MAX_AGE: "0"
+      AUTHENTIK_POSTGRESQL__CONN_HEALTH_CHECKS: "true"
+      AUTHENTIK_POSTGRESQL__DISABLE_SERVER_SIDE_CURSORS: "true"
       AUTHENTIK_SECRET_KEY: "file:///run/secrets/authentik_secret_key"
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
       AUTHENTIK_LOG_LEVEL: info
@@ -110,6 +114,10 @@ services:
       AUTHENTIK_POSTGRESQL__USER: authentik
       AUTHENTIK_POSTGRESQL__NAME: authentik
       AUTHENTIK_POSTGRESQL__PASSWORD: "file:///run/secrets/authentik_db_password"
+      # Connection pooler settings (HAProxy kills idle connections after ~30min)
+      AUTHENTIK_POSTGRESQL__CONN_MAX_AGE: "0"
+      AUTHENTIK_POSTGRESQL__CONN_HEALTH_CHECKS: "true"
+      AUTHENTIK_POSTGRESQL__DISABLE_SERVER_SIDE_CURSORS: "true"
       AUTHENTIK_SECRET_KEY: "file:///run/secrets/authentik_secret_key"
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
       AUTHENTIK_LOG_LEVEL: info
