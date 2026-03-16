@@ -1,0 +1,444 @@
+# =============================================================================
+# Taiga Stack — Open-Source Project Management (Kanban + Scrum)
+# =============================================================================
+# Multi-service stack with Authentik SSO via OpenID Connect.
+# PostgreSQL backend via Patroni HA cluster (pg-haproxy:5433).
+# RabbitMQ as internal Celery broker + Events backend.
+# CephFS for persistent media/static/RabbitMQ data.
+#
+# Architecture:
+#   Traefik -> taiga-gateway (nginx) -> taiga-front (SPA)
+#                                    -> taiga-back (Django API)
+#                                    -> taiga-events (WebSocket)
+#                                    -> taiga-protected (Media)
+#   taiga-async (Celery Worker) -> RabbitMQ + PostgreSQL
+#
+# Access: https://taiga.hornung-bn.de
+#
+# Deployment:
+#   1. Create secrets:  ./create-secrets.sh
+#   2. Create DB:       Redeploy postgres-ha stack (db-init creates taiga DB)
+#   3. CephFS dirs:     mkdir -p /mnt/cephfs/swarm-state/stack-taiga/{media,static,rabbitmq}
+#   4. DNS entry:       taiga.hornung-bn.de -> Traefik VIP (Technitium)
+#   5. Authentik:       Create OIDC Provider + Application (see README)
+#   6. Deploy:
+#      export TAIGA_GATEWAY_HASH=$(sha256sum taiga-gateway.conf | cut -c1-8)
+#      export ENTRYPOINT_WRAPPER_HASH=$(sha256sum entrypoint-wrapper.sh | cut -c1-8)
+#      docker stack deploy -c taiga-stack.yml --resolve-image always taiga
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # TAIGA BACKEND (Django API + Admin)
+  # ===========================================================================
+  taiga-back:
+    image: robrotheram/taiga-back-openid:latest
+    hostname: taiga-back
+    networks:
+      - taiga-internal
+      - postgres-ha-stack_postgres-network
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-taiga/media:/taiga-media
+      - /mnt/cephfs/swarm-state/stack-taiga/static:/taiga-static
+    secrets:
+      - taiga_db_password
+      - taiga_secret_key
+      - taiga_openid_client_secret
+    entrypoint: ["/entrypoint-wrapper.sh"]
+    configs:
+      - source: taiga_entrypoint_${ENTRYPOINT_WRAPPER_HASH:-latest}
+        target: /entrypoint-wrapper.sh
+        mode: 0755
+    environment:
+      # PostgreSQL (via Patroni HAProxy)
+      POSTGRES_HOST: pg-haproxy
+      POSTGRES_PORT: "5433"
+      POSTGRES_DB: taiga
+      POSTGRES_USER: taiga
+      # Django
+      TAIGA_SITES_DOMAIN: "taiga.hornung-bn.de"
+      TAIGA_SITES_SCHEME: "https"
+      TAIGA_SUBPATH: ""
+      # Email (disabled — use Authentik for user management)
+      EMAIL_BACKEND: "django.core.mail.backends.console.EmailBackend"
+      DEFAULT_FROM_EMAIL: "taiga@hornung-bn.de"
+      # RabbitMQ (stack-internal)
+      RABBITMQ_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
+      CELERY_BROKER_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
+      # Events
+      EVENTS_PUSH_BACKEND: "taiga.events.backends.rabbitmq.EventsPushBackend"
+      EVENTS_PUSH_BACKEND_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
+      # Telemetry
+      ENABLE_TELEMETRY: "false"
+      # Registration: backend must allow it for OIDC auto-create
+      PUBLIC_REGISTER_ENABLED: "true"
+      # OpenID Connect (robrotheram plugin)
+      ENABLE_OPENID: "true"
+      OPENID_CLIENT_ID: "taiga"
+      OPENID_TOKEN_URL: "https://auth.hornung-bn.de/application/o/token/"
+      OPENID_USER_URL: "https://auth.hornung-bn.de/application/o/userinfo/"
+      OPENID_AUTHORIZE_URL: "https://auth.hornung-bn.de/application/o/authorize/"
+      OPENID_SCOPE: "openid profile email"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: continue
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:8000/api/v1/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ===========================================================================
+  # TAIGA ASYNC (Celery Worker)
+  # ===========================================================================
+  taiga-async:
+    image: robrotheram/taiga-back-openid:latest
+    hostname: taiga-async
+    networks:
+      - taiga-internal
+      - postgres-ha-stack_postgres-network
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-taiga/media:/taiga-media
+      - /mnt/cephfs/swarm-state/stack-taiga/static:/taiga-static
+    secrets:
+      - taiga_db_password
+      - taiga_secret_key
+      - taiga_openid_client_secret
+    entrypoint: ["/entrypoint-wrapper.sh"]
+    command: ["celery", "-A", "taiga", "worker", "--concurrency=4", "--loglevel=INFO"]
+    configs:
+      - source: taiga_entrypoint_${ENTRYPOINT_WRAPPER_HASH:-latest}
+        target: /entrypoint-wrapper.sh
+        mode: 0755
+    environment:
+      # PostgreSQL (via Patroni HAProxy)
+      POSTGRES_HOST: pg-haproxy
+      POSTGRES_PORT: "5433"
+      POSTGRES_DB: taiga
+      POSTGRES_USER: taiga
+      # Django
+      TAIGA_SITES_DOMAIN: "taiga.hornung-bn.de"
+      TAIGA_SITES_SCHEME: "https"
+      TAIGA_SUBPATH: ""
+      # Email
+      EMAIL_BACKEND: "django.core.mail.backends.console.EmailBackend"
+      DEFAULT_FROM_EMAIL: "taiga@hornung-bn.de"
+      # RabbitMQ
+      RABBITMQ_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
+      CELERY_BROKER_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
+      # Events
+      EVENTS_PUSH_BACKEND: "taiga.events.backends.rabbitmq.EventsPushBackend"
+      EVENTS_PUSH_BACKEND_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
+      # Telemetry
+      ENABLE_TELEMETRY: "false"
+      # Registration
+      PUBLIC_REGISTER_ENABLED: "true"
+      # OpenID Connect
+      ENABLE_OPENID: "true"
+      OPENID_CLIENT_ID: "taiga"
+      OPENID_TOKEN_URL: "https://auth.hornung-bn.de/application/o/token/"
+      OPENID_USER_URL: "https://auth.hornung-bn.de/application/o/userinfo/"
+      OPENID_AUTHORIZE_URL: "https://auth.hornung-bn.de/application/o/authorize/"
+      OPENID_SCOPE: "openid profile email"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: continue
+
+  # ===========================================================================
+  # TAIGA FRONTEND (Angular SPA)
+  # ===========================================================================
+  taiga-front:
+    image: robrotheram/taiga-front-openid:latest
+    hostname: taiga-front
+    networks:
+      - taiga-internal
+    environment:
+      TAIGA_URL: "https://taiga.hornung-bn.de"
+      TAIGA_WEBSOCKETS_URL: "wss://taiga.hornung-bn.de"
+      TAIGA_SUBPATH: ""
+      # Frontend: hide registration form (OIDC is the only way in)
+      ENABLE_SIGNUP: "false"
+      # OpenID Connect (frontend button)
+      ENABLE_OPENID: "true"
+      OPENID_URL: "https://auth.hornung-bn.de/application/o/authorize/"
+      OPENID_CLIENT_ID: "taiga"
+      OPENID_SCOPE: "openid profile email"
+      OPENID_NAME: "Authentik"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: continue
+
+  # ===========================================================================
+  # TAIGA EVENTS (WebSocket Push)
+  # ===========================================================================
+  taiga-events:
+    image: taigaio/taiga-events:latest
+    hostname: taiga-events
+    networks:
+      - taiga-internal
+    secrets:
+      - taiga_secret_key
+    environment:
+      RABBITMQ_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
+      TAIGA_SECRET_KEY_FILE: /run/secrets/taiga_secret_key
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: continue
+
+  # ===========================================================================
+  # TAIGA PROTECTED (Media File Server with X-Accel-Redirect)
+  # ===========================================================================
+  taiga-protected:
+    image: taigaio/taiga-protected:latest
+    hostname: taiga-protected
+    networks:
+      - taiga-internal
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-taiga/media:/taiga-media
+    secrets:
+      - taiga_secret_key
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        export SECRET_KEY=$$(cat /run/secrets/taiga_secret_key)
+        export MAX_AGE=360
+        exec ./docker/entrypoint.sh
+    environment:
+      MAX_AGE: "360"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: continue
+
+  # ===========================================================================
+  # TAIGA GATEWAY (Nginx Reverse Proxy)
+  # ===========================================================================
+  taiga-gateway:
+    image: nginx:1.27-alpine
+    hostname: taiga-gateway
+    networks:
+      - taiga-internal
+      - traefik_public
+    configs:
+      - source: taiga_gateway_${TAIGA_GATEWAY_HASH:-latest}
+        target: /etc/nginx/conf.d/default.conf
+        mode: 0644
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: continue
+      labels:
+        # --- Traefik Network (required: multi-network service) ---
+        - traefik.docker.network=traefik_public
+        # --- Traefik HTTPS Router ---
+        - traefik.enable=true
+        - "traefik.http.routers.taiga.rule=Host(`taiga.hornung-bn.de`)"
+        - traefik.http.routers.taiga.entrypoints=websecure
+        - traefik.http.routers.taiga.tls=true
+        - traefik.http.routers.taiga.tls.certresolver=dns
+        - traefik.http.services.taiga.loadbalancer.server.port=80
+        # --- HTTP -> HTTPS Redirect ---
+        - "traefik.http.routers.taiga-http.rule=Host(`taiga.hornung-bn.de`)"
+        - traefik.http.routers.taiga-http.entrypoints=web
+        - traefik.http.routers.taiga-http.middlewares=taiga-redirect
+        - traefik.http.middlewares.taiga-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.taiga-redirect.redirectscheme.permanent=true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ===========================================================================
+  # RABBITMQ (Internal Message Broker)
+  # ===========================================================================
+  rabbitmq:
+    image: rabbitmq:3.13-alpine
+    hostname: taiga-rabbitmq
+    networks:
+      taiga-internal:
+        aliases:
+          - taiga-rabbitmq
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-taiga/rabbitmq:/var/lib/rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: "taiga"
+      RABBITMQ_DEFAULT_PASS: "taiga"
+      RABBITMQ_DEFAULT_VHOST: "taiga"
+      RABBITMQ_ERLANG_COOKIE: "taiga-erlang-cookie"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: continue
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  traefik_public:
+    external: true
+  postgres-ha-stack_postgres-network:
+    external: true
+  taiga-internal:
+    driver: overlay
+
+# =============================================================================
+# CONFIGS (Content-Hash Naming for Zero-Downtime Redeploy)
+# =============================================================================
+configs:
+  taiga_gateway_${TAIGA_GATEWAY_HASH:-latest}:
+    file: ./taiga-gateway.conf
+  taiga_entrypoint_${ENTRYPOINT_WRAPPER_HASH:-latest}:
+    file: ./entrypoint-wrapper.sh
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  taiga_db_password:
+    external: true
+  taiga_secret_key:
+    external: true
+  taiga_openid_client_secret:
+    external: true

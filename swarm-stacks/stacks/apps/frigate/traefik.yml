@@ -18,6 +18,9 @@ entryPoints:
 providers:
   docker:
     exposedByDefault: false
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
 
 # Frigate 0.17 nginx on port 8971 uses self-signed TLS internally.
 # Traefik must skip certificate verification when proxying to the backend.

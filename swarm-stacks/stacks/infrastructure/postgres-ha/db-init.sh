@@ -11,6 +11,10 @@
 # Currently managed databases:
 #   - homeassistant (user: homeassistant, db: homeassistant)
 #   - vaultwarden   (user: vaultwarden,   db: vaultwarden)
+#   - n8n           (user: n8n,           db: n8n)
+#   - authentik     (user: authentik,     db: authentik)
+#   - paperless     (user: paperless,     db: paperless)
+#   - taiga         (user: taiga,         db: taiga)
 #
 # To add a new application:
 #   1. Add a Docker secret: <app>_db_password
@@ -91,6 +95,22 @@ init_app "homeassistant" "$HA_PASS" "homeassistant"
 # --- Vaultwarden (Password Manager) ---
 VW_PASS=$(cat /run/secrets/vaultwarden_db_password)
 init_app "vaultwarden" "$VW_PASS" "vaultwarden"
+
+# --- n8n (Workflow Automation) ---
+N8N_PASS=$(cat /run/secrets/n8n_db_password)
+init_app "n8n" "$N8N_PASS" "n8n"
+
+# --- Authentik (SSO / Identity Provider) ---
+AUTHENTIK_PASS=$(cat /run/secrets/authentik_db_password)
+init_app "authentik" "$AUTHENTIK_PASS" "authentik"
+
+# --- Paperless-ngx (Document Management) ---
+PAPERLESS_PASS=$(cat /run/secrets/paperless_db_password)
+init_app "paperless" "$PAPERLESS_PASS" "paperless"
+
+# --- Taiga (Project Management) ---
+TAIGA_PASS=$(cat /run/secrets/taiga_db_password)
+init_app "taiga" "$TAIGA_PASS" "taiga"
 
 # --- Add future applications here ---
 # MYAPP_PASS=$(cat /run/secrets/myapp_db_password)

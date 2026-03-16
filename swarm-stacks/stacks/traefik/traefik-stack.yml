@@ -47,7 +47,9 @@ services:
 
       # EntryPoints
       - --entrypoints.web.address=:80
+      - --entrypoints.web.forwardedHeaders.trustedIPs=192.168.0.0/16,172.16.0.0/12,10.0.0.0/8
       - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.forwardedHeaders.trustedIPs=192.168.0.0/16,172.16.0.0/12,10.0.0.0/8
 
       # ACME DNS-01 (Wildcard)
       - --certificatesresolvers.dns.acme.email=admin@hornung-bn.de

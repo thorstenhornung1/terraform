@@ -1,0 +1,78 @@
+# =============================================================================
+# Valkey Stack — Central Redis-Compatible Cache/Broker
+# =============================================================================
+# Single-node Valkey instance shared by all application stacks.
+# Valkey is the Linux Foundation fork of Redis (BSD licensed, API-compatible).
+#
+# Consumer stacks connect via the attachable overlay network:
+#   redis://valkey:6379/<db-number>
+#
+# Database allocation:
+#   DB 0: Paperless-ngx
+#   DB 1: Authentik
+#   DB 2: n8n (reserved)
+#
+# Persistence: AOF on CephFS (auto-included in PBS backup).
+#
+# Deployment:
+#   1. CephFS dir:  mkdir -p /mnt/cephfs/swarm-state/stack-valkey/data
+#   2. Deploy:      Portainer Repository mode + Webhook
+# =============================================================================
+
+version: '3.8'
+
+services:
+  valkey:
+    image: valkey/valkey:8-alpine
+    hostname: valkey
+    command: >
+      valkey-server
+      --port 6379
+      --bind 0.0.0.0
+      --protected-mode no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --dir /data
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-valkey/data:/data
+    networks:
+      valkey-network:
+        aliases:
+          - valkey
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 320M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  valkey-network:
+    driver: overlay
+    attachable: true

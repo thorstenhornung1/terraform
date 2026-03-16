@@ -1,0 +1,28 @@
+# =============================================================================
+# Traefik Dynamic Config — Authentik Outpost Callback
+# =============================================================================
+# Authentik ForwardAuth redirects users to auth.hornung-bn.de for login.
+# After successful authentication, the browser is redirected back to
+# admin.frigate.hornung-bn.de/outpost.goauthentik.io/... — this router
+# forwards that callback to the external Authentik instance.
+#
+# This MUST be a File Provider because Authentik is not a Docker container
+# on this LXC — Docker labels cannot reference external backends.
+# =============================================================================
+
+http:
+  routers:
+    authentik-outpost:
+      rule: "PathPrefix(`/outpost.goauthentik.io/`)"
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: dns
+      service: authentik-outpost-svc
+      priority: 150
+
+  services:
+    authentik-outpost-svc:
+      loadBalancer:
+        servers:
+          - url: "https://auth.hornung-bn.de"

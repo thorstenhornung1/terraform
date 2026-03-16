@@ -1,0 +1,120 @@
+# =============================================================================
+# n8n Stack — Workflow Automation Platform
+# =============================================================================
+# PostgreSQL backend via Patroni HA cluster (pg-haproxy:5433).
+# CephFS for user-uploaded files (auto-included in PBS backup).
+#
+# Access: https://n8n.hornung-bn.de
+#
+# Deployment:
+#   1. Create secrets:  ./create-secrets.sh
+#   2. Create DB:       Redeploy postgres-ha stack (db-init creates n8n DB)
+#   3. CephFS dir:      mkdir -p /mnt/cephfs/swarm-state/stack-n8n/files
+#   4. DNS entry:       n8n.hornung-bn.de -> Traefik VIP (Technitium)
+#   5. Deploy:          docker stack deploy -c n8n-stack.yml n8n
+# =============================================================================
+
+version: '3.8'
+
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    hostname: n8n
+    networks:
+      - traefik_public
+      - postgres-ha-stack_postgres-network
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-n8n/files:/files
+    secrets:
+      - n8n_db_password
+      - n8n_encryption_key
+    entrypoint: /entrypoint-wrapper.sh
+    configs:
+      - source: entrypoint_wrapper_${ENTRYPOINT_WRAPPER_HASH:-latest}
+        target: /entrypoint-wrapper.sh
+        mode: 0755
+    environment:
+      # n8n general
+      N8N_HOST: "n8n.hornung-bn.de"
+      N8N_PROTOCOL: "https"
+      N8N_PORT: "5678"
+      WEBHOOK_URL: "https://n8n.hornung-bn.de/"
+      GENERIC_TIMEZONE: "Europe/Berlin"
+      # Database (type + host — credentials injected by entrypoint-wrapper.sh)
+      DB_TYPE: "postgresdb"
+      DB_POSTGRESDB_HOST: "pg-haproxy"
+      DB_POSTGRESDB_PORT: "5433"
+      DB_POSTGRESDB_DATABASE: "n8n"
+      DB_POSTGRESDB_USER: "n8n"
+      # Execution settings
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "168"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.2'
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      labels:
+        # --- Traefik Network (required: multi-network service) ---
+        - traefik.docker.network=traefik_public
+        # --- Traefik HTTPS Router ---
+        - traefik.enable=true
+        - "traefik.http.routers.n8n.rule=Host(`n8n.hornung-bn.de`)"
+        - traefik.http.routers.n8n.entrypoints=websecure
+        - traefik.http.routers.n8n.tls=true
+        - traefik.http.routers.n8n.tls.certresolver=dns
+        - traefik.http.services.n8n.loadbalancer.server.port=5678
+        # --- HTTP -> HTTPS Redirect ---
+        - "traefik.http.routers.n8n-http.rule=Host(`n8n.hornung-bn.de`)"
+        - traefik.http.routers.n8n-http.entrypoints=web
+        - traefik.http.routers.n8n-http.middlewares=n8n-redirect
+        - traefik.http.middlewares.n8n-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.n8n-redirect.redirectscheme.permanent=true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  traefik_public:
+    external: true
+  postgres-ha-stack_postgres-network:
+    external: true
+
+# =============================================================================
+# CONFIGS
+# =============================================================================
+configs:
+  entrypoint_wrapper_${ENTRYPOINT_WRAPPER_HASH:-latest}:
+    file: ./entrypoint-wrapper.sh
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  n8n_db_password:
+    external: true
+  n8n_encryption_key:
+    external: true

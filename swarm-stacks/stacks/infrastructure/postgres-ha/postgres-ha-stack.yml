@@ -545,6 +545,10 @@ services:
       - pg_superuser_password
       - ha_recorder_db_password
       - vaultwarden_db_password
+      - n8n_db_password
+      - authentik_db_password
+      - paperless_db_password
+      - taiga_db_password
     environment:
       - PGHOST=pg-haproxy
       - PGPORT=5433
@@ -678,4 +682,12 @@ secrets:
   ha_recorder_db_password:
     external: true
   vaultwarden_db_password:
+    external: true
+  n8n_db_password:
+    external: true
+  authentik_db_password:
+    external: true
+  paperless_db_password:
+    external: true
+  taiga_db_password:
     external: true

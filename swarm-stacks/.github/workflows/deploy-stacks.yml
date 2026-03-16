@@ -161,7 +161,7 @@ jobs:
               # config object for each change, so docker stack deploy can update
               # without docker stack rm (zero-downtime).
               ENV_FILE=$(mktemp)
-              for cfg_file in "$stack_dir"/*.yml "$stack_dir"/*.sh; do
+              for cfg_file in "$stack_dir"/*.yml "$stack_dir"/*.sh "$stack_dir"/*.conf; do
                 [ -f "$cfg_file" ] || continue
                 cfg_basename=$(basename "$cfg_file")
                 # Skip the stack compose file itself

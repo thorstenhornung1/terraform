@@ -23,7 +23,7 @@ auth:
 
 proxy:
   header_map:
-    user: Remote-User
+    user: X-authentik-username
     role: Remote-Groups
   default_role: viewer
 

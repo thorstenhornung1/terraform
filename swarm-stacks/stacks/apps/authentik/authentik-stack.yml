@@ -1,0 +1,163 @@
+# =============================================================================
+# Authentik Stack — SSO / Identity Provider
+# =============================================================================
+# Self-hosted identity provider with SAML, OAuth2, LDAP, and SCIM support.
+# PostgreSQL backend via Patroni HA cluster (pg-haproxy:5433).
+# CephFS for media/certs (auto-included in PBS backup).
+#
+# Access: https://auth.hornung-bn.de
+# Initial Setup: https://auth.hornung-bn.de/if/flow/initial-setup/
+#
+# ForwardAuth middleware defined here — other services activate it via:
+#   traefik.http.routers.<svc>.middlewares=authentik-forwardauth@docker
+#
+# Deployment:
+#   1. Create secrets:  authentik_db_password, authentik_secret_key (Portainer)
+#   2. Create DB:       Redeploy postgres-ha stack (db-init creates authentik DB)
+#   3. CephFS dirs:     mkdir -p /mnt/cephfs/swarm-state/stack-authentik/{media,certs}
+#   4. DNS entry:       auth.hornung-bn.de -> Traefik VIP (Technitium)
+#   5. Deploy:          Portainer Repository mode + Webhook
+#   6. Initial setup:   https://auth.hornung-bn.de/if/flow/initial-setup/
+# =============================================================================
+
+version: '3.8'
+
+services:
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2026.2
+    command: server
+    hostname: authentik-server
+    environment:
+      AUTHENTIK_POSTGRESQL__HOST: pg-haproxy
+      AUTHENTIK_POSTGRESQL__PORT: "5433"
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: "file:///run/secrets/authentik_db_password"
+      AUTHENTIK_SECRET_KEY: "file:///run/secrets/authentik_secret_key"
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_LOG_LEVEL: info
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-authentik/data/media:/data/media
+      - /mnt/cephfs/swarm-state/stack-authentik/data/certs:/data/certs
+    secrets:
+      - authentik_db_password
+      - authentik_secret_key
+    networks:
+      - traefik_public
+      - postgres-ha-stack_postgres-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: continue
+      labels:
+        # --- Traefik Network (required: multi-network service) ---
+        - traefik.docker.network=traefik_public
+        # --- Traefik HTTPS Router ---
+        - traefik.enable=true
+        - "traefik.http.routers.authentik.rule=Host(`auth.hornung-bn.de`)"
+        - traefik.http.routers.authentik.entrypoints=websecure
+        - traefik.http.routers.authentik.tls=true
+        - traefik.http.routers.authentik.tls.certresolver=dns
+        - traefik.http.services.authentik.loadbalancer.server.port=9000
+        # --- HTTP -> HTTPS Redirect ---
+        - "traefik.http.routers.authentik-http.rule=Host(`auth.hornung-bn.de`)"
+        - traefik.http.routers.authentik-http.entrypoints=web
+        - traefik.http.routers.authentik-http.middlewares=authentik-redirect
+        - traefik.http.middlewares.authentik-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.authentik-redirect.redirectscheme.permanent=true
+        # --- ForwardAuth Middleware (for other services to reference) ---
+        - "traefik.http.middlewares.authentik-forwardauth.forwardAuth.address=http://authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+        - "traefik.http.middlewares.authentik-forwardauth.forwardAuth.trustForwardHeader=true"
+        - "traefik.http.middlewares.authentik-forwardauth.forwardAuth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid,X-authentik-jwt,X-authentik-meta-jwks,X-authentik-meta-outpost,X-authentik-meta-provider,X-authentik-meta-app,X-authentik-meta-version"
+        # --- Outpost callback route (required for ForwardAuth on protected domains) ---
+        - "traefik.http.routers.authentik-outpost.rule=PathPrefix(`/outpost.goauthentik.io/`)"
+        - traefik.http.routers.authentik-outpost.entrypoints=websecure
+        - traefik.http.routers.authentik-outpost.tls=true
+        - traefik.http.routers.authentik-outpost.tls.certresolver=dns
+        - traefik.http.routers.authentik-outpost.priority=150
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:9000/-/health/live/\")' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2026.2
+    command: worker
+    hostname: authentik-worker
+    environment:
+      AUTHENTIK_POSTGRESQL__HOST: pg-haproxy
+      AUTHENTIK_POSTGRESQL__PORT: "5433"
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: "file:///run/secrets/authentik_db_password"
+      AUTHENTIK_SECRET_KEY: "file:///run/secrets/authentik_secret_key"
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_LOG_LEVEL: info
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-authentik/data/media:/data/media
+      - /mnt/cephfs/swarm-state/stack-authentik/data/certs:/data/certs
+    secrets:
+      - authentik_db_password
+      - authentik_secret_key
+    networks:
+      - postgres-ha-stack_postgres-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1536M
+        reservations:
+          cpus: '0.2'
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: continue
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  traefik_public:
+    external: true
+  postgres-ha-stack_postgres-network:
+    external: true
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  authentik_db_password:
+    external: true
+  authentik_secret_key:
+    external: true

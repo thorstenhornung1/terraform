@@ -1,0 +1,221 @@
+# =============================================================================
+# Paperless-ngx Stack — Document Management System
+# =============================================================================
+# Self-hosted document management with OCR, tagging, and full-text search.
+# PostgreSQL backend via Patroni HA cluster (pg-haproxy:5433).
+# Valkey (Redis-compatible) for task queue and caching.
+# Tika + Gotenberg for advanced document parsing.
+# CephFS for all persistent data (auto-included in PBS backup).
+#
+# Access: https://paperless.hornung-bn.de
+#
+# Consumer: Built-in via supervisord (PAPERLESS_CONSUMER_POLLING=30).
+#   Drop files into /mnt/cephfs/swarm-state/stack-paperless/consume/
+#
+# Deployment:
+#   1. Create secrets:  paperless_db_password, paperless_secret_key (Portainer)
+#   2. Create DB:       Redeploy postgres-ha stack (db-init creates paperless DB)
+#   3. CephFS dirs:     mkdir -p /mnt/cephfs/swarm-state/stack-paperless/{data,media,export,consume}
+#                        chown -R 1000:1000 /mnt/cephfs/swarm-state/stack-paperless
+#   4. DNS entry:       paperless.hornung-bn.de -> Traefik VIP (Technitium)
+#   5. Deploy:          Portainer Repository mode + Webhook
+#   6. Superuser:       docker exec -it $(docker ps -qf name=paperless-webserver) \
+#                          python3 manage.py createsuperuser
+# =============================================================================
+
+version: '3.8'
+
+services:
+  paperless-webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.15
+    hostname: paperless-webserver
+    entrypoint: ["/bin/bash", "/oidc-init.sh"]
+    environment:
+      # Database
+      PAPERLESS_DBENGINE: postgresql
+      PAPERLESS_DBHOST: pg-haproxy
+      PAPERLESS_DBPORT: "5433"
+      PAPERLESS_DBNAME: paperless
+      PAPERLESS_DBUSER: paperless
+      PAPERLESS_DBPASS_FILE: /run/secrets/paperless_db_password
+      # Cache / Task Queue
+      PAPERLESS_REDIS: "redis://valkey:6379/0"
+      # Tika + Gotenberg
+      PAPERLESS_TIKA_ENABLED: "1"
+      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: "http://gotenberg:3000"
+      PAPERLESS_TIKA_ENDPOINT: "http://tika:9998"
+      # Application
+      PAPERLESS_URL: "https://paperless.hornung-bn.de"
+      PAPERLESS_SECRET_KEY_FILE: /run/secrets/paperless_secret_key
+      PAPERLESS_TIME_ZONE: "Europe/Berlin"
+      # OCR
+      PAPERLESS_OCR_LANGUAGE: "deu+eng"
+      PAPERLESS_OCR_MODE: "skip"
+      # Consumer
+      PAPERLESS_CONSUMER_POLLING: "30"
+      PAPERLESS_CONSUMER_RECURSIVE: "true"
+      # File naming
+      PAPERLESS_FILENAME_FORMAT: "{created_year}/{correspondent}/{title}"
+      # Performance
+      PAPERLESS_TASK_WORKERS: "2"
+      PAPERLESS_THREADS_PER_WORKER: "2"
+      # SSO via Authentik (OIDC)
+      PAPERLESS_APPS: "allauth.socialaccount.providers.openid_connect"
+      PAPERLESS_SOCIAL_AUTO_SIGNUP: "true"
+      PAPERLESS_SOCIAL_ACCOUNT_SYNC_GROUPS: "true"
+      PAPERLESS_ACCOUNT_DEFAULT_GROUPS: "family"
+      PAPERLESS_SOCIAL_ACCOUNT_DEFAULT_GROUPS: "family"
+      PAPERLESS_REDIRECT_LOGIN_TO_SSO: "true"
+      PAPERLESS_DISABLE_REGULAR_LOGIN: "false"
+      # User mapping
+      USERMAP_UID: "1000"
+      USERMAP_GID: "1000"
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-paperless/data:/usr/src/paperless/data
+      - /mnt/cephfs/swarm-state/stack-paperless/media:/usr/src/paperless/media
+      - /mnt/cephfs/swarm-state/stack-paperless/export:/usr/src/paperless/export
+      - /mnt/cephfs/swarm-state/stack-paperless/consume:/usr/src/paperless/consume
+      - /mnt/cephfs/swarm-state/stack-paperless/oidc-init.sh:/oidc-init.sh:ro
+    secrets:
+      - paperless_db_password
+      - paperless_secret_key
+      - paperless_oidc_client_id
+      - paperless_oidc_client_secret
+    networks:
+      - traefik_public
+      - postgres-ha-stack_postgres-network
+      - valkey-stack_valkey-network
+      - default
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      labels:
+        # --- Traefik Network (required: multi-network service) ---
+        - traefik.docker.network=traefik_public
+        # --- Traefik HTTPS Router ---
+        - traefik.enable=true
+        - "traefik.http.routers.paperless.rule=Host(`paperless.hornung-bn.de`)"
+        - traefik.http.routers.paperless.entrypoints=websecure
+        - traefik.http.routers.paperless.tls=true
+        - traefik.http.routers.paperless.tls.certresolver=dns
+        - traefik.http.services.paperless.loadbalancer.server.port=8000
+        # --- HTTP -> HTTPS Redirect ---
+        - "traefik.http.routers.paperless-http.rule=Host(`paperless.hornung-bn.de`)"
+        - traefik.http.routers.paperless-http.entrypoints=web
+        - traefik.http.routers.paperless-http.middlewares=paperless-redirect
+        - traefik.http.middlewares.paperless-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.paperless-redirect.redirectscheme.permanent=true
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/\")' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  tika:
+    image: apache/tika:3.1.0.0
+    hostname: tika
+    networks:
+      - default
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/9998' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  gotenberg:
+    image: gotenberg/gotenberg:8.17
+    hostname: gotenberg
+    command:
+      - "gotenberg"
+      - "--chromium-disable-javascript=true"
+      - "--chromium-allow-list=file:///tmp/.*"
+      - "--api-timeout=120s"
+    networks:
+      - default
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  default:
+    driver: overlay
+  traefik_public:
+    external: true
+  postgres-ha-stack_postgres-network:
+    external: true
+  valkey-stack_valkey-network:
+    external: true
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  paperless_db_password:
+    external: true
+  paperless_secret_key:
+    external: true
+  paperless_oidc_client_id:
+    external: true
+  paperless_oidc_client_secret:
+    external: true
