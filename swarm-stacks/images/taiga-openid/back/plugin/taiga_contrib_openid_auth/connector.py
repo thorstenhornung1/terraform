@@ -12,6 +12,8 @@ from collections import namedtuple
 from urllib.parse import urljoin
 
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 # Django 4.0+: ugettext_lazy removed, use gettext_lazy
 from django.utils.translation import gettext_lazy as _
 

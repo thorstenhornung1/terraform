@@ -81,7 +81,7 @@ services:
       OPENID_USER_URL: "https://auth.hornung-bn.de/application/o/userinfo/"
       OPENID_AUTHORIZE_URL: "https://auth.hornung-bn.de/application/o/authorize/"
       OPENID_SCOPE: "openid profile email groups"
-      OPENID_ADMIN_GROUP: "authentik Admins"
+      OPENID_ADMIN_GROUP: "admin"
     deploy:
       mode: replicated
       replicas: 1
@@ -165,7 +165,7 @@ services:
       OPENID_USER_URL: "https://auth.hornung-bn.de/application/o/userinfo/"
       OPENID_AUTHORIZE_URL: "https://auth.hornung-bn.de/application/o/authorize/"
       OPENID_SCOPE: "openid profile email groups"
-      OPENID_ADMIN_GROUP: "authentik Admins"
+      OPENID_ADMIN_GROUP: "admin"
     deploy:
       mode: replicated
       replicas: 1
