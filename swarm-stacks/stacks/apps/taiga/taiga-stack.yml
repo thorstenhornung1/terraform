@@ -34,7 +34,7 @@ services:
   # TAIGA BACKEND (Django API + Admin)
   # ===========================================================================
   taiga-back:
-    image: robrotheram/taiga-back-openid:latest
+    image: ghcr.io/thorstenhornung1/swarm-stacks/taiga-back-openid:latest
     hostname: taiga-back
     networks:
       - taiga-internal
@@ -80,7 +80,8 @@ services:
       OPENID_TOKEN_URL: "https://auth.hornung-bn.de/application/o/token/"
       OPENID_USER_URL: "https://auth.hornung-bn.de/application/o/userinfo/"
       OPENID_AUTHORIZE_URL: "https://auth.hornung-bn.de/application/o/authorize/"
-      OPENID_SCOPE: "openid profile email"
+      OPENID_SCOPE: "openid profile email groups"
+      OPENID_ADMIN_GROUP: "authentik Admins"
     deploy:
       mode: replicated
       replicas: 1
@@ -104,7 +105,7 @@ services:
         order: stop-first
         failure_action: continue
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:8000/api/v1/ || exit 1"]
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/api/v1/\")' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -114,7 +115,7 @@ services:
   # TAIGA ASYNC (Celery Worker)
   # ===========================================================================
   taiga-async:
-    image: robrotheram/taiga-back-openid:latest
+    image: ghcr.io/thorstenhornung1/swarm-stacks/taiga-back-openid:latest
     hostname: taiga-async
     networks:
       - taiga-internal
@@ -155,13 +156,16 @@ services:
       ENABLE_TELEMETRY: "false"
       # Registration
       PUBLIC_REGISTER_ENABLED: "true"
+      # Celery: allow running as root in container (Celery 5.x safety check)
+      C_FORCE_ROOT: "true"
       # OpenID Connect
       ENABLE_OPENID: "true"
       OPENID_CLIENT_ID: "taiga"
       OPENID_TOKEN_URL: "https://auth.hornung-bn.de/application/o/token/"
       OPENID_USER_URL: "https://auth.hornung-bn.de/application/o/userinfo/"
       OPENID_AUTHORIZE_URL: "https://auth.hornung-bn.de/application/o/authorize/"
-      OPENID_SCOPE: "openid profile email"
+      OPENID_SCOPE: "openid profile email groups"
+      OPENID_ADMIN_GROUP: "authentik Admins"
     deploy:
       mode: replicated
       replicas: 1
@@ -189,7 +193,7 @@ services:
   # TAIGA FRONTEND (Angular SPA)
   # ===========================================================================
   taiga-front:
-    image: robrotheram/taiga-front-openid:latest
+    image: ghcr.io/thorstenhornung1/swarm-stacks/taiga-front-openid:latest
     hostname: taiga-front
     networks:
       - taiga-internal
@@ -203,7 +207,7 @@ services:
       ENABLE_OPENID: "true"
       OPENID_URL: "https://auth.hornung-bn.de/application/o/authorize/"
       OPENID_CLIENT_ID: "taiga"
-      OPENID_SCOPE: "openid profile email"
+      OPENID_SCOPE: "openid profile email groups"
       OPENID_NAME: "Authentik"
     deploy:
       mode: replicated
