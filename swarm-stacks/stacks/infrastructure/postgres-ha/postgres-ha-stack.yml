@@ -476,7 +476,7 @@ services:
   # on Swarm nodes or replaced with a custom entrypoint reading from secrets.
 
   pgbouncer:
-    image: edoburu/pgbouncer:1.23.1
+    image: edoburu/pgbouncer:v1.23.1-p3
     hostname: pgbouncer
     networks:
       postgres-network:

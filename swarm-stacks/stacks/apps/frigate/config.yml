@@ -65,7 +65,7 @@ record:
       days: 2
       mode: active_objects
   continuous:
-    days: 2
+    days: 7
   motion:
     days: 2
 
