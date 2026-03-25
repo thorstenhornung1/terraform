@@ -7,6 +7,7 @@
 # AGPL-3.0 License
 
 import requests
+import logging
 
 from collections import namedtuple
 from urllib.parse import urljoin
