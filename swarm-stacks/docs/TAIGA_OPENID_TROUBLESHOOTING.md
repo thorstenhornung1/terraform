@@ -60,7 +60,56 @@ docker service logs taiga_taiga-back --tail 50 2>&1 | grep -i "NameError"
 not just the failing line. Since `services.py` does `from . import connector`, the
 entire plugin becomes unavailable when `connector.py` fails to import.
 
-### Issue 2: Wrong Authentik Admin Group Name (2026-03-25)
+### Issue 2: Hairpin NAT — OIDC Endpoints Unreachable (2026-03-26)
+
+**Symptom:** Login button click hangs for 30 seconds, then "Oompa Loompas" error.
+Gunicorn logs show `CRITICAL WORKER TIMEOUT` — workers killed while waiting for
+Authentik response. No Python errors visible.
+
+**Root Cause:** `OPENID_TOKEN_URL` and `OPENID_USER_URL` pointed to
+`https://auth.hornung-bn.de/...` which resolves to `192.168.4.40` (Swarm node IP).
+Docker overlay containers **cannot** reach Swarm-published ports on their own node
+VLAN IPs (hairpin NAT limitation). `requests.post()` blocks indefinitely (no timeout),
+Gunicorn kills the worker after 30s.
+
+**Diagnosis:**
+```bash
+# From inside taiga-back container:
+# This hangs forever:
+python -c "import requests; requests.get('https://auth.hornung-bn.de/', timeout=5)"
+# ConnectTimeoutError after 5s
+
+# This works instantly:
+python -c "import requests; r=requests.get('http://authentik-stack_authentik-server:9000/', headers={'Host':'auth.hornung-bn.de'}, allow_redirects=False); print(r.status_code)"
+# 302 (OK)
+```
+
+**Fix (two parts):**
+
+1. **Stack env vars** — use internal overlay address for backend-to-backend calls:
+   ```yaml
+   OPENID_TOKEN_URL: "http://authentik-stack_authentik-server:9000/application/o/token/"
+   OPENID_USER_URL: "http://authentik-stack_authentik-server:9000/application/o/userinfo/"
+   OPENID_AUTHORIZE_URL: "https://auth.hornung-bn.de/application/o/authorize/"  # stays external (browser)
+   ```
+
+2. **connector.py** — auto-derive Host header from AUTHORIZE_URL so Authentik routes correctly:
+   ```python
+   _AUTHORIZE_URL = getattr(settings, "OPENID_AUTHORIZE_URL", "")
+   _OPENID_HOST = urlparse(_AUTHORIZE_URL).hostname if _AUTHORIZE_URL else None
+   HEADERS = {"Accept": "application/json"}
+   if _OPENID_HOST:
+       HEADERS["Host"] = _OPENID_HOST
+   ```
+
+Commit: `3c12e8a`.
+
+**Key Insight:** Docker Swarm overlay networking cannot hairpin back to host-published
+ports. Any service-to-service call within the same Swarm must use overlay DNS names,
+not external domains that resolve to node IPs. The Host header is needed because
+Authentik uses hostname-based routing (like a reverse proxy).
+
+### Issue 3: Wrong Authentik Admin Group Name (2026-03-25)
 
 **Symptom:** OIDC login works, but admin users don't get `is_superuser`/`is_staff`
 status synced from Authentik groups.
@@ -156,6 +205,7 @@ When Taiga OIDC login fails:
 
 | Commit | Description |
 |--------|-------------|
+| `3c12e8a` | fix: Internal overlay URLs + Host header for OIDC |
 | `3591dff` | fix: Add missing `import logging` — fixes OIDC login |
 | `beaec5b` | fix: Use correct Authentik group name "admin" |
 | `5df379c` | feat: OIDC group-based admin mapping |
