@@ -75,10 +75,14 @@ services:
       # Registration: backend must allow it for OIDC auto-create
       PUBLIC_REGISTER_ENABLED: "true"
       # OpenID Connect (robrotheram plugin)
+      # NOTE: TOKEN_URL and USER_URL use internal overlay address because
+      # containers cannot reach Swarm-published ports via node VLAN IPs
+      # (hairpin NAT issue). AUTHORIZE_URL stays external (browser redirect).
+      # Host header required — Authentik routes by hostname.
       ENABLE_OPENID: "true"
       OPENID_CLIENT_ID: "taiga"
-      OPENID_TOKEN_URL: "https://auth.hornung-bn.de/application/o/token/"
-      OPENID_USER_URL: "https://auth.hornung-bn.de/application/o/userinfo/"
+      OPENID_TOKEN_URL: "http://authentik-stack_authentik-server:9000/application/o/token/"
+      OPENID_USER_URL: "http://authentik-stack_authentik-server:9000/application/o/userinfo/"
       OPENID_AUTHORIZE_URL: "https://auth.hornung-bn.de/application/o/authorize/"
       OPENID_SCOPE: "openid profile email groups"
       OPENID_ADMIN_GROUP: "admin"
@@ -158,11 +162,11 @@ services:
       PUBLIC_REGISTER_ENABLED: "true"
       # Celery: allow running as root in container (Celery 5.x safety check)
       C_FORCE_ROOT: "true"
-      # OpenID Connect
+      # OpenID Connect (internal overlay URLs — see taiga-back comment)
       ENABLE_OPENID: "true"
       OPENID_CLIENT_ID: "taiga"
-      OPENID_TOKEN_URL: "https://auth.hornung-bn.de/application/o/token/"
-      OPENID_USER_URL: "https://auth.hornung-bn.de/application/o/userinfo/"
+      OPENID_TOKEN_URL: "http://authentik-stack_authentik-server:9000/application/o/token/"
+      OPENID_USER_URL: "http://authentik-stack_authentik-server:9000/application/o/userinfo/"
       OPENID_AUTHORIZE_URL: "https://auth.hornung-bn.de/application/o/authorize/"
       OPENID_SCOPE: "openid profile email groups"
       OPENID_ADMIN_GROUP: "admin"

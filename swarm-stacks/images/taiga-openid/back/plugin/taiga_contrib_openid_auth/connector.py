@@ -10,7 +10,7 @@ import requests
 import logging
 
 from collections import namedtuple
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from django.conf import settings
 
@@ -43,7 +43,15 @@ NAME_FIELD = getattr(settings, "OPENID_FULLNAME_FIELD", "name")
 EMAIL_FIELD = getattr(settings, "OPENID_EMAIL_FIELD", "email")
 FILTER_FIELD = getattr(settings, "OPENID_FILTER_FIELD", None)
 
+# When TOKEN_URL/USER_URL point to an internal overlay address (e.g.
+# http://authentik-server:9000/...) the IdP may need the public Host header
+# to route correctly. Derive it from AUTHORIZE_URL (always the public domain).
+_AUTHORIZE_URL = getattr(settings, "OPENID_AUTHORIZE_URL", "")
+_OPENID_HOST = urlparse(_AUTHORIZE_URL).hostname if _AUTHORIZE_URL else None
+
 HEADERS = {"Accept": "application/json"}
+if _OPENID_HOST:
+    HEADERS["Host"] = _OPENID_HOST
 
 AuthInfo = namedtuple("AuthInfo", ["access_token"])
 User = namedtuple("User", ["id", "username", "full_name", "email", "groups"])
