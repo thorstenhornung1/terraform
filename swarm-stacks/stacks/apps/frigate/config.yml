@@ -1,5 +1,5 @@
 # =============================================================================
-# Frigate 0.17 RC3 Configuration — Production LXC with OpenVINO iGPU
+# Frigate 0.17.1 Configuration — Production LXC with OpenVINO iGPU
 # =============================================================================
 # Environment variable substitution: entrypoint.sh resolves {ENVVAR} placeholders
 # before Frigate starts (ruamel.yaml does NOT do native substitution).
@@ -42,7 +42,7 @@ database:
 detectors:
   openvino_gpu:
     type: openvino
-    device: AUTO
+    device: GPU
 
 # Frigate+ custom yolov9s 640x640 model with OpenVINO support
 # Model metadata (width, height, labelmap, model_type) auto-loaded from Frigate+ API.
@@ -97,7 +97,6 @@ objects:
     - bicycle
     - motorcycle
     - license_plate
-    - garbage_truck
 
     # Logos (Lieferdienste DE)
     - amazon
@@ -106,7 +105,6 @@ objects:
     - gls
     - fedex
     - ups
-    - hermes
 
     # Animals
     - dog
@@ -114,13 +112,10 @@ objects:
     - deer
     - fox
     - raccoon
-    - hedgehog
 
     # Other
     - package
     - waste_bin
-    - baby_stroller
-
 
 semantic_search:
   enabled: true
@@ -128,10 +123,10 @@ semantic_search:
 
 face_recognition:
   enabled: true
-  model_size: large
+  model_size: small
 
 lpr:
-  enabled: true
+  enabled: false
 
 classification:
   bird:
