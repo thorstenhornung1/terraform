@@ -18,9 +18,9 @@ AUTHENTIK_URL="${AUTHENTIK_URL:-http://authentik-server:9000}"
 AUTHENTIK_TOKEN=$(cat "${AUTHENTIK_TOKEN_FILE}")
 PAPERLESS_GID="${PAPERLESS_GID:-1000}"
 
-# Fetch all users with sambaNTPassword attribute from Authentik API
+# Fetch all users from Authentik API, filter for sambaNTPassword client-side
 response=$(curl -ksf -H "Authorization: Bearer ${AUTHENTIK_TOKEN}" \
-  "${AUTHENTIK_URL}/api/v3/core/users/?attributes=sambaNTPassword&page_size=100") || {
+  "${AUTHENTIK_URL}/api/v3/core/users/?page_size=100") || {
   echo "[sync] ERROR: Failed to fetch users from Authentik API"
   exit 1
 }
