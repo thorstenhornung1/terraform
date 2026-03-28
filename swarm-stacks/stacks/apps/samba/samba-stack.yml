@@ -1,0 +1,78 @@
+# =============================================================================
+# Samba Stack — Paperless File Sharing via SMB
+# =============================================================================
+# Provides SMB shares for Paperless-ngx document management:
+#   \\files.hornung-bn.de\Posteingang — Drop documents (family group, r/w)
+#   \\files.hornung-bn.de\Archiv      — Read Paperless archive (thorsten.hornung)
+#
+# User provisioning via Authentik LDAP Outpost at container startup.
+# CephFS volumes shared with Paperless stack (same UID/GID 1000).
+#
+# Access: smb://files.hornung-bn.de (DNS → 192.168.4.40 / docker-infra-1)
+#
+# Prerequisites:
+#   1. Authentik LDAP Outpost configured (Port 3389)
+#   2. Docker Secrets: samba_ldap_bind_password, samba_smb_password
+#   3. DNS: files.hornung-bn.de → 192.168.4.40
+#   4. CephFS dirs: /mnt/cephfs/swarm-state/stack-paperless/{consume,media}
+#
+# Deployment: ssh-deploy (Docker Config content-hash for smb.conf)
+# =============================================================================
+
+version: '3.8'
+
+services:
+  samba:
+    image: ghcr.io/thorstenhornung1/swarm-stacks/samba-authentik:latest
+    hostname: samba
+    configs:
+      - source: smb_conf_${SMB_CONF_HASH:-latest}
+        target: /etc/samba/smb.conf
+        mode: 0644
+    secrets:
+      - samba_ldap_bind_password
+      - samba_smb_password
+    environment:
+      LDAP_URI: "ldap://authentik-ldap-outpost:3389"
+      LDAP_SEARCH_BASE: "dc=hornung-bn,dc=de"
+      LDAP_BIND_DN: "cn=akadmin,ou=users,dc=hornung-bn,dc=de"
+      LDAP_BIND_PASSWORD_FILE: "/run/secrets/samba_ldap_bind_password"
+      PAPERLESS_UID: "1000"
+      PAPERLESS_GID: "1000"
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-paperless/consume:/shares/Posteingang
+      - /mnt/cephfs/swarm-state/stack-paperless/media/documents/archive:/shares/Archiv:ro
+    ports:
+      - target: 445
+        published: 445
+        protocol: tcp
+        mode: host
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == docker-infra-1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        order: stop-first
+        failure_action: continue
+
+configs:
+  smb_conf_${SMB_CONF_HASH:-latest}:
+    file: ./smb.conf
+
+secrets:
+  samba_ldap_bind_password:
+    external: true
+  samba_smb_password:
+    external: true
