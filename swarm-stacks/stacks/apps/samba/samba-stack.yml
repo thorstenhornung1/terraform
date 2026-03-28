@@ -37,7 +37,7 @@ services:
       LDAP_SEARCH_BASE: "dc=hornung-bn,dc=de"
       LDAP_BIND_DN: "cn=akadmin,ou=users,dc=hornung-bn,dc=de"
       LDAP_BIND_PASSWORD_FILE: "/run/secrets/samba_ldap_bind_password"
-      AUTHENTIK_URL: "http://authentik-server:9000"
+      AUTHENTIK_URL: "https://auth.hornung-bn.de"
       AUTHENTIK_TOKEN_FILE: "/run/secrets/samba_authentik_api_token"
       PAPERLESS_UID: "1000"
       PAPERLESS_GID: "1000"
