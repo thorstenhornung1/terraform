@@ -72,7 +72,7 @@ services:
         failure_action: rollback
       labels:
         # --- Traefik Network (required: multi-network service) ---
-        - traefik.docker.network=traefik_public
+        - traefik.swarm.network=traefik_public
         # --- Traefik HTTPS Router ---
         - traefik.enable=true
         - "traefik.http.routers.vaultwarden.rule=Host(`vault.hornung-bn.de`)"

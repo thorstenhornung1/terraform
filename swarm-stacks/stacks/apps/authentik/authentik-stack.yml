@@ -73,7 +73,7 @@ services:
         failure_action: continue
       labels:
         # --- Traefik Network (required: multi-network service) ---
-        - traefik.docker.network=traefik_public
+        - traefik.swarm.network=traefik_public
         # --- Traefik HTTPS Router ---
         - traefik.enable=true
         - "traefik.http.routers.authentik.rule=Host(`auth.hornung-bn.de`)"
