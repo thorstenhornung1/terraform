@@ -19,8 +19,9 @@ echo "[samba] Starting..."
 LDAP_BIND_PW=$(cat "${LDAP_BIND_PASSWORD_FILE}")
 
 # Paperless system user/group (local fallback for force user)
-groupadd -g "${PAPERLESS_GID:-1000}" paperless 2>/dev/null || true
-useradd -u "${PAPERLESS_UID:-1000}" -g paperless -M -s /usr/sbin/nologin paperless 2>/dev/null || true
+# GID/UID may already exist in base image — use existing or create
+getent group paperless >/dev/null 2>&1 || groupadd -g "${PAPERLESS_GID:-1000}" paperless 2>/dev/null || groupadd paperless
+id paperless >/dev/null 2>&1 || useradd -u "${PAPERLESS_UID:-1000}" -g paperless -M -s /usr/sbin/nologin paperless 2>/dev/null || useradd -g paperless -M -s /usr/sbin/nologin paperless
 
 # SSSD configuration: Authentik LDAP for user + group resolution (NSS only)
 cat > /etc/sssd/sssd.conf << SSSD_EOF
