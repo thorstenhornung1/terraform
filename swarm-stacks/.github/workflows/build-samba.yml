@@ -17,6 +17,7 @@ on:
     paths:
       - 'stacks/apps/samba/Dockerfile'
       - 'stacks/apps/samba/entrypoint.sh'
+      - 'stacks/apps/samba/sync-samba-users.sh'
       - '.github/workflows/build-samba.yml'
   schedule:
     # Weekly rebuild every Monday at 05:00 UTC to pick up base image patches
