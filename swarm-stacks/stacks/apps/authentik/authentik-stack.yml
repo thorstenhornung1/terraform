@@ -49,6 +49,7 @@ services:
     networks:
       - traefik_public
       - postgres-ha-stack_postgres-network
+      - default
     deploy:
       mode: replicated
       replicas: 1
@@ -152,10 +153,54 @@ services:
         order: stop-first
         failure_action: continue
 
+  authentik-ldap-outpost:
+    image: ghcr.io/goauthentik/ldap:2026.2
+    hostname: authentik-ldap-outpost
+    environment:
+      AUTHENTIK_HOST: "http://authentik-server:9000"
+      AUTHENTIK_INSECURE: "true"
+      AUTHENTIK_TOKEN: "file:///run/secrets/authentik_ldap_outpost_token"
+    secrets:
+      - authentik_ldap_outpost_token
+    ports:
+      - target: 3389
+        published: 3389
+        protocol: tcp
+        mode: host
+    networks:
+      - default
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == docker-infra-1
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        order: stop-first
+        failure_action: continue
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9300/outpost.goauthentik.io/ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
 # =============================================================================
 # NETWORKS
 # =============================================================================
 networks:
+  default:
+    driver: overlay
   traefik_public:
     external: true
   postgres-ha-stack_postgres-network:
@@ -168,4 +213,6 @@ secrets:
   authentik_db_password:
     external: true
   authentik_secret_key:
+    external: true
+  authentik_ldap_outpost_token:
     external: true

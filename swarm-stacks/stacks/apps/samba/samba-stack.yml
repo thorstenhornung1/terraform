@@ -33,7 +33,7 @@ services:
       - samba_ldap_bind_password
       - samba_smb_password
     environment:
-      LDAP_URI: "ldap://authentik-ldap-outpost:3389"
+      LDAP_URI: "ldap://192.168.4.40:3389"
       LDAP_SEARCH_BASE: "dc=hornung-bn,dc=de"
       LDAP_BIND_DN: "cn=akadmin,ou=users,dc=hornung-bn,dc=de"
       LDAP_BIND_PASSWORD_FILE: "/run/secrets/samba_ldap_bind_password"
