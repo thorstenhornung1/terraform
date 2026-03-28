@@ -71,7 +71,7 @@ services:
         order: stop-first
         failure_action: continue
     healthcheck:
-      test: ["CMD-SHELL", "smbclient -L localhost -N || exit 1"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/445' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

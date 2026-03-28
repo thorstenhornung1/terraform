@@ -31,6 +31,6 @@ RUN chmod +x /entrypoint.sh /usr/local/bin/sync-samba-users.sh
 EXPOSE 445
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
-    CMD smbclient -L localhost -N || exit 1
+    CMD bash -c 'echo > /dev/tcp/127.0.0.1/445' || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
