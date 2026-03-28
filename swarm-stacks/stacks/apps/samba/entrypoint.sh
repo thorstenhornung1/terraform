@@ -56,7 +56,8 @@ sed -i 's/^shadow:.*/shadow:         files sss/' /etc/nsswitch.conf
 
 # Ensure directories exist
 mkdir -p /shares/Posteingang /shares/Archiv /var/log/samba /var/run/sssd
-chown paperless:paperless /shares/Posteingang /shares/Archiv
+chown paperless:paperless /shares/Posteingang
+# /shares/Archiv is mounted read-only — skip chown
 
 # Start SSSD (Linux now resolves Authentik users + groups via NSS)
 echo "[samba] Starting SSSD..."
