@@ -14,6 +14,7 @@ FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
     samba \
     samba-common-bin \
+    samba-vfs-modules \
     sssd \
     sssd-ldap \
     libnss-sss \
