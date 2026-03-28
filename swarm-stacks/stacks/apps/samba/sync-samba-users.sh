@@ -40,7 +40,9 @@ for entry in $users; do
   if pdbedit -L "$username" &>/dev/null; then
     pdbedit -r -u "$username" --set-nt-hash="$nt_hash" 2>/dev/null
   else
-    pdbedit -a -u "$username" -t --set-nt-hash="$nt_hash" 2>/dev/null
+    # New user: create with dummy password, then set NT hash
+    (echo "dummy"; echo "dummy") | pdbedit -a -u "$username" -t 2>/dev/null
+    pdbedit -r -u "$username" --set-nt-hash="$nt_hash" 2>/dev/null
   fi
   synced=$((synced + 1))
 done
