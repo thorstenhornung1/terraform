@@ -36,6 +36,7 @@ write_files:
   - path: /etc/apt/apt.conf.d/01proxy
     content: |
       Acquire::http::Proxy "http://apt-cacher.hornung-bn.de:3142";
+      Acquire::https::Proxy "DIRECT";
     owner: root:root
     permissions: '0644'
 

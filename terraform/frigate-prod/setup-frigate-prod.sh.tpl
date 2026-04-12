@@ -28,6 +28,7 @@ echo "=== Setting up Frigate Production on $HOSTNAME ($IP_VLAN4 / $IP_VLAN12) ==
 
 cat > /etc/apt/apt.conf.d/01proxy << 'EOF'
 Acquire::http::Proxy "http://apt-cacher.hornung-bn.de:3142";
+Acquire::https::Proxy "DIRECT";
 EOF
 
 echo "[1/16] APT proxy configured"

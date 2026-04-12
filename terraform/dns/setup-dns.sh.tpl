@@ -24,6 +24,7 @@ echo "=== Setting up Technitium DNS on $HOSTNAME ($IP) ==="
 
 cat > /etc/apt/apt.conf.d/01proxy << 'EOF'
 Acquire::http::Proxy "http://apt-cacher.hornung-bn.de:3142";
+Acquire::https::Proxy "DIRECT";
 EOF
 
 echo "[1/8] APT proxy configured"

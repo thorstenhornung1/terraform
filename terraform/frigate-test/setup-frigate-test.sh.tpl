@@ -22,6 +22,7 @@ echo "=== Setting up Frigate OpenVINO test on $HOSTNAME ($IP) ==="
 
 cat > /etc/apt/apt.conf.d/01proxy << 'EOF'
 Acquire::http::Proxy "http://apt-cacher.hornung-bn.de:3142";
+Acquire::https::Proxy "DIRECT";
 EOF
 
 echo "[1/11] APT proxy configured"
