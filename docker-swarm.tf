@@ -46,7 +46,7 @@ resource "proxmox_virtual_environment_vm" "infra_nodes" {
 
   clone {
     vm_id     = var.template_id
-    node_name = "pve03"
+    node_name = "pve01"
     full      = true
   }
 
@@ -68,7 +68,9 @@ resource "proxmox_virtual_environment_vm" "infra_nodes" {
     size         = var.infra_node_boot_disk_size
   }
 
-  # Data disk for SeaweedFS + Patroni (per-node size and storage)
+  # Data disk for Docker data-root (/srv/data/docker) — separate from OS root
+  # so containers/volumes/images cannot fill /. SeaweedFS removed 2026-05-09;
+  # Patroni runs as a Swarm service, not directly on this disk.
   disk {
     datastore_id = coalesce(each.value.storage_pool, var.storage_pool)
     interface    = "scsi1"
