@@ -39,8 +39,12 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Self-hosted homelab LXC runner (swarm-stacks#45): it lives INSIDE
+    # VLAN 4 and reaches the Swarm manager / Portainer directly, so the
+    # Tailscale steps below are gated to github-hosted only. Falling back
+    # to ubuntu-latest still works (Tailscale path re-enabled there).
+    runs-on: [self-hosted, linux, x64, homelab]
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
@@ -49,11 +53,16 @@ jobs:
           fetch-depth: 2  # Need parent commit for diff
 
       - name: Connect to Tailscale
+        # Skipped on the self-hosted homelab runner — it is already inside
+        # VLAN 4. tailscale/github-action spins its own tailscaled which
+        # needs /dev/net/tun (absent in the unprivileged LXC) → would fail.
+        if: runner.environment == 'github-hosted'
         uses: tailscale/github-action@v2
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
 
       - name: Wait for Tailscale connectivity
+        if: runner.environment == 'github-hosted'
         run: |
           echo "Waiting for Tailscale to establish routes..."
           for i in $(seq 1 30); do
@@ -78,6 +87,57 @@ jobs:
           chmod 600 ~/.ssh/swarm_key
           MANAGER="${{ vars.SWARM_MANAGER_HOST || '192.168.4.40' }}"
           ssh-keyscan -H "$MANAGER" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      # ---------------------------------------------------------------------
+      # swarm_os <-> GitOps serialization gate (swarm-stacks#37, point d).
+      #
+      # ROOT TRIGGER CLASS of the #37 outage: the k3s-proxmox-ansible
+      # `dock-maintenance.yml` (swarm_os reboots, restarts Patroni ->
+      # re-runs db-init) and this zero-touch GitOps deploy can run
+      # concurrently. A deploy landing mid-reboot, or a db-init firing
+      # while a stack is mid-update, desyncs app<->DB state.
+      #
+      # dock-maintenance.yml writes a freshness-stamped marker on the
+      # shared CephFS (survives a single node reboot):
+      #   /mnt/cephfs/swarm-state/.swarm-maintenance.lock
+      # We poll for up to 20 min while it is FRESH (< 45 min old). A
+      # stale marker (orphaned by an aborted maintenance run) is ignored
+      # so this gate can never permanently wedge the pipeline. If the
+      # window does not clear, the job fails LOUD — re-run after the
+      # maintenance window (deploy is idempotent; no data loss).
+      # ---------------------------------------------------------------------
+      - name: Wait out active swarm_os maintenance window
+        env:
+          SWARM_MANAGER: ${{ vars.SWARM_MANAGER_HOST || '192.168.4.40' }}
+        run: |
+          LOCK="/mnt/cephfs/swarm-state/.swarm-maintenance.lock"
+          MAX_WAIT=1200      # 20 min total
+          STALE_AGE=2700     # 45 min => marker considered orphaned
+          waited=0
+          while [ "$waited" -lt "$MAX_WAIT" ]; do
+            # mtime epoch of the lock, or empty if absent/unreachable.
+            LOCK_MTIME=$(ssh -i ~/.ssh/swarm_key -o ConnectTimeout=10 \
+              -o StrictHostKeyChecking=accept-new root@"$SWARM_MANAGER" \
+              "stat -c %Y '$LOCK' 2>/dev/null" 2>/dev/null || true)
+            if [ -z "$LOCK_MTIME" ]; then
+              echo "No active maintenance lock — proceeding."
+              break
+            fi
+            NOW=$(ssh -i ~/.ssh/swarm_key -o ConnectTimeout=10 \
+              root@"$SWARM_MANAGER" "date +%s" 2>/dev/null || echo 0)
+            AGE=$(( NOW - LOCK_MTIME ))
+            if [ "$NOW" -ne 0 ] && [ "$AGE" -ge "$STALE_AGE" ]; then
+              echo "::warning::Maintenance lock is stale (${AGE}s old) — ignoring orphaned marker, proceeding."
+              break
+            fi
+            echo "swarm_os maintenance in progress (lock age ${AGE}s) — waiting 30s (${waited}/${MAX_WAIT}s)..."
+            sleep 30
+            waited=$(( waited + 30 ))
+          done
+          if [ "$waited" -ge "$MAX_WAIT" ]; then
+            echo "::error::swarm_os maintenance window did not clear in ${MAX_WAIT}s — deferring deploy. Re-run this workflow after maintenance completes (deploy is idempotent)."
+            exit 1
+          fi
 
       - name: Determine changed files
         id: changes
@@ -110,7 +170,7 @@ jobs:
           TRIGGERED=0
           FAILED=0
 
-          while IFS='=' read -r stack_path webhook_spec; do
+          while IFS='=' read -r stack_path webhook_spec <&3; do
             # Skip comments and empty lines
             [[ "$stack_path" =~ ^[[:space:]]*# ]] && continue
             [[ -z "$stack_path" || -z "$webhook_spec" ]] && continue
@@ -152,7 +212,19 @@ jobs:
               # so each config change creates a new config object.
               # docker stack deploy --prune removes old unused configs.
               # No docker stack rm needed → zero-downtime.
-              stack_name=$(basename "$stack_path" | sed 's/-stack\.yml$//')
+              #
+              # Stack-Name-Ableitung:
+              # Default = basename ohne -stack.yml Suffix (z.B. vaultwarden-stack.yml → vaultwarden).
+              # Override via `stack-name=<name>` Flag in webhooks.conf — nötig für Legacy-Stacks,
+              # die unter einem anderen Namen in Portainer angelegt wurden (z.B. postgres-ha-stack,
+              # authentik-stack, uptime_kuma, rescue_stack), um docker stack rm/neue Stack-Erzeugung
+              # zu vermeiden.
+              stack_name_override=$(echo "$flags" | grep -oP '(?<=stack-name=)[^,]+' || true)
+              if [ -n "$stack_name_override" ]; then
+                stack_name="$stack_name_override"
+              else
+                stack_name=$(basename "$stack_path" | sed 's/-stack\.yml$//')
+              fi
 
               echo "SSH-DEPLOY: $stack_path (stack: $stack_name)"
 
@@ -161,7 +233,8 @@ jobs:
               # config object for each change, so docker stack deploy can update
               # without docker stack rm (zero-downtime).
               ENV_FILE=$(mktemp)
-              for cfg_file in "$stack_dir"/*.yml "$stack_dir"/*.sh "$stack_dir"/*.conf; do
+              shopt -s globstar nullglob 2>/dev/null || true
+              for cfg_file in "$stack_dir"/*.yml "$stack_dir"/*.sh "$stack_dir"/*.conf "$stack_dir"/*.cfg "$stack_dir"/*.json "$stack_dir"/**/*.json "$stack_dir"/**/*.yml "$stack_dir"/**/*.sh "$stack_dir"/**/*.conf "$stack_dir"/**/*.cfg; do
                 [ -f "$cfg_file" ] || continue
                 cfg_basename=$(basename "$cfg_file")
                 # Skip the stack compose file itself
@@ -173,31 +246,147 @@ jobs:
                 echo "  Config hash: ${hash_name}=${hash_value} (${cfg_basename})"
               done
 
-              # Copy stack files + env file to Swarm manager
-              ssh -i ~/.ssh/swarm_key root@"$SWARM_MANAGER" "mkdir -p /tmp/gitops-deploy"
-              scp -i ~/.ssh/swarm_key -r "$stack_dir"/* root@"$SWARM_MANAGER":/tmp/gitops-deploy/
-              scp -i ~/.ssh/swarm_key "$ENV_FILE" root@"$SWARM_MANAGER":/tmp/gitops-deploy/.env.hashes
+              COMPOSE_BASENAME="$(basename "$stack_path")"
+
+              # Resolve ${VAR:-default} patterns in compose file LOCALLY before SCP.
+              # docker stack deploy does not interpolate variables in YAML keys,
+              # so we must pre-process the file with actual hash values.
+              source "$ENV_FILE"
+              RESOLVED_COMPOSE=$(mktemp)
+              cp "$stack_dir/$COMPOSE_BASENAME" "$RESOLVED_COMPOSE"
+              while IFS='=' read -r key value; do
+                key=$(echo "$key" | sed 's/^export //')
+                [ -z "$key" ] && continue
+                sed -i "s/\${${key}:-[^}]*}/${value}/g; s/\${${key}}/${value}/g" "$RESOLVED_COMPOSE"
+              done < "$ENV_FILE"
               rm -f "$ENV_FILE"
 
-              COMPOSE_BASENAME="$(basename "$stack_path")"
-              # Deploy with content-hash env vars (no docker stack rm!)
+              # Copy resolved compose + stack files to Swarm manager
+              ssh -i ~/.ssh/swarm_key root@"$SWARM_MANAGER" "mkdir -p /tmp/gitops-deploy"
+              scp -i ~/.ssh/swarm_key -r "$stack_dir"/* root@"$SWARM_MANAGER":/tmp/gitops-deploy/
+              scp -i ~/.ssh/swarm_key "$RESOLVED_COMPOSE" root@"$SWARM_MANAGER":/tmp/gitops-deploy/resolved-stack.yml
+              rm -f "$RESOLVED_COMPOSE"
+
+              # Deploy resolved compose file on Swarm manager.
+              # Pre-flight gate: `docker stack config` validates the compose
+              # syntax + variable resolution before attempting deploy.
+              # Without this, an invalid YAML (missing key, bad type)
+              # silently produced "Updating service ..." messages without
+              # actually applying the changes — see 2026-05-13 reisekosten
+              # incident where the secret-name-alias change was ignored.
+              # Convergence gate (swarm-stacks#37 — deploy-fails-loud):
+              # `docker stack deploy` returns 0 the moment Swarm ACCEPTS
+              # the spec — NOT when replicas are actually running. A bad
+              # secret/image/config makes tasks crashloop while the
+              # workflow stays green and prod stays down with no alert
+              # (this is exactly how the reisekosten #37 outage went
+              # unnoticed). We now poll `docker stack services` until
+              # every service reaches its desired replica count, with a
+              # hard timeout. Non-convergence => non-zero => job FAILS.
               ssh -i ~/.ssh/swarm_key root@"$SWARM_MANAGER" bash -s <<DEPLOY_EOF
                 set -e
                 cd /tmp/gitops-deploy
-                source .env.hashes
+
+                echo "Pre-flight: docker stack config validate..."
+                docker stack config -c resolved-stack.yml > /dev/null
 
                 echo "Deploying stack $stack_name with content-hash configs..."
-                docker stack deploy -c "$COMPOSE_BASENAME" --prune "$stack_name"
+                docker stack deploy -c resolved-stack.yml --prune --with-registry-auth "$stack_name"
+
+                echo "Waiting for stack '$stack_name' to converge (timeout 180s)..."
+                # Convergence rule (swarm-stacks#37, hardened 2026-05-17):
+                # A service is converged when running == desired, OR it is a
+                # successfully completed run-once service. Run-once jobs
+                # (e.g. db-init, mode replicated 1) end cleanly and stay
+                # "0/1" by design — the old replicas-string-only check
+                # flagged them as bad forever and produced a false-RED job
+                # + Telegram alert on EVERY postgres-ha deploy.
+                # Run-once-OK means: ALL of the service's tasks have
+                # DesiredState=Shutdown and CurrentState=Complete, with NO
+                # task in Failed/Rejected. A failed/stuck run-once job, a
+                # still-running run-once job, or a real crashloop all keep
+                # the service "bad" so deploy-fails-loud stays scharf.
+                # Implementation note: a single awk program consumes both
+                # the task list (FNR==NR pass) and the service list (2nd
+                # pass) so there are NO nested shell heredocs/subshells
+                # inside this YAML block scalar (which would break parsing
+                # and lose counters). It prints "TOTAL NOT_READY".
+                CONVERGED=0
+                for _i in \$(seq 1 36); do
+                  RESULT=\$(
+                    docker stack ps "$stack_name" --no-trunc \
+                      --format '{{.Name}}|{{.DesiredState}}|{{.CurrentState}}' \
+                      2>/dev/null > /tmp/_gate_ps.\$\$ || : ;
+                    docker stack services "$stack_name" \
+                      --format '{{.Name}} {{.Replicas}}' \
+                      | awk -v PS=/tmp/_gate_ps.\$\$ '
+                        BEGIN {
+                          while ((getline l < PS) > 0) {
+                            n = split(l, a, "|");
+                            if (n < 3) continue;
+                            tn = a[1]; td = a[2];
+                            split(a[3], cw, " "); cs = cw[1];
+                            sub(/\\.[0-9]+\$/, "", tn);   # strip ".<slot>"
+                            tcnt[tn]++;
+                            if (cs == "Failed" || cs == "Rejected") tfail[tn]++;
+                            if (td == "Shutdown" && cs == "Complete") tok[tn]++;
+                          }
+                          close(PS);
+                        }
+                        {
+                          svc = \$1;
+                          split(\$2, r, "/"); run = r[1]; want = r[2];
+                          total++;
+                          if (run == want) next;
+                          # running != desired: OK only if this service is
+                          # a cleanly completed run-once service (all tasks
+                          # Shutdown/Complete, none Failed/Rejected).
+                          if (tcnt[svc] > 0 && tfail[svc] == 0 \
+                              && tok[svc] == tcnt[svc]) {
+                            print "  run-once OK: " svc " (" run "/" want \
+                              ", " tcnt[svc] " task(s) Complete)" > "/dev/stderr";
+                            next;
+                          }
+                          bad++;
+                        }
+                        END { print total " " (bad + 0) }'
+                    rm -f /tmp/_gate_ps.\$\$
+                  )
+                  TOTAL=\$(printf '%s' "\$RESULT" | awk '{print \$1}')
+                  NOT_READY=\$(printf '%s' "\$RESULT" | awk '{print \$2}')
+                  TOTAL=\${TOTAL:-0}
+                  NOT_READY=\${NOT_READY:-1}
+                  if [ "\$TOTAL" -gt 0 ] && [ "\$NOT_READY" -eq 0 ]; then
+                    CONVERGED=1
+                    echo "Stack '$stack_name' converged (\$TOTAL services healthy)."
+                    break
+                  fi
+                  sleep 5
+                done
+
+                if [ "\$CONVERGED" -ne 1 ]; then
+                  echo "ERROR: stack '$stack_name' did NOT converge within 180s"
+                  docker stack services "$stack_name" \
+                    --format 'SVC {{.Name}} {{.Replicas}} {{.Image}}'
+                  # Surface the most recent failed task reasons (no secrets).
+                  for _svc in \$(docker stack services "$stack_name" --format '{{.Name}}'); do
+                    docker service ps "\$_svc" --no-trunc \
+                      --format '  TASK {{.Name}} {{.CurrentState}} {{.Error}}' \
+                      | head -5
+                  done
+                  rm -rf /tmp/gitops-deploy
+                  exit 1
+                fi
 
                 echo "Cleaning up..."
                 rm -rf /tmp/gitops-deploy
           DEPLOY_EOF
 
               if [ $? -eq 0 ]; then
-                echo "  ✓ SSH deploy OK"
+                echo "  ✓ SSH deploy OK (converged)"
                 TRIGGERED=$((TRIGGERED + 1))
               else
-                echo "  ✗ SSH deploy FAILED"
+                echo "  ✗ SSH deploy FAILED (non-convergence or error)"
                 FAILED=$((FAILED + 1))
               fi
             elif echo "$flags" | grep -q "lxc-deploy"; then
@@ -290,15 +479,47 @@ jobs:
                 FAILED=$((FAILED + 1))
               fi
             fi
-          done < "$CONF"
+          done 3< "$CONF"
 
           echo ""
           echo "Summary: $TRIGGERED deployed, $FAILED failed"
 
           if [ "$FAILED" -gt 0 ]; then
+            echo "::error::$FAILED stack deploy(s) failed or did not converge — PROD MAY BE DOWN"
             exit 1
           fi
 
           if [ "$TRIGGERED" -eq 0 ]; then
             echo "No matching stacks found for changed files"
           fi
+
+      # ---------------------------------------------------------------------
+      # Fail-loud alert (swarm-stacks#37 deploy-fails-loud, point e).
+      # Fires ONLY when the deploy job failed (includes non-convergence).
+      # Telegram is best-effort and conditional: if the alert secrets are
+      # not configured the step is skipped — it never masks the red job
+      # (`if: failure()` already makes the workflow red regardless).
+      # Required GitHub Secrets (user-provided, never set by automation):
+      #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+      # ---------------------------------------------------------------------
+      - name: Alert on deploy failure (Telegram)
+        if: failure()
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
+            echo "::warning::TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set — skipping alert (job still RED)"
+            exit 0
+          fi
+          MSG="🚨 swarm-stacks deploy FAILED / did not converge
+          Commit: ${{ github.sha }}
+          Ref: ${{ github.ref_name }}
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          Prod may be down — check converging replicas (#37)."
+          curl -sf --max-time 15 \
+            -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT}" \
+            --data-urlencode "text=${MSG}" >/dev/null \
+            && echo "Telegram alert sent" \
+            || echo "::warning::Telegram alert delivery failed (job still RED)"

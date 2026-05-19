@@ -30,7 +30,7 @@ env:
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, homelab]
     permissions:
       contents: read
       packages: write

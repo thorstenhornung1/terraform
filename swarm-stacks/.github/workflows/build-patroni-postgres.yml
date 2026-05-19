@@ -28,7 +28,7 @@ env:
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, homelab]
     permissions:
       contents: read
       packages: write
@@ -64,6 +64,12 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: stacks/infrastructure/postgres-ha/docker
+          # Pin to x86-64-v3 micro-arch (Haswell+: AVX2+FMA+BMI2) so any
+          # extension with Makefile-default `-march=native` (e.g. pgvector)
+          # cannot leak AVX-512 instructions from the GHA runner's Xeon CPU.
+          # Homelab CPUs (Skylake/Kaby Lake/Coffee Lake i5) lack AVX-512,
+          # which caused the 2026-05-09 SIGILL crash loop. See #9, #12.
+          platforms: linux/amd64/v3
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
