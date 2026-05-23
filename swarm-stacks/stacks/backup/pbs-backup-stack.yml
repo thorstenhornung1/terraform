@@ -24,6 +24,7 @@ services:
     command: cron
     environment:
       PBS_REPOSITORY: "backup-swarm@pbs@pbs.hornung-bn.de:swarm-datastore"
+      PBS_FINGERPRINT: "73:88:10:c6:bc:65:b1:16:24:88:63:4f:ef:7a:97:c7:71:16:a6:64:b9:9c:af:46:8f:28:c2:3f:f2:f4:fe:28"
       BACKUP_SCHEDULE: "0 */2 * * *"
     volumes:
       - /mnt/cephfs/swarm-state:/backup-swarm-state:ro
@@ -39,11 +40,11 @@ services:
           - node.labels.infra_node == 3
       resources:
         limits:
-          cpus: '0.5'
-          memory: 256M
+          cpus: '1.0'
+          memory: 1G
         reservations:
           cpus: '0.1'
-          memory: 64M
+          memory: 128M
       restart_policy:
         condition: on-failure
         delay: 30s

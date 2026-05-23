@@ -1,0 +1,253 @@
+# =============================================================================
+# Immich Stack — Self-Hosted Photo Management
+# =============================================================================
+# AI-powered photo/video management with face recognition, smart search,
+# and mobile app support. PostgreSQL backend via Patroni HA cluster.
+#
+# Access: https://photos.hornung-bn.de
+# API:    https://photos.hornung-bn.de/api
+#
+# Storage:
+#   - Photos/Videos:  CephFS /mnt/cephfs/swarm-state/stack-immich/upload/
+#   - Thumbnails:     CephFS /mnt/cephfs/swarm-state/stack-immich/thumbs/
+#   - Encoded Video:  CephFS /mnt/cephfs/swarm-state/stack-immich/encoded-video/
+#   - ML Model Cache: Local Docker volume (ephemeral, re-downloadable)
+#   - PostgreSQL:     Patroni HA cluster (pg-haproxy:5433, DB: immich)
+#   - Redis:          Stack-internal Valkey (dedicated, not shared)
+#
+# Prerequisites:
+#   1. pgvector extension installed in Patroni image
+#   2. immich DB + user created via db-init (postgres-ha stack)
+#   3. Docker secrets: immich_db_password,
+#                      immich_oauth_client_id,
+#                      immich_oauth_client_secret
+#   4. CephFS dirs:   /mnt/cephfs/swarm-state/stack-immich/{upload,thumbs,profile,encoded-video,redis}
+#   5. DNS:           photos.hornung-bn.de -> Traefik VIP
+#   6. Authentik:     OAuth2/OIDC Provider + Application (slug: immich) angelegt
+#                     Redirect URIs: https://photos.hornung-bn.de/auth/login
+#                                    https://photos.hornung-bn.de/user-settings
+#                                    app.immich:///oauth-callback
+#   7. After deploy:  Admin-Account ueber Passwort erstellen — OIDC-Login dann direkt aktiv.
+#
+# OAuth-Konfiguration ist GitOps-getrieben:
+#   immich-oauth-config.json (Template) + entrypoint-wrapper.sh (Substitution)
+#   -> Docker Configs mit Content-Hash-Naming (zero-downtime auf Update)
+#   -> Wrapper schreibt resolved JSON nach /tmp/immich-config.json (tmpfs only)
+#   -> IMMICH_CONFIG_FILE sperrt die OAuth-Felder in der Admin-UI (read-only)
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # IMMICH SERVER (API + Web UI + Background Jobs)
+  # ===========================================================================
+  immich-server:
+    image: ghcr.io/immich-app/immich-server:v2.7.2
+    hostname: immich-server
+    # init:true ersetzt das Image-tini als PID-1 Reaper (wir überschreiben entrypoint)
+    init: true
+    entrypoint: /entrypoint-wrapper.sh
+    environment:
+      # Database — external Patroni HA cluster via HAProxy
+      DB_HOSTNAME: "pg-haproxy.hornung-bn.de"
+      DB_PORT: "5433"
+      DB_USERNAME: immich
+      # DB_PASSWORD wird vom entrypoint-wrapper.sh aus /run/secrets/immich_db_password exportiert
+      DB_DATABASE_NAME: immich
+      DB_VECTOR_EXTENSION: pgvector
+      # Redis — stack-internal Valkey (dedicated)
+      REDIS_HOSTNAME: immich-redis
+      REDIS_PORT: "6379"
+      # Application
+      TZ: "Europe/Berlin"
+      IMMICH_LOG_LEVEL: log
+      # IMMICH_CONFIG_FILE wird vom Wrapper auf /tmp/immich-config.json gesetzt
+      # (substituiert zur Laufzeit aus /etc/immich/immich-oauth-config.template.json + Secrets)
+    secrets:
+      - immich_db_password
+      - immich_oauth_client_id
+      - immich_oauth_client_secret
+    configs:
+      - source: entrypoint_wrapper_${ENTRYPOINT_WRAPPER_HASH:-latest}
+        target: /entrypoint-wrapper.sh
+        mode: 0755
+      - source: oauth_config_${IMMICH_OAUTH_CONFIG_HASH:-latest}
+        target: /etc/immich/immich-oauth-config.template.json
+        mode: 0444
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-immich/upload:/usr/src/app/upload
+    networks:
+      - traefik_public
+      - default
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: continue
+      labels:
+        # --- Traefik Network ---
+        - traefik.swarm.network=traefik_public
+        # --- Traefik HTTPS Router ---
+        - traefik.enable=true
+        - "traefik.http.routers.immich.rule=Host(`photos.hornung-bn.de`)"
+        - traefik.http.routers.immich.entrypoints=websecure
+        - traefik.http.routers.immich.tls=true
+        - traefik.http.routers.immich.tls.certresolver=dns
+        - traefik.http.services.immich.loadbalancer.server.port=2283
+        # --- HTTP -> HTTPS Redirect ---
+        - "traefik.http.routers.immich-http.rule=Host(`photos.hornung-bn.de`)"
+        - traefik.http.routers.immich-http.entrypoints=web
+        - traefik.http.routers.immich-http.middlewares=immich-redirect
+        - traefik.http.middlewares.immich-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.immich-redirect.redirectscheme.permanent=true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:2283/api/server/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # ===========================================================================
+  # IMMICH MACHINE LEARNING (Face Detection, Smart Search, CLIP)
+  # ===========================================================================
+  immich-machine-learning:
+    image: ghcr.io/immich-app/immich-machine-learning:v2.7.2
+    hostname: immich-machine-learning
+    environment:
+      MACHINE_LEARNING_MODEL_TTL: "300"
+      MACHINE_LEARNING_WORKERS: "1"
+      MACHINE_LEARNING_CACHE_FOLDER: /cache
+      REDIS_HOSTNAME: immich-redis
+      REDIS_PORT: "6379"
+    volumes:
+      - model-cache:/cache
+    networks:
+      - default
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: continue
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:3003/ping\")' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # ===========================================================================
+  # VALKEY (Dedicated Redis for Job Queue)
+  # ===========================================================================
+  immich-redis:
+    image: valkey/valkey:8-alpine
+    hostname: immich-redis
+    command: >
+      valkey-server
+      --port 6379
+      --bind 0.0.0.0
+      --protected-mode no
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+      --appendonly yes
+      --appendfsync everysec
+      --dir /data
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-immich/redis:/data
+    networks:
+      - default
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 320M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  default:
+    driver: overlay
+  traefik_public:
+    external: true
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  model-cache:
+    driver: local
+
+# =============================================================================
+# CONFIGS (Content-Hash-Naming für Zero-Downtime-Updates)
+# =============================================================================
+# Docker Configs sind immutable — gleicher Name kann nicht upgedated werden.
+# Der Deploy-Workflow (.github/workflows/deploy-stacks.yml) berechnet SHA256
+# aller Dateien im Stack-Ordner und injiziert die Kurz-Hashes als
+# ${ENTRYPOINT_WRAPPER_HASH} / ${IMMICH_OAUTH_CONFIG_HASH}. Neuer Content =>
+# neuer Config-Name => `docker stack deploy --prune` tauscht ohne Ausfall.
+configs:
+  entrypoint_wrapper_${ENTRYPOINT_WRAPPER_HASH:-latest}:
+    file: ./entrypoint-wrapper.sh
+  oauth_config_${IMMICH_OAUTH_CONFIG_HASH:-latest}:
+    file: ./immich-oauth-config.json
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  immich_db_password:
+    external: true
+  immich_oauth_client_id:
+    external: true
+  immich_oauth_client_secret:
+    external: true

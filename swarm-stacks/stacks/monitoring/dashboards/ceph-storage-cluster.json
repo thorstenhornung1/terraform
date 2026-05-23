@@ -1,0 +1,236 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alarms",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Ceph cluster health and OSD-level drill-down for BlueStore slow-ops investigation. Metrics source: ceph-mgr prometheus module (job=ceph).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "0 = HEALTH_OK, 1 = HEALTH_WARN, 2 = HEALTH_ERR",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OK", "color": "green" }, "1": { "text": "WARN", "color": "yellow" }, "2": { "text": "ERR", "color": "red" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 2 } ] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "ceph_health_status", "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" } }
+      ],
+      "title": "Cluster Health Status",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Number of currently active health warnings (ceph_health_detail == 1).",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 } ] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "sum(ceph_health_detail == 1)", "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" } }
+      ],
+      "title": "Active Warnings",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "0 = no slow ops warning, 1 = BLUESTORE_SLOW_OP_ALERT active. Separate SLOW_OPS warning (generic) also displayed.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OK", "color": "green" }, "1": { "text": "ACTIVE", "color": "red" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 0 },
+      "id": 3,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "" }, "textMode": "value_and_name" },
+      "targets": [
+        { "expr": "ceph_health_detail{name=\"BLUESTORE_SLOW_OP_ALERT\"}", "legendFormat": "BlueStore", "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" } },
+        { "expr": "ceph_health_detail{name=\"SLOW_OPS\"}", "legendFormat": "Generic SLOW_OPS", "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" } }
+      ],
+      "title": "Slow-Op Alerts",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "All active ceph health warnings. Useful to triage: is slow-op alert alone, or part of a cluster-wide issue?",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "left", "cellOptions": { "type": "auto" } },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green" } ] }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "severity" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } }, { "id": "mappings", "value": [ { "type": "value", "options": { "HEALTH_WARN": { "color": "yellow" }, "HEALTH_ERR": { "color": "red" } } } ] } ] }
+        ]
+      },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 4 },
+      "id": 4,
+      "options": { "footer": { "show": false }, "showHeader": true },
+      "targets": [
+        { "expr": "ceph_health_detail == 1", "format": "table", "instant": true, "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" } }
+      ],
+      "title": "Active Health Warnings",
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "cluster": true, "instance": true, "Value": true }, "indexByName": { "name": 0, "severity": 1 }, "renameByName": { "name": "Warning", "severity": "Severity" } } }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Apply latency = time from client write to OSD local storage (ext/XFS on journal path). High + rising = BlueStore backend slow.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "pointSize": 5, "showPoints": "never", "spanNulls": true },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 100 }, { "color": "red", "value": 1000 } ] },
+          "unit": "ms"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "ceph_osd_apply_latency_ms{ceph_daemon=~\"$osd\"}", "legendFormat": "{{ceph_daemon}}", "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" } }
+      ],
+      "title": "OSD Apply Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Commit latency = journal-commit + RocksDB KV sync. Direct signal of BlueStore internal contention (RocksDB compaction, WAL pressure).",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "pointSize": 5, "showPoints": "never", "spanNulls": true },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 500 } ] },
+          "unit": "ms"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "ceph_osd_commit_latency_ms{ceph_daemon=~\"$osd\"}", "legendFormat": "{{ceph_daemon}}", "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" } }
+      ],
+      "title": "OSD Commit Latency (BlueStore-side)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Counter rate of slow-op events per OSD. Spikes correlate with RocksDB compaction, bulk deletes, or scrubs.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "bars", "fillOpacity": 50, "lineWidth": 1, "showPoints": "never" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green" }, { "color": "red", "value": 1 } ] },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "rate(ceph_daemon_health_metrics{type=\"SLOW_OPS\",ceph_daemon=~\"$osd\"}[5m])", "legendFormat": "{{ceph_daemon}}", "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" } }
+      ],
+      "title": "Slow-Ops Rate per OSD (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "PG states that correlate with slow-op cascades: scrubbing (deep-scrub IO load), recovering/backfilling (data movement), peering (transient unavailability).",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2, "showPoints": "never", "stacking": { "mode": "normal" } },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "id": 8,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum(ceph_pg_scrubbing)", "legendFormat": "scrubbing", "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" } },
+        { "expr": "sum(ceph_pg_recovering)", "legendFormat": "recovering", "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" } },
+        { "expr": "sum(ceph_pg_backfill_wait)", "legendFormat": "backfill_wait", "refId": "C", "datasource": { "type": "prometheus", "uid": "victoriametrics" } },
+        { "expr": "sum(ceph_pg_peering)", "legendFormat": "peering", "refId": "D", "datasource": { "type": "prometheus", "uid": "victoriametrics" } },
+        { "expr": "sum(ceph_pg_degraded)", "legendFormat": "degraded", "refId": "E", "datasource": { "type": "prometheus", "uid": "victoriametrics" } }
+      ],
+      "title": "PG State Activity (Correlation Context)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Pool utilization — context for slow ops. 85% nearfull threshold marked red.",
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.7 }, { "color": "red", "value": 0.85 } ] },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 26 },
+      "id": 9,
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "showUnfilled": true, "valueMode": "color" },
+      "targets": [
+        { "expr": "ceph_pool_bytes_used / (ceph_pool_bytes_used + ceph_pool_max_avail) * on(pool_id) group_left(name) ceph_pool_metadata", "legendFormat": "{{name}}", "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" } }
+      ],
+      "title": "Pool Utilization",
+      "type": "bargauge"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["ceph", "storage", "infrastructure"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values(ceph_osd_metadata, ceph_daemon)",
+        "includeAll": true,
+        "label": "OSD",
+        "multi": true,
+        "name": "osd",
+        "options": [],
+        "query": { "query": "label_values(ceph_osd_metadata, ceph_daemon)", "refId": "StandardVariableQuery" },
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-3h", "to": "now" },
+  "timepicker": {},
+  "timezone": "Europe/Berlin",
+  "title": "Ceph Storage Cluster — Slow-Ops Drill-Down",
+  "uid": "ceph-storage-drill-down",
+  "version": 1,
+  "weekStart": "monday"
+}

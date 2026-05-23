@@ -439,7 +439,7 @@ services:
         mode: ingress
       # Stats port 7000 removed from external access (use docker exec when needed)
     configs:
-      - source: haproxy_config
+      - source: haproxy_config_${HAPROXY_HASH:-latest}
         target: /usr/local/etc/haproxy/haproxy.cfg
         mode: 0644
     deploy:
@@ -538,7 +538,7 @@ services:
     networks:
       - postgres-network
     configs:
-      - source: db_init_script
+      - source: db_init_script_${DB_INIT_HASH:-latest}
         target: /docker-entrypoint-initdb.d/db-init.sh
         mode: 0755
     secrets:
@@ -549,6 +549,9 @@ services:
       - authentik_db_password
       - paperless_db_password
       - taiga_db_password
+      - immich_db_password
+      - reisekosten_db_password
+      - reisekosten_steuer_db_password
     environment:
       - PGHOST=pg-haproxy
       - PGPORT=5433
@@ -577,7 +580,7 @@ services:
   # Scrape endpoint: http://<any-manager>:9187/metrics
 
   postgres-exporter:
-    image: prometheuscommunity/postgres-exporter:v0.15.0
+    image: prometheuscommunity/postgres-exporter:v0.17.0
     hostname: postgres-exporter
     networks:
       - postgres-network
@@ -664,9 +667,9 @@ volumes:
 # CONFIGS
 # =============================================================================
 configs:
-  haproxy_config:
+  haproxy_config_${HAPROXY_HASH:-latest}:
     file: ./haproxy.cfg
-  db_init_script:
+  db_init_script_${DB_INIT_HASH:-latest}:
     file: ./db-init.sh
 
 # =============================================================================
@@ -690,4 +693,10 @@ secrets:
   paperless_db_password:
     external: true
   taiga_db_password:
+    external: true
+  immich_db_password:
+    external: true
+  reisekosten_db_password:
+    external: true
+  reisekosten_steuer_db_password:
     external: true

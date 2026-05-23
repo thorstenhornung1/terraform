@@ -1,6 +1,7 @@
 # =============================================================================
 # Paperless-ngx Stack — Document Management System
 # =============================================================================
+# Deploy: GitOps via ssh-deploy (webhooks.conf, migrated 2026-04-21 from Portainer-Webhook).
 # Self-hosted document management with OCR, tagging, and full-text search.
 # PostgreSQL backend via Patroni HA cluster (pg-haproxy:5433).
 # Valkey (Redis-compatible) for task queue and caching.

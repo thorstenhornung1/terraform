@@ -1,0 +1,251 @@
+# =============================================================================
+# vmagent Scrape Configuration — Prometheus-compatible
+# =============================================================================
+# Defines all scrape targets for the monitoring stack.
+# Deployed as Docker config with content-hash naming (zero-downtime updates).
+#
+# Adding new targets:
+#   1. Add a new scrape_configs entry below
+#   2. Commit + push → GitOps auto-deploys new config hash
+#
+# Future targets:
+#   - cAdvisor: container metrics on port 9180
+#   - PBS: needs API auth token (proxmox-backup-exporter)
+#   - Proxmox host metrics arrive via InfluxDB LP push (no scrape needed)
+# =============================================================================
+
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+
+scrape_configs:
+
+  # ---------------------------------------------------------------------------
+  # VictoriaMetrics self-monitoring
+  # ---------------------------------------------------------------------------
+  - job_name: victoriametrics
+    static_configs:
+      - targets:
+          - victoriametrics:8428
+        labels:
+          instance: victoriametrics
+
+  # ---------------------------------------------------------------------------
+  # vmagent self-monitoring
+  # ---------------------------------------------------------------------------
+  - job_name: vmagent
+    static_configs:
+      - targets:
+          - 127.0.0.1:8429
+        labels:
+          instance: vmagent
+
+  # ---------------------------------------------------------------------------
+  # Node Exporter — Host metrics (CPU, RAM, disk, network)
+  # ---------------------------------------------------------------------------
+  # node_exporter runs in global mode with host-mode port 9100.
+  # Must use host IPs (not overlay DNS) since port is bound to host network.
+  - job_name: node-exporter
+    static_configs:
+      - targets:
+          - 192.168.4.40:9100
+          - 192.168.4.41:9100
+          - 192.168.4.42:9100
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '192\.168\.4\.40:.*'
+        target_label: instance
+        replacement: docker-infra-1
+      - source_labels: [__address__]
+        regex: '192\.168\.4\.41:.*'
+        target_label: instance
+        replacement: docker-infra-2
+      - source_labels: [__address__]
+        regex: '192\.168\.4\.42:.*'
+        target_label: instance
+        replacement: docker-infra-3
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Exporter — Database metrics
+  # ---------------------------------------------------------------------------
+  # postgres-exporter publishes port 9187 via Swarm ingress routing mesh.
+  # Any Swarm node IP:9187 works. Using docker-infra-1 as stable target.
+  - job_name: postgres-exporter
+    static_configs:
+      - targets:
+          - 192.168.4.40:9187
+        labels:
+          instance: patroni-ha
+
+  # ---------------------------------------------------------------------------
+  # Ceph Cluster — Storage health, OSD, pool, PG metrics
+  # ---------------------------------------------------------------------------
+  # Ceph mgr prometheus module on pve03 (active mgr).
+  # Endpoint may move if mgr failover occurs — use all 3 MON IPs.
+  - job_name: ceph
+    static_configs:
+      - targets:
+          - 192.168.12.10:9283
+          - 192.168.12.12:9283
+          - 192.168.12.11:9283
+        labels:
+          cluster: proxmox-ceph
+    # Only scrape the active mgr (others return connection refused)
+    honor_labels: true
+
+  # ---------------------------------------------------------------------------
+  # etcd Cluster — Distributed consensus health
+  # ---------------------------------------------------------------------------
+  - job_name: etcd
+    static_configs:
+      - targets:
+          - 192.168.12.40:2379
+          - 192.168.12.41:2379
+          - 192.168.12.42:2379
+          - 192.168.12.53:2379
+          - 192.168.12.54:2379
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '192\.168\.12\.40:.*'
+        target_label: instance
+        replacement: etcd-1
+      - source_labels: [__address__]
+        regex: '192\.168\.12\.41:.*'
+        target_label: instance
+        replacement: etcd-2
+      - source_labels: [__address__]
+        regex: '192\.168\.12\.42:.*'
+        target_label: instance
+        replacement: etcd-3
+      - source_labels: [__address__]
+        regex: '192\.168\.12\.53:.*'
+        target_label: instance
+        replacement: etcd-4
+      - source_labels: [__address__]
+        regex: '192\.168\.12\.54:.*'
+        target_label: instance
+        replacement: etcd-5
+
+  # ---------------------------------------------------------------------------
+  # PBS Exporter — Backup job status, snapshots, verify, datastore usage
+  # ---------------------------------------------------------------------------
+  - job_name: pbs-exporter
+    scrape_interval: 120s
+    static_configs:
+      - targets:
+          - pbs-exporter:10019
+        labels:
+          instance: pbs
+
+  # ---------------------------------------------------------------------------
+  # Patroni REST API — Cluster role, state, timeline, lag
+  # ---------------------------------------------------------------------------
+  # Each Patroni node exposes /metrics on port 8008 (Prometheus format)
+  # and JSON status on / (role, state, timeline).
+  # Port 8008 is published in host mode on each infra node.
+  - job_name: patroni
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - 192.168.4.40:8008
+          - 192.168.4.41:8008
+          - 192.168.4.42:8008
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '192\.168\.4\.40:.*'
+        target_label: instance
+        replacement: postgres-1
+      - source_labels: [__address__]
+        regex: '192\.168\.4\.41:.*'
+        target_label: instance
+        replacement: postgres-2
+      - source_labels: [__address__]
+        regex: '192\.168\.4\.42:.*'
+        target_label: instance
+        replacement: postgres-3
+
+  # ---------------------------------------------------------------------------
+  # Home Assistant — Entity states via built-in Prometheus integration
+  # ---------------------------------------------------------------------------
+  # HA exposes /api/prometheus with all entity states.
+  # Text states become labels on info metrics (e.g. state="locked").
+  # Numeric sensors become standard gauge metrics.
+  # HTTPS with bearer token auth (Docker secret).
+  - job_name: homeassistant
+    scrape_interval: 30s
+    scrape_timeout: 20s
+    metrics_path: /api/prometheus
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    authorization:
+      credentials_file: /run/secrets/ha_prometheus_lla_token
+    static_configs:
+      - targets:
+          - 192.168.2.5:8123
+        labels:
+          instance: homeassistant
+
+  # ---------------------------------------------------------------------------
+  # Frigate NVR — Camera health, detection FPS, storage
+  # ---------------------------------------------------------------------------
+  # Frigate 0.17+ exposes Prometheus metrics via nginx on port 8971 (HTTPS).
+  # Uses DNS name for node-independence (LXC can migrate).
+  # Auth is disabled in Frigate config — no token needed.
+  # IP-Whitelist middleware in Traefik allows 192.168.0.0/16.
+  - job_name: frigate
+    scrape_interval: 30s
+    metrics_path: /api/metrics
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    static_configs:
+      - targets:
+          - frigate.hornung-bn.de:443
+        labels:
+          instance: frigate
+
+  - job_name: reisekosten
+    scrape_interval: 30s
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    static_configs:
+      - targets:
+          - reisekosten.hornung-bn.de:443
+        labels:
+          instance: reisekosten
+
+  # ---------------------------------------------------------------------------
+  # Blackbox Probes — SSL cert expiry for all public-facing domains
+  # ---------------------------------------------------------------------------
+  # The blackbox_exporter probes each target (module `http_any_tls`).
+  # The metric `probe_ssl_earliest_cert_expiry` (unix timestamp) is what the
+  # SSL-expiry alert-rules evaluate against.
+  # Scrape interval 5m is intentional: cert-expiry is a slow-moving metric.
+  - job_name: blackbox-https
+    scrape_interval: 5m
+    scrape_timeout: 15s
+    metrics_path: /probe
+    params:
+      module: [http_any_tls]
+    static_configs:
+      - targets:
+          - https://photos.hornung-bn.de
+          - https://auth.hornung-bn.de
+          - https://vault.hornung-bn.de
+          - https://paperless.hornung-bn.de
+          - https://n8n.hornung-bn.de
+          - https://grafana.hornung-bn.de
+          - https://traefik.hornung-bn.de
+          - https://uptime.hornung-bn.de
+          - https://frigate.hornung-bn.de
+          - https://admin.frigate.hornung-bn.de
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

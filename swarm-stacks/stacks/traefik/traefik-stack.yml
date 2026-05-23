@@ -1,5 +1,11 @@
 version: "3.8"
 
+# =============================================================================
+# Traefik Stack — Reverse Proxy + Let's Encrypt (DNS-01 via Cloudflare)
+# Deploy: GitOps via ssh-deploy (migrated 2026-04-21 from Portainer-Webhook).
+# Content-hash naming for dns_dynamic_config kommt in Phase 3c.
+# =============================================================================
+
 services:
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:latest
@@ -77,7 +83,7 @@ services:
         mode: ingress
 
     configs:
-      - source: dns_dynamic_config
+      - source: dns_dynamic_config_${DNS_EXTERNAL_HASH:-latest}
         target: /etc/traefik/dynamic/dns.yml
 
     volumes:
@@ -122,7 +128,7 @@ volumes:
   traefik_letsencrypt:
 
 configs:
-  dns_dynamic_config:
+  dns_dynamic_config_${DNS_EXTERNAL_HASH:-latest}:
     file: ./dns-external.yml
 
 secrets:

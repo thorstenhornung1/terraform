@@ -1,0 +1,19 @@
+{
+  "oauth": {
+    "enabled": true,
+    "issuerUrl": "https://auth.hornung-bn.de/application/o/immich/",
+    "clientId": "REPLACED_AT_RUNTIME_BY_ENTRYPOINT_WRAPPER",
+    "clientSecret": "REPLACED_AT_RUNTIME_BY_ENTRYPOINT_WRAPPER",
+    "scope": "openid email profile",
+    "signingAlgorithm": "RS256",
+    "profileSigningAlgorithm": "none",
+    "storageLabelClaim": "preferred_username",
+    "storageQuotaClaim": "immich_quota",
+    "defaultStorageQuota": 0,
+    "buttonText": "Login mit Authentik",
+    "autoRegister": true,
+    "autoLaunch": false,
+    "mobileOverrideEnabled": false,
+    "mobileRedirectUri": ""
+  }
+}

@@ -8,18 +8,22 @@
 # Run via cron every 5 minutes or manually on container start.
 #
 # Required env vars:
-#   AUTHENTIK_URL        — Authentik base URL (e.g. http://authentik-server:9000)
+#   AUTHENTIK_URL        — Authentik base URL (e.g. https://auth.hornung-bn.de)
 #   AUTHENTIK_TOKEN_FILE — Path to file containing Authentik API token
-#   PAPERLESS_GID        — GID for paperless group (default: 1000)
+#   FAMILY_GID           — GID for family group (default: 2000)
+#
+# The Expression Policy 'samba-nt-hash-sync' in Authentik computes the NT-Hash
+# on every password change and stores it as user.attributes.sambaNTPassword.
+# This script reads that attribute and writes it into Samba's tdbsam.
 # =============================================================================
 set -euo pipefail
 
-AUTHENTIK_URL="${AUTHENTIK_URL:-http://authentik-server:9000}"
+AUTHENTIK_URL="${AUTHENTIK_URL:-https://auth.hornung-bn.de}"
 AUTHENTIK_TOKEN=$(cat "${AUTHENTIK_TOKEN_FILE}")
-PAPERLESS_GID="${PAPERLESS_GID:-1000}"
+FAMILY_GID="${FAMILY_GID:-2000}"
 
 # Fetch all users from Authentik API, filter for sambaNTPassword client-side
-response=$(curl -ksf -H "Authorization: Bearer ${AUTHENTIK_TOKEN}" \
+response=$(curl -ksf --max-time 10 -H "Authorization: Bearer ${AUTHENTIK_TOKEN}" \
   "${AUTHENTIK_URL}/api/v3/core/users/?page_size=100") || {
   echo "[sync] ERROR: Failed to fetch users from Authentik API"
   exit 1
@@ -34,7 +38,10 @@ for entry in $users; do
   nt_hash="${entry##*:}"
 
   # Ensure local Linux user exists (needed for pdbedit)
-  useradd -M -s /usr/sbin/nologin -g "$PAPERLESS_GID" "$username" 2>/dev/null || true
+  # User should already exist from entrypoint.sh, this is a safety net
+  if ! id "$username" >/dev/null 2>&1; then
+    useradd -M -s /usr/sbin/nologin -G family "$username" 2>/dev/null || true
+  fi
 
   # Create or update Samba tdbsam entry with NT hash
   if pdbedit -L "$username" &>/dev/null; then

@@ -1,0 +1,54 @@
+# =============================================================================
+# Grafana Alerting — Contact Points
+# =============================================================================
+# Provisioned via Docker config at /etc/grafana/provisioning/alerting/
+#
+# Telegram Bot Setup:
+#   1. Create bot via @BotFather -> get BOT_TOKEN
+#   2. Add bot to group chat -> get CHAT_ID via:
+#      curl https://api.telegram.org/bot<TOKEN>/getUpdates
+#   3. Create Docker secrets:
+#      echo -n "<TOKEN>" | docker secret create grafana_telegram_bot_token -
+#      echo -n "<CHAT_ID>" | docker secret create grafana_telegram_chat_id -
+#
+# Placeholder values below — replace with actual secrets after creation.
+# =============================================================================
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: telegram-critical
+    receivers:
+      - uid: telegram-critical-1
+        type: telegram
+        settings:
+          bottoken: "${TELEGRAM_BOT_TOKEN}"
+          chatid: "762113742"
+          parse_mode: ""
+          disable_web_page_preview: true
+          # Edge-Case: Wenn eine Series nach Filter-Änderung komplett aus dem
+          # Query-Result fällt (statt Threshold zu unterschreiten), kann Grafana
+          # $labels bei der RESOLVED-Render-Phase nicht mehr befüllen und das
+          # Template-Literal "{{ $labels.vm_name }}" erscheint in der Nachricht.
+          # Normalfall (Threshold-Unterschreitung) funktioniert korrekt, daher
+          # kein Fix hier - die nützliche Info "welche Instance resolved" wäre
+          # sonst generell weg. Siehe docs/MONITORING-PBS-BACKUP-ALERTS.md §7.
+          message: "{{ if eq .Status \"firing\" }}🔴 ALARM{{ else }}✅ RESOLVED{{ end }} {{ .CommonLabels.alertname }}\n{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}"
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: telegram-default
+    receivers:
+      - uid: telegram-default-1
+        type: telegram
+        settings:
+          bottoken: "${TELEGRAM_BOT_TOKEN}"
+          chatid: "762113742"
+          parse_mode: ""
+          disable_web_page_preview: true
+          disable_notification: true
+          # Siehe telegram-critical: Edge-Case "Template-Literal bei RESOLVED"
+          # ist bekannter Grafana-Sonderfall und wird bewusst nicht geshortcuttet,
+          # damit der Normalfall "resolved below threshold" Instance-Info behält.
+          message: "{{ if eq .Status \"firing\" }}⚠️ WARNUNG{{ else }}✅ RESOLVED{{ end }} {{ .CommonLabels.alertname }}\n{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}"
+        disableResolveMessage: false

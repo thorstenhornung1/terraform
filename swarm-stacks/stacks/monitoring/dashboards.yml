@@ -1,0 +1,26 @@
+# Grafana Dashboard Provisioning
+# Deployed as Docker config, mounted at /etc/grafana/provisioning/dashboards/
+apiVersion: 1
+
+providers:
+  - name: home-energy
+    orgId: 1
+    folder: "Home & Energie"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
+
+  - name: infrastructure
+    orgId: 1
+    folder: "Infrastructure"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards-infra
+      foldersFromFilesStructure: false

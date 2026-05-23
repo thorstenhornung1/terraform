@@ -4,14 +4,20 @@
 # Runs on dedicated LXC 4502 (frigate, pve03) with:
 #   - Intel HD Graphics 630 iGPU for OpenVINO object detection
 #   - Traefik sidecar for HTTPS (Let's Encrypt DNS-01 via Cloudflare)
-#   - CephFS + Ceph RBD + local ZFS storage
+#   - CephFS (config/clips/exports) + Ceph RBD (SQLite DB) + Synology NFS (recordings)
 #
 # Storage mounts (pre-configured by Terraform setup script + host bind-mounts):
 #   /mnt/cephfs/swarm-state/stack-frigate/config  -> config.yml + entrypoint.sh (CephFS 3x)
 #   /mnt/cephfs/swarm-state/stack-frigate/clips   -> event clips + thumbnails (CephFS 3x)
 #   /mnt/cephfs/swarm-state/stack-frigate/exports -> export directory (CephFS 3x)
 #   /mnt/rbd/frigate-db                           -> frigate.db SQLite (Ceph RBD 3x, ext4)
-#   /mnt/frigate-recordings                       -> video recordings (ZFS tank, local pve03)
+#   /mnt/frigate-recordings                       -> video recordings (NFS: diskstation.hornung-bn.de:/volume1/frigate/recordings)
+#
+# Recordings migration (2026-04-19): von Ceph RBD (pool frigate-recordings) zu
+# Synology NFS verschoben, weil RBD 4 MiB Object-Size + Frigate Video-Segment-
+# Workload strukturelle Fragmentierung erzeugt (87% Pool-USED bei 88 GB ext4-Daten).
+# fstrim wirkungslos, da RBD-Objects nie komplett frei werden. Pool 6 leer/deleted.
+# Siehe: docs/MONITORING-PBS-BACKUP-ALERTS.md für RBD-Fragmentation-Analogie.
 #
 # Secrets: /etc/frigate/secrets.env (synced from Docker Swarm secrets via CephFS)
 # Deploy: docker compose up -d (from /opt/frigate/compose/)

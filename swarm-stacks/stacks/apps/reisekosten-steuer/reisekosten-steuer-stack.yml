@@ -1,0 +1,156 @@
+# =============================================================================
+# Reisekosten-Steuer — Tax-Year Document Collection
+# =============================================================================
+# Deploy: GitOps via ssh-deploy (webhooks.conf), content-hash for
+# entrypoint-wrapper. Self-hosted Flask 3 app (WeasyPrint/PyMuPDF PDF bundles,
+# optional Paperless-ngx metadata). PostgreSQL backend via the Patroni HA
+# cluster (pg-haproxy:5433). CephFS for generated PDFs + the refresh lock.
+#
+# Access: https://steuer.hornung-bn.de  (Authentik OIDC, app slug "steuer")
+#
+# Deployment checklist:
+#   1. Create secrets:  reisekosten_steuer_db_password, reisekosten_steuer_secret_key,
+#                        reisekosten_steuer_oidc_client_id, reisekosten_steuer_oidc_client_secret
+#                        (Portainer UI; db_password BEFORE the postgres-ha redeploy).
+#   2. DB user:          Redeploy postgres-ha — db-init creates the
+#                        'reisekosten_steuer' DB + user automatically.
+#   3. CephFS dirs:      mkdir -p /mnt/cephfs/swarm-state/stack-reisekosten-steuer/{generated,data}
+#                        chown -R 1000:1000 /mnt/cephfs/swarm-state/stack-reisekosten-steuer
+#   4. DNS entry:        steuer.hornung-bn.de -> Traefik VIP (Technitium, per-node)
+#   5. Initial data:     Run migrate.py then migrate_sqlite_to_postgres.py ONCE
+#                        locally (Tailscale/SSH tunnel to pg-haproxy:5433).
+#
+# Custom image: ghcr.io/thorstenhornung1/reisekosten-steuer:v1.0.1 — built by
+# GHA release-build.yml on tag push (release-please-driven). Pinned to a
+# specific SemVer; the notify-swarm-stacks bot bumps both this comment and
+# the image: line on each release (the >=2-occurrence invariant).
+# =============================================================================
+
+version: "3.8"
+
+services:
+  reisekosten-steuer:
+    image: ghcr.io/thorstenhornung1/reisekosten-steuer:v1.0.1
+    hostname: reisekosten-steuer
+    # Wrapper assembles DATABASE_URL from the db-password secret, then execs
+    # the image's default CMD (gunicorn).
+    entrypoint: ["/bin/sh", "/entrypoint-wrapper.sh"]
+    command: ["gunicorn", "-c", "gunicorn.conf.py", "app:app"]
+    networks:
+      - traefik_public
+      - postgres-network
+    secrets:
+      - reisekosten_steuer_db_password
+      - reisekosten_steuer_secret_key
+      # OIDC client credentials — both optional; entrypoint-wrapper.sh
+      # detects their absence and falls back to open (no-auth) mode.
+      - reisekosten_steuer_oidc_client_id
+      - reisekosten_steuer_oidc_client_secret
+    configs:
+      - source: reisekosten_steuer_entrypoint
+        target: /entrypoint-wrapper.sh
+        mode: 0555
+    environment:
+      # Postgres routing — see entrypoint-wrapper.sh for assembly
+      POSTGRES_HOST: pg-haproxy
+      POSTGRES_PORT: "5433"
+      POSTGRES_DB: reisekosten_steuer
+      POSTGRES_USER: reisekosten_steuer
+      # Authentik OIDC discovery — Application slug is "steuer".
+      AUTHENTIK_DISCOVERY_URL: "https://auth.hornung-bn.de/application/o/steuer/.well-known/openid-configuration"
+      AUTHENTIK_END_SESSION_URL: "https://auth.hornung-bn.de/application/o/steuer/end-session/"
+      # Flask
+      FLASK_DEBUG: "0"
+      PYTHONUNBUFFERED: "1"
+      # Locale (matches Dockerfile-installed de_DE.UTF-8)
+      LANG: de_DE.UTF-8
+      LC_ALL: de_DE.UTF-8
+      TZ: Europe/Berlin
+    volumes:
+      # Rendered PDF bundles — persistent on CephFS
+      - /mnt/cephfs/swarm-state/stack-reisekosten-steuer/generated:/app/generated
+      # /app/data holds the nightly-refresh fcntl lock (single replica;
+      # the flock serializes the per-worker daemon threads).
+      - /mnt/cephfs/swarm-state/stack-reisekosten-steuer/data:/app/data
+    # Bounded log size — default json-file driver grows unbounded.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    deploy:
+      replicas: 1
+      # Single replica: the SQLite-era code path keeps an in-process nightly
+      # thread guarded by an fcntl flock that only serializes within ONE
+      # container. HA via replicas would need a cross-instance lock — out of
+      # scope for v1.0.
+      placement:
+        constraints:
+          - node.labels.app == true
+      # WeasyPrint/PyMuPDF can spike a few hundred MB rendering a full
+      # tax-year bundle (gunicorn 2 workers x 4 threads). Cap 1.5 GB;
+      # reserve 512 MB so the scheduler stays honest.
+      resources:
+        limits:
+          memory: 1500M
+        reservations:
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 10s
+        max_attempts: 0
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+      labels:
+        # Traefik routing
+        - "traefik.enable=true"
+        - "traefik.swarm.network=traefik_public"
+        - "traefik.http.services.reisekosten-steuer.loadbalancer.server.port=8000"
+        # HTTPS router
+        - "traefik.http.routers.reisekosten-steuer.rule=Host(`steuer.hornung-bn.de`)"
+        - "traefik.http.routers.reisekosten-steuer.entrypoints=websecure"
+        - "traefik.http.routers.reisekosten-steuer.tls=true"
+        - "traefik.http.routers.reisekosten-steuer.tls.certresolver=dns"
+        - "traefik.http.routers.reisekosten-steuer.service=reisekosten-steuer"
+        # HTTP -> HTTPS redirect
+        - "traefik.http.routers.reisekosten-steuer-http.rule=Host(`steuer.hornung-bn.de`)"
+        - "traefik.http.routers.reisekosten-steuer-http.entrypoints=web"
+        - "traefik.http.routers.reisekosten-steuer-http.middlewares=https-redirect@file"
+        - "traefik.http.routers.reisekosten-steuer-http.service=reisekosten-steuer"
+
+networks:
+  traefik_public:
+    external: true
+  postgres-network:
+    external: true
+    name: postgres-ha-stack_postgres-network
+
+secrets:
+  reisekosten_steuer_db_password:
+    external: true
+    # SINGLE SOURCE OF TRUTH: external Docker secret name is exactly
+    # `reisekosten_steuer_db_password` (key == external name, NO version
+    # pin). This MUST match what postgres-ha-stack db-init.sh reads from
+    # /run/secrets/reisekosten_steuer_db_password when it runs
+    # `ALTER USER reisekosten_steuer WITH PASSWORD ...`. db-init is the
+    # authoritative password owner: every Patroni restart re-asserts the
+    # role password from THIS secret. Pinning a versioned alias (_v2) here
+    # desyncs the app from the DB role on the next maintenance reboot
+    # (incident swarm-stacks#37). To rotate: update the VALUE of the
+    # `reisekosten_steuer_db_password` secret in Portainer (same name) and
+    # redeploy postgres-ha — never introduce _vN suffixes for this secret.
+  reisekosten_steuer_secret_key:
+    external: true
+  reisekosten_steuer_oidc_client_id:
+    external: true
+  reisekosten_steuer_oidc_client_secret:
+    external: true
+
+configs:
+  reisekosten_steuer_entrypoint:
+    # The GHA deploy workflow derives the hash env-var from the filename:
+    # entrypoint-wrapper.sh -> ENTRYPOINT_WRAPPER_HASH. Use that exact name.
+    name: reisekosten_steuer_entrypoint_${ENTRYPOINT_WRAPPER_HASH:-latest}
+    file: ./entrypoint-wrapper.sh

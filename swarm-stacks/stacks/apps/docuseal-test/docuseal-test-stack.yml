@@ -1,0 +1,139 @@
+version: '3.8'
+
+# =============================================================================
+# DocuSeal Test-Stack — isolierter Eval-Setup, rückstandsfrei entfernbar
+# =============================================================================
+# Bewusste Abweichungen vom Produktiv-Pattern (für Cleanup-Einfachheit
+# UND damit Iteration ohne Portainer-UI-Roundtrips läuft):
+#   - Eigene Postgres im Stack, NICHT postgres-ha/Patroni (kein DB-init.sh-
+#     Edit, kein pg-haproxy:5433-Routing, kein Patroni-Cluster-Risiko).
+#     DATABASE_URL zeigt auf @postgres:5432 — Stack-interner Service auf
+#     `internal: true`-Overlay-Network, isoliert vom Cluster-Postgres.
+#   - Named Docker Volumes statt /mnt/cephfs/swarm-state/stack-*
+#   - Single-Node-Pin auf infra_node==1 (deterministischer Cleanup)
+#   - Secrets INLINE in dieser Datei — bewusste Abweichung vom Repo-Standard:
+#       * Eval-Stack, kein Produktiv-Betrieb
+#       * Repo ist privat (private GitHub-Repo, blast radius = collaborators)
+#       * Postgres steckt im `internal: true`-Network, von außen unerreichbar
+#       * Wenn DocuSeal evaluiert ist und produktiv geht: neuer Stack mit
+#         externen Swarm-Secrets via Portainer, separate Subdomain
+#
+# Cleanup: ./cleanup.sh (im selben Verzeichnis)
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    hostname: postgres
+    environment:
+      POSTGRES_USER: docuseal
+      POSTGRES_DB: docuseal
+      # Inline password — throwaway eval, see top-of-file note.
+      POSTGRES_PASSWORD: e77f4dc7321c79865f30dfed3335c58f255dde3f28a13bd0
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - docuseal_test_db_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      update_config:
+        order: stop-first
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docuseal -d docuseal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  docuseal:
+    image: docuseal/docuseal:latest
+    hostname: docuseal-test
+    # No entrypoint override — image's default CMD (bundle exec puma) starts
+    # the server directly. The wrapper script that previously assembled
+    # DATABASE_URL from secret files is no longer needed since the
+    # credentials live in env vars now.
+    volumes:
+      - docuseal_test_app_data:/data/docuseal
+    environment:
+      RAILS_ENV: production
+      HOST: test.hornung-bn.de
+      # FORCE_SSL bewusst NICHT gesetzt — HTTP→HTTPS Redirect erfolgt via
+      # Traefik-Middleware (docuseal-test-redirect). DocuSeals FORCE_SSL plus
+      # Traefik-TLS-Termination ohne korrekte Trust-Proxy-Config ergibt eine
+      # 301-Loop, weil DocuSeal intern X-Forwarded-Proto nicht trustet.
+      DATABASE_URL: postgresql://docuseal:e77f4dc7321c79865f30dfed3335c58f255dde3f28a13bd0@postgres:5432/docuseal
+      SECRET_KEY_BASE: 56090f07133acff4366b66b7936a5040000c71056ebcaa7fafcb4112f0ffa5ec1148f93a2c6d53078f9ac10f8249ac4842266ccb84be8a9fc82ac16a42dc4cdd
+    networks:
+      - internal
+      - traefik_public
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 5
+      update_config:
+        order: stop-first
+      labels:
+        - traefik.swarm.network=traefik_public
+        - traefik.enable=true
+        # HTTPS Router
+        - "traefik.http.routers.docuseal-test.rule=Host(`test.hornung-bn.de`)"
+        - traefik.http.routers.docuseal-test.entrypoints=websecure
+        - traefik.http.routers.docuseal-test.tls=true
+        - traefik.http.routers.docuseal-test.tls.certresolver=dns
+        - traefik.http.services.docuseal-test.loadbalancer.server.port=3000
+        # HTTP → HTTPS Redirect
+        - "traefik.http.routers.docuseal-test-http.rule=Host(`test.hornung-bn.de`)"
+        - traefik.http.routers.docuseal-test-http.entrypoints=web
+        - traefik.http.routers.docuseal-test-http.middlewares=docuseal-test-redirect
+        - traefik.http.middlewares.docuseal-test-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.docuseal-test-redirect.redirectscheme.permanent=true
+    depends_on:
+      - postgres
+    # No healthcheck on the DocuSeal service — first eval attempt with
+    # `wget /up` killed an otherwise-healthy container because DocuSeal
+    # has no /up endpoint (returns 404 → wget exit 8 → unhealthy).
+    # restart_policy covers real crash-loops; Traefik does its own
+    # backend probe. Throwaway eval doesn't need orchestrator-level
+    # health introspection.
+
+networks:
+  internal:
+    driver: overlay
+    internal: true
+  traefik_public:
+    external: true
+
+volumes:
+  docuseal_test_db_data:
+    driver: local
+  docuseal_test_app_data:
+    driver: local

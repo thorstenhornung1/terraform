@@ -1,6 +1,7 @@
 # =============================================================================
 # Valkey Stack — Central Redis-Compatible Cache/Broker
 # =============================================================================
+# Deploy: GitOps via ssh-deploy (webhooks.conf, migrated 2026-04-21 from Portainer-Webhook).
 # Single-node Valkey instance shared by all application stacks.
 # Valkey is the Linux Foundation fork of Redis (BSD licensed, API-compatible).
 #

@@ -1,0 +1,16 @@
+# PBS CephFS Backup Exclusions
+# =============================================================================
+# This file is deployed as /mnt/cephfs/swarm-state/.pxarexclude
+# proxmox-backup-client reads it automatically during pxar archive creation.
+#
+# Syntax: one path pattern per line, relative to backup root
+# =============================================================================
+
+# Leftovers from old Frigate LXC deployments
+stack-frigate-beta
+stack-frigate-prod
+
+# IMMICH: backed up separately via restic → Synology S3
+# Reason: pbs-client deadlocks on CephFS with 250k+ small files
+# Library: 67GB photos, thumbs + encoded-video are regeneratable
+stack-immich

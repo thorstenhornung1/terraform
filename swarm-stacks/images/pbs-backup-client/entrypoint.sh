@@ -10,6 +10,11 @@ set -euo pipefail
 #   restore  - Restore from a specific snapshot (requires RESTORE_SNAPSHOT env)
 # =============================================================================
 
+# log() must be defined first — any early ERROR path uses it.
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
 BACKUP_SCHEDULE="${BACKUP_SCHEDULE:-0 */2 * * *}"
 PBS_REPOSITORY="${PBS_REPOSITORY:?PBS_REPOSITORY environment variable is required}"
 
@@ -18,13 +23,24 @@ if [ -f /run/secrets/pbs_password ]; then
     export PBS_PASSWORD
     PBS_PASSWORD=$(cat /run/secrets/pbs_password)
 else
-    echo "ERROR: /run/secrets/pbs_password not found"
+    log "ERROR: /run/secrets/pbs_password not found"
     exit 1
 fi
 
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+# Write PBS fingerprint to config (required for self-signed certs)
+if [ -n "${PBS_FINGERPRINT:-}" ]; then
+    mkdir -p /root/.config/proxmox-backup
+    PBS_SERVER=$(echo "${PBS_REPOSITORY}" | sed 's/.*@\([^:]*\):.*/\1/')
+    cat > /root/.config/proxmox-backup/config.json <<FPEOF
+{
+    "default-server": "${PBS_SERVER}",
+    "fingerprints": {
+        "${PBS_SERVER}": "${PBS_FINGERPRINT}"
+    }
 }
+FPEOF
+    log "PBS fingerprint configured for ${PBS_SERVER}"
+fi
 
 run_backup() {
     # Build pxar arguments from all /backup-* mount points
@@ -97,6 +113,7 @@ run_cron() {
 # PBS backup of Docker Swarm state (CephFS + RBD volumes)
 PBS_REPOSITORY=${PBS_REPOSITORY}
 PBS_PASSWORD=${PBS_PASSWORD}
+PBS_FINGERPRINT=${PBS_FINGERPRINT:-}
 
 ${BACKUP_SCHEDULE} root /usr/local/bin/entrypoint.sh backup >> /proc/1/fd/1 2>&1
 CRON

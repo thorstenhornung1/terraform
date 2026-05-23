@@ -1,0 +1,444 @@
+# =============================================================================
+# Monitoring Stack — VictoriaMetrics + Grafana + vmagent + node_exporter
+# =============================================================================
+# Deploy: GitOps via ssh-deploy. Content-hash naming for all config files
+# (prometheus-scrape.yml, dashboards/*.json, alerting/*.yml, grafana-entrypoint.sh).
+# Workflow-Glob wurde 2026-04-21 um .cfg erweitert; dieser commit triggert
+# redeploy mit korrekt berechneten hashes (vorher _latest-Fallback).
+#
+# Central infrastructure monitoring for Docker Swarm cluster.
+#
+# Components:
+#   - VictoriaMetrics: Time-series database (Prometheus + InfluxDB LP compatible)
+#   - vmagent: Scrape agent (Prometheus-compatible, remote-writes to VM)
+#   - Grafana 11.x: Dashboards at https://grafana.hornung-bn.de
+#   - node_exporter: Host metrics (CPU, RAM, disk, network) on all Swarm nodes
+#
+# Storage: CephFS (/mnt/cephfs/swarm-state/stack-monitoring/)
+#   victoriametrics-data/ — TSDB data (~10GB/year at homelab scale)
+#   vmagent-data/         — WAL buffer for remote-write retries
+#   grafana/              — Grafana SQLite DB, plugins, sessions
+#
+# Proxmox Integration (Phase 2):
+#   Proxmox Datacenter → Metric Server → Add InfluxDB:
+#     Server: 192.168.4.40, Port: 8428, Protocol: HTTP
+#   VictoriaMetrics accepts InfluxDB Line Protocol natively on /write.
+#
+# Prerequisites:
+#   1. CephFS dirs:
+#      mkdir -p /mnt/cephfs/swarm-state/stack-monitoring/{victoriametrics-data,vmagent-data,grafana}
+#      chown -R 472:472 /mnt/cephfs/swarm-state/stack-monitoring/grafana
+#   2. Docker secret:
+#      openssl rand -base64 24 | docker secret create grafana_monitoring_admin_password -
+#   3. DNS: grafana.hornung-bn.de → 192.168.4.40 (Traefik routing mesh)
+#
+# Deployment: ssh-deploy via GitOps (content-hash Docker configs)
+# =============================================================================
+
+version: '3.8'
+
+services:
+
+  # ===========================================================================
+  # VICTORIAMETRICS — Time-Series Database
+  # ===========================================================================
+  # Single-node instance. Accepts:
+  #   - Prometheus remote_write on /api/v1/write (from vmagent)
+  #   - InfluxDB Line Protocol on /write (from Proxmox native export)
+  #   - PromQL queries on /api/v1/query (from Grafana)
+  #
+  # Port 8428 published for Proxmox metric ingestion from outside Swarm.
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.106.1
+    hostname: victoriametrics
+    command:
+      - -storageDataPath=/victoria-metrics-data
+      - -retentionPeriod=12
+      - -httpListenAddr=:8428
+      - -influxTrimTimestamp=1s
+      - -search.latencyOffset=5s
+      - -search.maxUniqueTimeseries=50000
+      # Memory protection: cap VM caches at 60% of cgroup limit
+      - -memory.allowedPercent=60
+      # Prevent filling CephFS completely — reserve 1GB free space
+      - -storage.minFreeDiskSpaceBytes=1073741824
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-monitoring/victoriametrics-data:/victoria-metrics-data
+    ports:
+      - target: 8428
+        published: 8428
+        protocol: tcp
+        mode: ingress
+    networks:
+      - monitoring-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8428/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ===========================================================================
+  # VMAGENT — Scrape Agent
+  # ===========================================================================
+  # Scrapes all Prometheus endpoints, remote-writes to VictoriaMetrics.
+  # Config via Docker config (content-hash naming for zero-downtime updates).
+  # WAL buffer on CephFS ensures no data loss during VM restarts.
+
+  vmagent:
+    image: victoriametrics/vmagent:v1.106.1
+    hostname: vmagent
+    command:
+      - -promscrape.config=/etc/vmagent/prometheus-scrape.yml
+      - -remoteWrite.url=http://victoriametrics:8428/api/v1/write
+      - -remoteWrite.tmpDataPath=/vmagent-data
+      - -promscrape.suppressScrapeErrors
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-monitoring/vmagent-data:/vmagent-data
+    configs:
+      - source: prometheus_scrape
+        target: /etc/vmagent/prometheus-scrape.yml
+    secrets:
+      - ha_prometheus_lla_token
+    networks:
+      - monitoring-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8429/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - victoriametrics
+
+  # ===========================================================================
+  # NODE EXPORTER — Host Metrics (Global)
+  # ===========================================================================
+  # One instance per Swarm node. Exposes CPU, RAM, disk, network metrics.
+  # Host-mode port 9100 for direct scraping by vmagent.
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    hostname: "{{.Node.Hostname}}"
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+      - --collector.netclass.ignored-devices=^(veth|docker|br-|lo).*$$
+      - --no-collector.ipvs
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+    ports:
+      - target: 9100
+        published: 9100
+        protocol: tcp
+        mode: host
+    networks:
+      - monitoring-network
+    deploy:
+      mode: global
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+      restart_policy:
+        condition: any
+        delay: 10s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9100/metrics | head -1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================================================
+  # GRAFANA — Infrastructure Dashboards
+  # ===========================================================================
+  # Dedicated Grafana instance for infrastructure monitoring.
+  # Separate from rescue-tracker Grafana (different stack, domain, purpose).
+  # Provisioned datasource via Docker config.
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    hostname: grafana
+    entrypoint: ["/bin/sh", "/etc/grafana/grafana-entrypoint.sh"]
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_monitoring_admin_password
+      - GF_SERVER_ROOT_URL=https://grafana.hornung-bn.de
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      # Unified alerting (Grafana 11.x default, explicit for clarity)
+      - GF_UNIFIED_ALERTING_ENABLED=true
+      - GF_ALERTING_ENABLED=false
+    secrets:
+      - grafana_monitoring_admin_password
+      - grafana_telegram_bot_token
+      - grafana_telegram_chat_id
+    configs:
+      - source: grafana_datasources
+        target: /etc/grafana/provisioning/datasources/datasources.yml
+      - source: grafana_dashboards_provisioning
+        target: /etc/grafana/provisioning/dashboards/dashboards.yml
+      - source: dashboard_home_energy
+        target: /var/lib/grafana/dashboards/home-energy-correlation.json
+      - source: dashboard_ceph_storage
+        target: /var/lib/grafana/dashboards-infra/ceph-storage-cluster.json
+      - source: alerting_contact_points
+        target: /etc/grafana/provisioning/alerting/contact-points.yml
+      - source: alerting_notification_policies
+        target: /etc/grafana/provisioning/alerting/notification-policies.yml
+      - source: alerting_rules
+        target: /etc/grafana/provisioning/alerting/alert-rules.yml
+      - source: grafana_entrypoint
+        target: /etc/grafana/grafana-entrypoint.sh
+        mode: 0555
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-monitoring/grafana:/var/lib/grafana
+    networks:
+      - monitoring-network
+      - traefik_public
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      labels:
+        - traefik.enable=true
+        # HTTPS Router
+        - "traefik.http.routers.monitoring-grafana.rule=Host(`grafana.hornung-bn.de`)"
+        - traefik.http.routers.monitoring-grafana.entrypoints=websecure
+        - traefik.http.routers.monitoring-grafana.tls=true
+        - traefik.http.routers.monitoring-grafana.tls.certresolver=dns
+        - traefik.http.services.monitoring-grafana.loadbalancer.server.port=3000
+        - traefik.docker.network=traefik_public
+        # HTTP -> HTTPS redirect
+        - "traefik.http.routers.monitoring-grafana-http.rule=Host(`grafana.hornung-bn.de`)"
+        - traefik.http.routers.monitoring-grafana-http.entrypoints=web
+        - traefik.http.routers.monitoring-grafana-http.middlewares=monitoring-grafana-redirect
+        - traefik.http.middlewares.monitoring-grafana-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.monitoring-grafana-redirect.redirectscheme.permanent=true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ===========================================================================
+  # PBS EXPORTER — Proxmox Backup Server API metrics
+  # ===========================================================================
+  # Scrapes PBS REST API for backup job status, snapshot counts, verify status.
+  # Requires API token with Datastore.Audit privilege.
+  # Metrics: pbs_snapshot_count, pbs_snapshot_vm_last_timestamp, pbs_up, etc.
+
+  pbs-exporter:
+    image: ghcr.io/natrontech/pbs-exporter:v0.8.0
+    hostname: pbs-exporter
+    command:
+      - -pbs.endpoint=https://pbs.hornung-bn.de:8007
+      - -pbs.username=grafana@pbs
+      - -pbs.api.token.name=dashboard
+      - -pbs.api.token=c708f878-d930-4d94-9d5a-72cc288b50d0
+      - -pbs.insecure=true
+    networks:
+      - monitoring-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+      restart_policy:
+        condition: any
+        delay: 30s
+        window: 120s
+    healthcheck:
+      disable: true
+
+  # ===========================================================================
+  # BLACKBOX EXPORTER — HTTP/HTTPS probes + SSL cert-expiry
+  # ===========================================================================
+  # Probes all public-facing URLs for 2xx response and reports the TLS cert
+  # expiry timestamp via probe_ssl_earliest_cert_expiry.
+  # Scrape-Targets stehen in prometheus-scrape.yml (Relabeling-Pattern).
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    hostname: blackbox-exporter
+    command:
+      - --config.file=/etc/blackbox/blackbox-probes.yml
+    configs:
+      - source: blackbox_probes
+        target: /etc/blackbox/blackbox-probes.yml
+    networks:
+      - monitoring-network
+      - traefik_public   # damit traefik.hornung-bn.de etc. via Overlay erreichbar
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9115/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+# =============================================================================
+# CONFIGS (Docker Configs — immutable, content-hash naming)
+# =============================================================================
+configs:
+  prometheus_scrape:
+    name: prometheus_scrape_${PROMETHEUS_SCRAPE_HASH:-latest}
+    file: ./prometheus-scrape.yml
+
+  grafana_datasources:
+    name: grafana_datasources_${DATASOURCES_HASH:-latest}
+    file: ./datasources.yml
+
+  grafana_dashboards_provisioning:
+    name: grafana_dashboards_prov_${DASHBOARDS_HASH:-latest}
+    file: ./dashboards.yml
+
+  dashboard_home_energy:
+    name: dashboard_home_energy_${HOME_ENERGY_CORRELATION_HASH:-latest}
+    file: ./dashboards/home-energy-correlation.json
+
+  dashboard_ceph_storage:
+    name: dashboard_ceph_storage_${CEPH_STORAGE_CLUSTER_HASH:-latest}
+    file: ./dashboards/ceph-storage-cluster.json
+
+  alerting_contact_points:
+    name: alerting_contact_points_${CONTACT_POINTS_HASH:-latest}
+    file: ./alerting/contact-points.yml
+
+  alerting_notification_policies:
+    name: alerting_notification_policies_${NOTIFICATION_POLICIES_HASH:-latest}
+    file: ./alerting/notification-policies.yml
+
+  alerting_rules:
+    name: alerting_rules_${ALERT_RULES_HASH:-latest}
+    file: ./alerting/alert-rules.yml
+
+  grafana_entrypoint:
+    name: grafana_entrypoint_${GRAFANA_ENTRYPOINT_HASH:-latest}
+    file: ./grafana-entrypoint.sh
+
+  blackbox_probes:
+    name: blackbox_probes_${BLACKBOX_PROBES_HASH:-latest}
+    file: ./blackbox-probes.yml
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  monitoring-network:
+    driver: overlay
+    attachable: true
+
+  traefik_public:
+    external: true
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  grafana_monitoring_admin_password:
+    external: true
+  pbs_api_token:
+    external: true
+  ha_prometheus_lla_token:
+    external: true
+  grafana_telegram_bot_token:
+    external: true
+  grafana_telegram_chat_id:
+    external: true

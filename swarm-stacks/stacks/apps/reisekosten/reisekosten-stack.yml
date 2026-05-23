@@ -1,0 +1,170 @@
+# =============================================================================
+# Reisekostenabrechnung — Travel Expense Management
+# =============================================================================
+# Deploy: GitOps via ssh-deploy (webhooks.conf), content-hash for entrypoint-wrapper.
+# Self-hosted travel-expense application (Flask 3 + WeasyPrint PDF rendering).
+# PostgreSQL backend via Patroni HA cluster (pg-haproxy:5433).
+# CephFS for uploads (receipt PDFs/images) and generated PDFs.
+#
+# Access: https://reisekosten.hornung-bn.de
+#
+# WARNING: Phase 1 is currently PUBLIC without authentication. Reisekosten
+# data (addresses, amounts, IBAN) is sensitive — Phase 2 will add Authentik
+# OIDC + multi-user support. See planning doc for the migration roadmap.
+#
+# Deployment checklist:
+#   1. Create secrets:  reisekosten_db_password, reisekosten_secret_key
+#                        (created cluster-side via openssl rand | docker secret create)
+#   2. DB user:          Redeploy postgres-ha stack — db-init creates the
+#                        'reisekosten' DB and user automatically.
+#   3. CephFS dirs:      mkdir -p /mnt/cephfs/swarm-state/stack-reisekosten/{uploads,generated}
+#                        chown -R 1000:1000 /mnt/cephfs/swarm-state/stack-reisekosten
+#   4. DNS entry:        reisekosten.hornung-bn.de -> Traefik VIP (Technitium)
+#   5. Initial data:     Run migrate_sqlite_to_postgres.py once from a host
+#                        with access to both the local SQLite file and the
+#                        cluster Postgres (over Tailscale or SSH tunnel).
+#
+# Custom image: ghcr.io/thorstenhornung1/reisekosten:v2.6.0 — built by GHA
+# release-build.yml on tag push from the Reisekostenabrechnung repo
+# (release-please-driven). Pinned to a specific SemVer tag for reproducible
+# deploys; bump on each release.
+# =============================================================================
+
+version: "3.8"
+
+services:
+  reisekosten:
+    image: ghcr.io/thorstenhornung1/reisekosten:v2.6.0
+    hostname: reisekosten
+    # Wrapper assembles DATABASE_URL from the db-password secret, then execs
+    # the image's default CMD (gunicorn).
+    entrypoint: ["/bin/sh", "/entrypoint-wrapper.sh"]
+    command: ["gunicorn", "-c", "gunicorn.conf.py", "app:app"]
+    networks:
+      - traefik_public
+      - postgres-network
+    secrets:
+      - reisekosten_db_password
+      - reisekosten_secret_key
+      # OIDC client credentials — both optional; entrypoint-wrapper.sh
+      # detects their absence and falls back to legacy single-user mode.
+      - reisekosten_oidc_client_id
+      - reisekosten_oidc_client_secret
+      # SCIM 2.0 provisioning bearer token (#90) — optional; the wrapper
+      # exports it as SCIM_BEARER_TOKEN. Absent -> /scim/v2 stays 404.
+      - REISEKOSTEN_SCIM_BEARER_TOKEN
+    configs:
+      - source: reisekosten_entrypoint
+        target: /entrypoint-wrapper.sh
+        mode: 0555
+    environment:
+      # Postgres routing — see entrypoint-wrapper.sh for assembly
+      POSTGRES_HOST: pg-haproxy
+      POSTGRES_PORT: "5433"
+      POSTGRES_DB: reisekosten
+      POSTGRES_USER: reisekosten
+      # Authentik OIDC discovery — authlib pulls all endpoints from here.
+      # When client_id secret is unset, the app ignores these vars.
+      AUTHENTIK_DISCOVERY_URL: "https://auth.hornung-bn.de/application/o/reisekosten/.well-known/openid-configuration"
+      AUTHENTIK_END_SESSION_URL: "https://auth.hornung-bn.de/application/o/reisekosten/end-session/"
+      # Flask
+      FLASK_DEBUG: "0"
+      PYTHONUNBUFFERED: "1"
+      # Locale (matches Dockerfile-installed de_DE.UTF-8)
+      LANG: de_DE.UTF-8
+      LC_ALL: de_DE.UTF-8
+      TZ: Europe/Berlin
+    volumes:
+      # Receipts, attachments, generated PDFs — persistent on CephFS
+      - /mnt/cephfs/swarm-state/stack-reisekosten/uploads:/app/uploads
+      - /mnt/cephfs/swarm-state/stack-reisekosten/generated:/app/generated
+    # Bounded log size — default json-file driver grows unbounded and can
+    # fill the host root partition over weeks of crashloop or normal traffic.
+    # 20 MB × 3 rotations = ~60 MB worst-case per container.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    deploy:
+      replicas: 1
+      # Phase 1: single replica because the JSON-blob upsert pattern in
+      # ExpenseStore is not yet safe for true multi-instance concurrency
+      # (the threading.Lock only covers in-process). HA via replicas comes
+      # in Phase 2 alongside the multi-user refactor.
+      placement:
+        constraints:
+          - node.labels.app == true
+      # WeasyPrint can spike 200-500 MB per concurrent PDF render. With
+      # gunicorn 2 workers × 4 threads = up to 8 concurrent renders the
+      # container can OOM-kill its host (and crash the Patroni leader if
+      # co-located). Cap at 1.5 GB; reserve 512 MB to keep scheduler honest.
+      resources:
+        limits:
+          memory: 1500M
+        reservations:
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 10s
+        max_attempts: 0
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+      labels:
+        # Traefik routing
+        - "traefik.enable=true"
+        - "traefik.swarm.network=traefik_public"
+        - "traefik.http.services.reisekosten.loadbalancer.server.port=8000"
+        # HTTPS router
+        - "traefik.http.routers.reisekosten.rule=Host(`reisekosten.hornung-bn.de`)"
+        - "traefik.http.routers.reisekosten.entrypoints=websecure"
+        - "traefik.http.routers.reisekosten.tls=true"
+        - "traefik.http.routers.reisekosten.tls.certresolver=dns"
+        - "traefik.http.routers.reisekosten.service=reisekosten"
+        # HTTP -> HTTPS redirect
+        - "traefik.http.routers.reisekosten-http.rule=Host(`reisekosten.hornung-bn.de`)"
+        - "traefik.http.routers.reisekosten-http.entrypoints=web"
+        - "traefik.http.routers.reisekosten-http.middlewares=https-redirect@file"
+        - "traefik.http.routers.reisekosten-http.service=reisekosten"
+
+networks:
+  traefik_public:
+    external: true
+  postgres-network:
+    external: true
+    name: postgres-ha-stack_postgres-network
+
+secrets:
+  reisekosten_db_password:
+    external: true
+    # SINGLE SOURCE OF TRUTH: external Docker secret name is exactly
+    # `reisekosten_db_password` (key == external name, NO version pin).
+    # This MUST match what postgres-ha-stack db-init.sh reads from
+    # /run/secrets/reisekosten_db_password when it runs
+    # `ALTER USER reisekosten WITH PASSWORD ...`. db-init is the
+    # authoritative password owner: every Patroni restart re-asserts the
+    # role password from THIS secret. Pinning a versioned alias (_v5)
+    # here desyncs the app from the DB role on the next maintenance
+    # reboot (incident swarm-stacks#37). To rotate the password:
+    # update the value of the `reisekosten_db_password` secret in
+    # Portainer (same name) and redeploy postgres-ha — never introduce
+    # _vN suffixes for this secret again. The compose-internal alias
+    # stays `reisekosten_db_password` so /run/secrets/reisekosten_db_password
+    # (and the entrypoint script) needs no changes.
+  reisekosten_secret_key:
+    external: true
+  reisekosten_oidc_client_id:
+    external: true
+  reisekosten_oidc_client_secret:
+    external: true
+  REISEKOSTEN_SCIM_BEARER_TOKEN:
+    external: true
+
+configs:
+  reisekosten_entrypoint:
+    # The GHA deploy workflow generates the hash env-var from the filename:
+    # entrypoint-wrapper.sh → ENTRYPOINT_WRAPPER_HASH. Use that exact name.
+    name: reisekosten_entrypoint_${ENTRYPOINT_WRAPPER_HASH:-latest}
+    file: ./entrypoint-wrapper.sh

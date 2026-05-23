@@ -6,17 +6,16 @@
 #   \\files.hornung-bn.de\Archiv      — Read Paperless archive (thorsten.hornung)
 #
 # Authentication: tdbsam (NT-Hashes synced from Authentik API every 5 min)
-# User/Group resolution: SSSD → Authentik LDAP Outpost
+# User/Group resolution: Local (no SSSD, no LDAP Outpost dependency)
 # CephFS volumes shared with Paperless stack (same UID/GID 1000).
 #
 # Access: smb://files.hornung-bn.de (DNS → 192.168.4.40 / docker-infra-1)
 #
 # Prerequisites:
-#   1. Authentik LDAP Outpost configured (Port 3389)
-#   2. Authentik Expression Policy 'samba-nt-hash-sync' bound to password flows
-#   3. Docker Secrets: samba_ldap_bind_password, samba_authentik_api_token
-#   4. DNS: files.hornung-bn.de → 192.168.4.40
-#   5. CephFS dirs: /mnt/cephfs/swarm-state/stack-paperless/{consume,media}
+#   1. Authentik Expression Policy 'samba-nt-hash-sync' bound to password flows
+#   2. Docker Secret: samba_authentik_api_token
+#   3. DNS: files.hornung-bn.de → 192.168.4.40
+#   4. CephFS dirs: /mnt/cephfs/swarm-state/stack-paperless/{consume,media}
 #
 # Deployment: ssh-deploy (Docker Config content-hash for smb.conf)
 # =============================================================================
@@ -26,21 +25,18 @@ services:
     image: ghcr.io/thorstenhornung1/swarm-stacks/samba-authentik:latest
     hostname: samba
     configs:
-      - source: smb_conf_${SMB_CONF_HASH:-latest}
+      - source: smb_conf_${SMB_HASH:-latest}
         target: /etc/samba/smb.conf
         mode: 0644
     secrets:
-      - samba_ldap_bind_password
       - samba_authentik_api_token
     environment:
-      LDAP_URI: "ldap://192.168.4.40:3389"
-      LDAP_SEARCH_BASE: "dc=hornung-bn,dc=de"
-      LDAP_BIND_DN: "cn=akadmin,ou=users,dc=hornung-bn,dc=de"
-      LDAP_BIND_PASSWORD_FILE: "/run/secrets/samba_ldap_bind_password"
       AUTHENTIK_URL: "https://auth.hornung-bn.de"
       AUTHENTIK_TOKEN_FILE: "/run/secrets/samba_authentik_api_token"
+      SAMBA_USERS: "thorsten.hornung,stephanie.hornung,helena.hornung"
       PAPERLESS_UID: "1000"
       PAPERLESS_GID: "1000"
+      FAMILY_GID: "2000"
     volumes:
       - /mnt/cephfs/swarm-state/stack-paperless/consume:/shares/Posteingang
       - /mnt/cephfs/swarm-state/stack-paperless/media/documents/archive:/shares/Archiv:ro
@@ -49,14 +45,12 @@ services:
         published: 445
         protocol: tcp
         mode: host
-    networks:
-      - authentik-stack_default
     deploy:
       mode: replicated
       replicas: 1
       placement:
         constraints:
-          - node.hostname == docker-infra-1
+          - node.role == manager
       resources:
         limits:
           cpus: '0.5'
@@ -75,18 +69,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
-
-networks:
-  authentik-stack_default:
-    external: true
+      start_period: 30s
 
 configs:
-  smb_conf_${SMB_CONF_HASH:-latest}:
+  smb_conf_${SMB_HASH:-latest}:
     file: ./smb.conf
 
 secrets:
-  samba_ldap_bind_password:
-    external: true
   samba_authentik_api_token:
     external: true

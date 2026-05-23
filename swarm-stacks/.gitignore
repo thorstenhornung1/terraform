@@ -26,3 +26,7 @@ secrets.yml
 # Local overrides
 docker-compose.override.yml
 *-local.yml
+
+# Python bytecode (helpers scripts)
+helpers/__pycache__/
+*.pyc

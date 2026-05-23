@@ -1,0 +1,1544 @@
+# =============================================================================
+# Grafana Alerting — Alert Rules
+# =============================================================================
+# Provisioned via Docker config at /etc/grafana/provisioning/alerting/
+#
+# All queries target VictoriaMetrics (Prometheus-compatible PromQL).
+# Metric names verified against prometheus-scrape.yml job definitions.
+#
+# Design principles:
+#   - Only alert on conditions requiring human attention
+#   - Generous pending periods to avoid flap noise (5min warn, 2min crit)
+#   - Group by infrastructure component for triage clarity
+#   - Prefer rate/trend queries over instantaneous spikes
+# =============================================================================
+apiVersion: 1
+
+groups:
+
+  # ===========================================================================
+  # DOCKER SWARM — Node Health
+  # ===========================================================================
+  # Source: node-exporter on 192.168.4.40-42 (job=node-exporter)
+  # Instances: docker-infra-1, docker-infra-2, docker-infra-3
+
+  - orgId: 1
+    name: Docker Swarm
+    folder: Infrastructure
+    interval: 60s
+    rules:
+
+      # --- Node unreachable (scrape target down) ---
+      - uid: swarm-node-down
+        title: Swarm node down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: up{job="node-exporter"} == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 2m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Swarm node {{ $labels.instance }} is unreachable"
+          description: "node_exporter scrape failed for 2+ minutes. Check if VM is running and Docker is healthy."
+
+      # --- Root filesystem > 90% ---
+      - uid: swarm-disk-critical
+        title: Disk space critical
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                100 - (
+                  node_filesystem_avail_bytes{job="node-exporter", mountpoint="/", fstype!="tmpfs"}
+                  / node_filesystem_size_bytes{job="node-exporter", mountpoint="/", fstype!="tmpfs"}
+                  * 100
+                ) > 90
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk usage > 90% on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: "Root filesystem is critically full. Docker images, logs, or data disk overflow are common causes."
+
+      # --- Root filesystem > 80% ---
+      - uid: swarm-disk-warning
+        title: Disk space warning
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                100 - (
+                  node_filesystem_avail_bytes{job="node-exporter", mountpoint="/", fstype!="tmpfs"}
+                  / node_filesystem_size_bytes{job="node-exporter", mountpoint="/", fstype!="tmpfs"}
+                  * 100
+                ) > 80
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage > 80% on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: "Investigate before it becomes critical. Check docker system prune or log rotation."
+
+      # --- Data disk (/srv/data) > 85% ---
+      - uid: swarm-datadisk-warning
+        title: Data disk filling up
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                100 - (
+                  node_filesystem_avail_bytes{job="node-exporter", mountpoint="/srv/data", fstype!="tmpfs"}
+                  / node_filesystem_size_bytes{job="node-exporter", mountpoint="/srv/data", fstype!="tmpfs"}
+                  * 100
+                ) > 85
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Data disk > 85% on {{ $labels.instance }}"
+          description: "Docker data-root lives on /srv/data. Run docker system prune or check container volumes."
+
+      # --- Sustained high CPU (>85% for 15 min) ---
+      - uid: swarm-cpu-high
+        title: Sustained high CPU usage
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                100 - (avg by (instance) (rate(node_cpu_seconds_total{job="node-exporter", mode="idle"}[5m])) * 100) > 85
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 15m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU > 85% sustained on {{ $labels.instance }}"
+          description: "High CPU for 15+ minutes. Check docker stats for runaway containers."
+
+      # --- Sustained high memory (30-min avg > 90% for 20 min) ---
+      # 2026-04-24: avg_over_time[30m] smoothed damit Spikes von strukturell-hoch
+      # Baseline-Containers (dock01/Legacy) kein Rauschen machen. Nur wenn
+      # wirklich 30min lang durchgängig Mittelwert >90% UND das 20min anhält.
+      # Paart mit swarm-node-oom-kill (kritisch, deterministisch) — dies ist
+      # der pre-event warning, oom-kill der post-event-critical-Alert.
+      - uid: swarm-memory-high
+        title: Memory usage sustained high
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                avg_over_time((100 - (node_memory_MemAvailable_bytes{job="node-exporter"} / node_memory_MemTotal_bytes{job="node-exporter"} * 100))[30m:1m]) > 90
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 20m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory avg(30m) > 90% on {{ $labels.instance }} (sustained 20+ min)"
+          description: "Node hat durchgehend hohe Memory-Baseline. Siehe auch swarm-node-oom-kill falls bereits OOMs passiert. Strukturelle Fixe: Container-Memory-Limits anpassen, Legacy-Services reduzieren, Node-RAM vergrößern."
+
+      # --- OOM-Kill detected on any Swarm node (post-event critical) ---
+      # 2026-04-24: Kernel-deterministisches Signal — node_vmstat_oom_kill
+      # steigt nur wenn der Kernel tatsächlich einen Prozess gekillt hat.
+      # Kein Fehlalarm möglich. Feuert sofort (for: 0s) weil jede einzelne
+      # OOM-Instanz operativ relevant ist. Analog zu frigate-lxc-oom aus der
+      # Frigate NVR Group, aber für alle Swarm-Nodes.
+      - uid: swarm-node-oom-kill
+        title: Swarm node OOM-killed a process
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                increase(node_vmstat_oom_kill{job="node-exporter"}[10m]) > 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 0s
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "OOM-kill on {{ $labels.instance }} in last 10min"
+          description: "Kernel hat einen Prozess gekillt. Check 'dmesg | grep -i oom' auf dem Node für killed process + anon-rss. Siehe auch swarm-memory-high (pre-event warning)."
+
+  # ===========================================================================
+  # CEPH STORAGE — Cluster Health
+  # ===========================================================================
+  # Source: ceph mgr prometheus module on 192.168.12.10-12 (job=ceph)
+  # Only the active mgr responds; honor_labels=true handles failover.
+
+  - orgId: 1
+    name: Ceph Storage
+    folder: Infrastructure
+    interval: 60s
+    rules:
+
+      # --- Ceph health not OK ---
+      # ceph_health_status: 0=OK, 1=WARN, 2=ERR
+      - uid: ceph-health-error
+        title: Ceph cluster unhealthy
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: ceph_health_status >= 2
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 2m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ceph cluster is in HEALTH_ERR state"
+          description: "Data integrity at risk. Check ceph status on any Proxmox node immediately."
+
+      # --- Ceph health warning (sustained) ---
+      # 2026-04-24: min_over_time + längeres for, weil BlueStore-slow-op-alerts
+      # intrinsisch im ~10-15min-Rhythmus flappen (osd.2 NVMe-Thermal-Throttling
+      # auf pve01, nvme0n1 Sensor 2 = 73°C idle → unter Last Throttle → slow ops).
+      # Nur firen wenn WARN durchgehend für 30min+20min=50min — filtert die
+      # thermal-throttle-Oszillation, lässt echte sustained issues durch.
+      - uid: ceph-health-warning
+        title: Ceph cluster warning
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: min_over_time(ceph_health_status[15m]) == 1
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 20m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ceph cluster is in HEALTH_WARN state (sustained)"
+          description: "HEALTH_WARN für 15+20=35min durchgehend. Check 'ceph health detail'. Bei BLUESTORE_SLOW_OP_ALERT auf osd.2 (pve01 nvme0n1): thermal throttling (Sensor 2 Warning), NVMe braucht Heatsink/bessere Kühlung."
+
+      # --- OSD down ---
+      - uid: ceph-osd-down
+        title: Ceph OSD down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: count(ceph_osd_up == 0) > 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 3m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "One or more Ceph OSDs are down"
+          description: "Data redundancy reduced. With 3 OSDs and replication factor 3, one OSD down means no further failures tolerated."
+
+      # --- Ceph pool near full (>80%) ---
+      - uid: ceph-pool-nearfull
+        title: Ceph pool filling up
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                ceph_pool_percent_used > 0.85
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ceph pool {{ $labels.pool_id }} > 85% full"
+          description: "Ceph enters read-only at ~95%. Clean up or expand storage."
+
+  # ===========================================================================
+  # POSTGRESQL HA — Patroni Cluster
+  # ===========================================================================
+  # Source: Patroni /metrics on 192.168.4.40-42:8008 (job=patroni)
+  # Instances: postgres-1, postgres-2, postgres-3
+
+  - orgId: 1
+    name: PostgreSQL HA
+    folder: Databases
+    interval: 60s
+    rules:
+
+      # --- No Patroni leader ---
+      - uid: patroni-no-leader
+        title: Patroni has no leader
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                count(patroni_primary{job="patroni"} == 1) == 0
+                or
+                absent(patroni_primary{job="patroni"})
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 2m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Patroni cluster has no running leader"
+          description: "All PostgreSQL writes will fail. Check Patroni REST API on all nodes: curl http://<node>:8008/"
+
+      # --- Patroni node down ---
+      - uid: patroni-node-down
+        title: Patroni node unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: up{job="patroni"} == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 3m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Patroni node {{ $labels.instance }} is unreachable"
+          description: "Patroni REST API not responding. Check if the postgres container is running on the host."
+
+      # --- Replication lag > 100MB (per replica, replay lag) ---
+      # Leader's xlog_location is taken as a label-free scalar; subtracted from each
+      # replica's replayed_location so the result keeps the instance label.
+      # `and on(instance) patroni_replica == 1` filters the leader (whose
+      # replayed≈xlog so it would otherwise self-alert with value 0).
+      # `and on(instance) patroni_xlog_replayed_location > 0` filters fresh-bootstrap
+      # replicas (pg_basebackup not yet done → replayed=0 → would show full LSN
+      # counter as "lag" which is semantically misleading). See issue #10.
+      - uid: patroni-replication-lag
+        title: PostgreSQL replication lag high
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                (
+                  scalar(max(patroni_xlog_location{job="patroni"}))
+                  - patroni_xlog_replayed_location{job="patroni"}
+                ) > 104857600
+                and on(instance) patroni_replica{job="patroni"} == 1
+                and on(instance) patroni_xlog_replayed_location{job="patroni"} > 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Replication lag > 100MB on {{ $labels.instance }}"
+          description: "Replica is falling behind in WAL replay. Could indicate network issues, slow disk, or heavy write load. Consider curl -X POST http://{{ $labels.instance }}:8008/reinitialize if lag keeps growing."
+
+      # --- Replica not streaming from leader (receive lag > 16MB) ---
+      # Catches the failure mode found in the 2026-05-07 night incident: replicas
+      # had `replication_state != streaming`, so failover was no longer possible
+      # but no alert fired. Compares leader's xlog_location to each replica's
+      # received_location — if the gap exceeds one WAL segment (16 MB), the WAL
+      # stream is effectively broken (replica is catching up via archive/basebackup
+      # or has no connection to leader).
+      # Bootstrap-filter (received_location > 0) excludes fresh replicas in
+      # pg_basebackup phase — those have received=0 by definition. See issue #10.
+      - uid: patroni-replica-not-streaming
+        title: Patroni replica not streaming from leader
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                (
+                  scalar(max(patroni_xlog_location{job="patroni"}))
+                  - patroni_xlog_received_location{job="patroni"}
+                ) > 16777216
+                and on(instance) patroni_replica{job="patroni"} == 1
+                and on(instance) patroni_xlog_received_location{job="patroni"} > 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 3m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Replica {{ $labels.instance }} not streaming (receive lag > 16MB)"
+          description: "Replica is not receiving WAL from leader — streaming replication is broken. Failover from this replica may be impossible. Verify on leader: SELECT * FROM pg_stat_replication; — if no row for this replica, restart Patroni or reinitialize: curl -X POST http://{{ $labels.instance }}:8008/reinitialize"
+
+      # --- Replica bootstrapping (pg_basebackup phase) ---
+      # Provides INFO-severity visibility for the normal post-restart bootstrap
+      # window without alarming. A replica with patroni_replica==1 and
+      # replayed_location==0 is in pg_basebackup. For our cluster this typically
+      # finishes within ~5 min (DB cluster ~2 GB total). If it stays in this
+      # state for 5+ min the alert fires — useful to spot stuck bootstraps
+      # (e.g. network blip between replica and master, slow disk on target).
+      # See issue #10.
+      - uid: patroni-replica-bootstrapping
+        title: Patroni replica is bootstrapping (pg_basebackup)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                patroni_replica{job="patroni"} == 1
+                and on(instance) patroni_xlog_replayed_location{job="patroni"} == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: info
+        annotations:
+          summary: "Replica {{ $labels.instance }} is bootstrapping"
+          description: "Replica has replayed_location=0 for 5+ min — pg_basebackup from leader is running (normal after a force-restart) or is stuck. Expected duration for our ~2 GB cluster: 1-5 min. Verify state: curl http://{{ $labels.instance }}:8008/patroni — should show state='creating replica' or similar transient state. If stuck, check leader-replica connectivity on VLAN 12 and disk I/O on the replica's host."
+
+      # --- Postgres backend crash-loop detection ---
+      # Catches the failure mode that the LSN-gap-based rules are blind to:
+      # if the postmaster restarts repeatedly (SIGILL, SIGSEGV, OOM, etc.),
+      # `pg_postmaster_start_time_seconds` jumps each crash. Normal ops never
+      # see this — postgres doesn't auto-restart by itself. 3+ restarts in 10
+      # min is a definitive crash loop signal.
+      # See incident swarm-stacks#9 (pgvector AVX-512 SIGILL) — that crash
+      # loop ran undetected by all existing rules until manual investigation.
+      - uid: postgres-crash-loop-detected
+        title: PostgreSQL postmaster restart loop detected
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                changes(pg_postmaster_start_time_seconds[10m]) > 2
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 2m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postmaster on {{ $labels.instance }} restarted 3+ times in 10 min"
+          description: "PostgreSQL backend is in a crash loop. Check `docker logs <postgres-container> | grep -E 'signal|terminated|FATAL'` for SIGILL/SIGSEGV/OOM. Likely root causes: a buggy SIMD code path (see #9 history), bad query plan, memory pressure, or a config change requiring restart. If the exporter is scaled to 0 (e.g. as workaround during incident), this rule cannot fire — exporter being off is itself an obvious red flag."
+
+      # --- Timeline divergence (split-brain indicator) ---
+      - uid: patroni-timeline-diverged
+        title: Patroni timeline diverged
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                count(count by (patroni_postgres_timeline) (patroni_postgres_timeline{job="patroni"})) > 1
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Patroni nodes are on different timelines"
+          description: "Possible split-brain or failed failover. Reinitialize the lagging replica: curl -X POST http://<replica>:8008/reinitialize"
+
+  # ===========================================================================
+  # ETCD CLUSTER — Distributed Consensus
+  # ===========================================================================
+  # Source: etcd metrics on :2379 (job=etcd)
+  # 5 nodes: etcd-1..5, quorum requires 3/5
+
+  - orgId: 1
+    name: etcd Cluster
+    folder: Infrastructure
+    interval: 60s
+    rules:
+
+      # --- etcd has no leader ---
+      - uid: etcd-no-leader
+        title: etcd cluster has no leader
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                count(etcd_server_has_leader{job="etcd"} == 1) == 0
+                or
+                absent(etcd_server_has_leader{job="etcd"})
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 2m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "etcd cluster has lost its leader"
+          description: "Patroni depends on etcd for leader election. All PostgreSQL failovers blocked. Check etcdctl endpoint health on all 5 nodes."
+
+      # --- etcd node down (less than 5 responding) ---
+      - uid: etcd-member-down
+        title: etcd member unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: up{job="etcd"} == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "etcd member {{ $labels.instance }} is unreachable"
+          description: "5-node cluster tolerates 2 failures (quorum=3). Investigate soon to maintain fault tolerance."
+
+      # --- etcd database size > 500MB (default limit is 2GB) ---
+      - uid: etcd-db-size
+        title: etcd database growing large
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                etcd_mvcc_db_total_size_in_bytes{job="etcd"} > 524288000
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 30m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "etcd database > 500MB on {{ $labels.instance }}"
+          description: "etcd default quota is 2GB. Run etcdctl compact and defrag to reclaim space."
+
+  # ===========================================================================
+  # BACKUPS — Proxmox Backup Server
+  # ===========================================================================
+  # Source: pbs-exporter on pbs-exporter:10019 (job=pbs-exporter)
+
+  - orgId: 1
+    name: Backups
+    folder: Infrastructure
+    interval: 300s
+    rules:
+
+      # --- PBS unreachable ---
+      - uid: pbs-down
+        title: PBS exporter unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: up{job="pbs-exporter"} == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Proxmox Backup Server is unreachable"
+          description: "PBS exporter cannot connect to pbs.hornung-bn.de. Check if PBS service is running."
+
+      # --- Backup older than 48 hours for any VM ---
+      # Archive-Namespace "Backup" (retired VMs wie HAOS VM 101) wird per
+      # namespace-Filter ausgeschlossen. Neue VMs in diesem NS werden
+      # automatisch still; neu angelegte Produktiv-VMs mit wiederverwendeter
+      # ID (z.B. 101) landen im Root-NS und werden wieder alertiert.
+      - uid: pbs-backup-stale
+        title: Backup older than 48h
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                (time() - last_over_time(pbs_snapshot_vm_last_timestamp{namespace!="Backup",vm_name!~"haos-2025-10|haos12.2|seaweed3|swarmpit|ubuntusetup|VM 999|dock02|ARCHIVED.*|infisical-bootstrap",vm_id!~"frigate-recordings-archive|swarm-backup-client|9000"}[15m])) > 172800
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backup >48h: {{ $labels.vm_name }} ({{ $labels.vm_id }})"
+          description: "No successful backup in 2 days. Check PBS backup jobs."
+
+      # --- Backup older than 26 hours (missed daily) ---
+      # Siehe pbs-backup-stale: Archiv-NS "Backup" ist per namespace-Filter
+      # ausgeschlossen, damit retirte VMs (z.B. HAOS VM 101) keinen Alert
+      # mehr triggern, neu vergebene IDs im Root-NS aber weiterhin alertiert
+      # werden.
+      - uid: pbs-backup-missed-daily
+        title: Daily backup missed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                (time() - last_over_time(pbs_snapshot_vm_last_timestamp{namespace!="Backup",vm_name!~"haos-2025-10|haos12.2|seaweed3|swarmpit|ubuntusetup|VM 999|dock02|ARCHIVED.*|infisical-bootstrap",vm_id!~"frigate-recordings-archive|swarm-backup-client|9000"}[15m])) > 93600
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 30m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backup >26h: {{ $labels.vm_name }} ({{ $labels.vm_id }})"
+          description: "Last backup is more than 26h old. Daily jobs usually run at 02:00. Check PBS job logs."
+
+  # ===========================================================================
+  # HOME ASSISTANT — Smart Home Platform
+  # ===========================================================================
+  # Source: HA Prometheus integration on 192.168.2.5:8123 (job=homeassistant)
+  # Metrics: homeassistant_entity_available, homeassistant_binary_sensor_state
+
+  - orgId: 1
+    name: Home Assistant
+    folder: Smart Home
+    interval: 60s
+    rules:
+
+      # --- Home Assistant itself unreachable ---
+      - uid: ha-down
+        title: Home Assistant unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: up{job="homeassistant"} == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 3m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Home Assistant is unreachable"
+          description: "HA Prometheus endpoint not responding on 192.168.2.5:8123. Check VM and HA container."
+
+      # --- Zigbee2MQTT bridge offline ---
+      - uid: ha-z2m-offline
+        title: Zigbee2MQTT bridge offline
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                homeassistant_binary_sensor_state{entity="binary_sensor.zigbee2mqtt_bridge_connection_state"} == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Zigbee2MQTT bridge is offline"
+          description: "All Zigbee devices (lights, sensors, locks) are unreachable. Check Z2M addon and coordinator USB stick."
+
+      # --- HA update available ---
+      - uid: ha-update-available
+        title: Home Assistant update available
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                homeassistant_update_state{entity=~"update.home_assistant.*"} == 1
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 60m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: info
+        annotations:
+          summary: "Home Assistant update available"
+          description: "A new HA version is available. Review release notes before updating."
+
+  # ===========================================================================
+  # VICTORIAMETRICS — Self-Monitoring
+  # ===========================================================================
+  # Source: victoriametrics:8428 (job=victoriametrics)
+
+  - orgId: 1
+    name: VictoriaMetrics
+    folder: Monitoring
+    interval: 60s
+    rules:
+
+      # --- VM slow inserts (ingestion bottleneck) ---
+      - uid: vm-slow-inserts
+        title: VictoriaMetrics slow inserts
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                rate(vm_slow_inserts_total{job="victoriametrics"}[5m]) > 0.1
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "VictoriaMetrics is experiencing slow inserts"
+          description: "Ingestion is bottlenecked — likely CephFS I/O latency or memory pressure. Check VM memory limits and CephFS health."
+
+      # --- VM high memory usage (>1.5GB of 2GB limit) ---
+      - uid: vm-memory-high
+        title: VictoriaMetrics memory high
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                process_resident_memory_bytes{job="victoriametrics"} > 1610612736
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "VictoriaMetrics using > 1.5GB RAM (limit: 2GB)"
+          description: "Container may get OOM-killed. Consider increasing memory limit or reducing retention/cardinality."
+
+      # --- Scrape target down (any job) ---
+      - uid: vm-scrape-target-down
+        title: Monitoring scrape target down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                up{job!~"ceph|homeassistant"} == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scrape target {{ $labels.job }}/{{ $labels.instance }} is down"
+          description: "Metrics collection interrupted. Specific component alerts may not fire while target is unreachable."
+
+  # ===========================================================================
+  # FRIGATE NVR — Camera Health & Detection
+  # ===========================================================================
+  # Source: Frigate Prometheus metrics on frigate.hornung-bn.de:443 (job=frigate)
+  # LXC 4502 on pve03 with OpenVINO iGPU
+
+  - orgId: 1
+    name: Frigate NVR
+    folder: Infrastructure
+    interval: 60s
+    rules:
+
+      # --- Frigate unreachable ---
+      # WICHTIG: Expression MUSS immer einen Wert liefern ("up{...}" ohne
+      # "== 0"), sonst ergibt OK-Zustand (up=1) ein leeres Query-Result ->
+      # Grafana sieht noData -> noDataState "Alerting" feuert als False
+      # Positive. Deshalb: "up{job='frigate'}" + Threshold "lt 1". Dann
+      # ist noData echt nur bei fehlender Metric (Scrape-Ausfall, Target weg).
+      #
+      # Smoothing (2026-04-23): min_over_time(...[5m]) liefert 0 nur wenn ALLE
+      # Samples der letzten 5min 0 waren — einzelne Scrape-Misses (z.B.
+      # Container-Restart nach OOM-Kill, Dauer ~3-5min) feuern keinen Alert
+      # mehr. Plus for: 5m — echter Ausfall muss weitere 5min anhalten.
+      # Frigate-Restart <10min total = kein Alert. Erst echter Ausfall firet.
+      - uid: frigate-down
+        title: Frigate NVR unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: min_over_time(up{job="frigate"}[5m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "Frigate NVR is unreachable"
+          description: "Frigate metrics endpoint not responding for 10+ min (5min min_over_time window + 5min for). Check LXC 4502 on pve03, CephFS mount, Docker containers, and OOM-kill history."
+
+      # --- Camera detection stopped (any camera with 0 FPS for 5 min) ---
+      - uid: frigate-camera-no-detection
+        title: Frigate camera not detecting
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                frigate_camera_fps{job="frigate"} == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Frigate camera {{ $labels.camera_name }} has 0 FPS"
+          description: "Camera feed is not being received. Check camera network, RTSP stream, or ffmpeg process in Frigate logs."
+
+      # --- OOM-kill watchdog on pve03 (Frigate-LXC Memory-Druck) ---
+      # Signal aus node-exporter: node_vmstat_oom_kill steigt bei jedem OOM.
+      # 2026-04-23: 4 OOM-Kills in 48h auf frigate.capture (2.5-4.8GB anon-rss).
+      # LXC 4502 wurde auf 12 GiB + 4 GiB swap angehoben — dieser Alert warnt,
+      # falls der Workload trotzdem wieder an die neue Grenze läuft.
+      - uid: frigate-lxc-oom
+        title: OOM-kill on pve03 (Frigate host)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                increase(node_vmstat_oom_kill{instance=~"pve03.*|192\\.168\\.4\\.42.*"}[10m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 0s
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "OOM-kill on pve03 in last 10min — likely Frigate LXC 4502"
+          description: "node_vmstat_oom_kill increased. Frühwarnung: Frigate-Container wurde vom Kernel gekillt. Check 'pct exec 4502 -- dmesg | tail' für killed processes + anon-rss values. Bei wiederholtem Auftreten: memory/swap im LXC weiter anheben (aktuell 12 GiB + 4 GiB swap)."
+
+  # ===========================================================================
+  # TLS / SSL Certificate Expiry — all public-facing HTTPS endpoints
+  # ===========================================================================
+  # Source: blackbox_exporter probes configured in prometheus-scrape.yml
+  # Metric: probe_ssl_earliest_cert_expiry (unix timestamp of earliest cert)
+  # Covers: photos, auth, vault, paperless, n8n, grafana, traefik, uptime,
+  #         frigate, admin.frigate (see prometheus-scrape.yml blackbox-https job)
+
+  - orgId: 1
+    name: TLS Certificates
+    folder: Infrastructure
+    interval: 60s
+    rules:
+
+      # --- Cert valid for < 14 days ---
+      - uid: tls-cert-expiring-warn
+        title: SSL cert expiring soon
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                (probe_ssl_earliest_cert_expiry{job="blackbox-https"} - time()) / 86400 < 14
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 30m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "SSL cert for {{ $labels.instance }} expires in < 14 days"
+          description: "Let's Encrypt auto-renewal should have fired by now. Check Traefik acme.json, Cloudflare API token validity, and LE rate-limits."
+
+      # --- Cert valid for < 3 days (critical) ---
+      - uid: tls-cert-expiring-crit
+        title: SSL cert expiring critical
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                (probe_ssl_earliest_cert_expiry{job="blackbox-https"} - time()) / 86400 < 3
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "SSL cert for {{ $labels.instance }} expires in < 3 days — IMMEDIATE ACTION"
+          description: "Auto-renewal is broken. Investigate Traefik + Cloudflare DNS-01 challenge. Manual workaround: reissue via Traefik restart or LE CLI."
+
+      # --- Probe itself failed (could mean DNS/network, not just cert) ---
+      - uid: tls-probe-failed
+        title: HTTPS probe failing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 1200
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                last_over_time(probe_success{job="blackbox-https"}[15m]) == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 1200
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 20m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTPS probe for {{ $labels.instance }} failing for 20+ min"
+          description: "Either service is down, Traefik not routing, DNS broken, or TLS handshake failing. Check app service status first."
+# Trigger redeploy 2026-04-26: previous push 5bfef9c failed with CI-runner glitch ("webhooks.conf not found") — this trivial change forces a fresh push-trigger.

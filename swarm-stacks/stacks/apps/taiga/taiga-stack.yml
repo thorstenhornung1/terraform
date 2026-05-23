@@ -53,7 +53,7 @@ services:
         mode: 0755
     environment:
       # PostgreSQL (via Patroni HAProxy)
-      POSTGRES_HOST: pg-haproxy
+      POSTGRES_HOST: pg-haproxy.hornung-bn.de
       POSTGRES_PORT: "5433"
       POSTGRES_DB: taiga
       POSTGRES_USER: taiga
@@ -75,14 +75,12 @@ services:
       # Registration: backend must allow it for OIDC auto-create
       PUBLIC_REGISTER_ENABLED: "true"
       # OpenID Connect (robrotheram plugin)
-      # NOTE: TOKEN_URL and USER_URL use internal overlay address because
-      # containers cannot reach Swarm-published ports via node VLAN IPs
-      # (hairpin NAT issue). AUTHORIZE_URL stays external (browser redirect).
-      # Host header required — Authentik routes by hostname.
+      # All OIDC endpoints use external HTTPS URL via Traefik.
+      # Host header in connector.py auto-derives from AUTHORIZE_URL (redundant but harmless).
       ENABLE_OPENID: "true"
       OPENID_CLIENT_ID: "taiga"
-      OPENID_TOKEN_URL: "http://authentik-stack_authentik-server:9000/application/o/token/"
-      OPENID_USER_URL: "http://authentik-stack_authentik-server:9000/application/o/userinfo/"
+      OPENID_TOKEN_URL: "https://auth.hornung-bn.de/application/o/token/"
+      OPENID_USER_URL: "https://auth.hornung-bn.de/application/o/userinfo/"
       OPENID_AUTHORIZE_URL: "https://auth.hornung-bn.de/application/o/authorize/"
       OPENID_SCOPE: "openid profile email groups"
       OPENID_ADMIN_GROUP: "admin"
@@ -139,7 +137,7 @@ services:
         mode: 0755
     environment:
       # PostgreSQL (via Patroni HAProxy)
-      POSTGRES_HOST: pg-haproxy
+      POSTGRES_HOST: pg-haproxy.hornung-bn.de
       POSTGRES_PORT: "5433"
       POSTGRES_DB: taiga
       POSTGRES_USER: taiga

@@ -1,0 +1,1088 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Langzeit-Korrelation von Wetter, Energieverbrauch, Raumklima und Fahrzeugdaten",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Wetter & Energieverbrauch",
+      "type": "row"
+    },
+    {
+      "title": "Aussentemperatur vs. Stromverbrauch (EG+OG)",
+      "description": "Daikin-Mittelwert Aussentemperatur vs. Gesamt-Stromverbrauch beider Zaehler",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 1 },
+      "id": 1,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "axisPlacement": "auto",
+            "spanNulls": 3600000
+          },
+          "unit": "celsius",
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Strom Gesamt" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "watt" },
+              { "id": "decimals", "value": 0 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } },
+              { "id": "custom.fillOpacity", "value": 10 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Aussen" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } },
+              { "id": "custom.lineWidth", "value": 2 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "min", "max"] }
+      },
+      "targets": [
+        {
+          "expr": "avg(homeassistant_sensor_temperature_celsius{entity=~\"sensor.(helena|klima_schlafzimmer|steffi|wohnzimmer)_outside_temperature\"})",
+          "legendFormat": "Aussen",
+          "refId": "A"
+        },
+        {
+          "expr": "max(homeassistant_sensor_power_w{entity=\"sensor.stromverbrauch\"})",
+          "legendFormat": "Strom Gesamt",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "title": "Aussentemperatur vs. Gasleistung",
+      "description": "Gas-Brennerleistung (kW) steigt bei niedrigen Aussentemperaturen. Smooth-Line zeigt den Zusammenhang.",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 1 },
+      "id": 2,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "axisPlacement": "auto",
+            "spanNulls": 3600000
+          },
+          "unit": "celsius",
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Gas Leistung" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "kwatt" },
+              { "id": "decimals", "value": 1 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } },
+              { "id": "custom.fillOpacity", "value": 20 },
+              { "id": "custom.lineWidth", "value": 1 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Aussen" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "min", "max"] }
+      },
+      "targets": [
+        {
+          "expr": "avg(homeassistant_sensor_temperature_celsius{entity=~\"sensor.(helena|klima_schlafzimmer|steffi|wohnzimmer)_outside_temperature\"})",
+          "legendFormat": "Aussen",
+          "refId": "A"
+        },
+        {
+          "expr": "avg_over_time(max(homeassistant_sensor_unit_kw{entity=\"sensor.counter_gas_water_2_gas_leistung_kw\"})[15m:])",
+          "legendFormat": "Gas Leistung",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "title": "Tagesverbrauch Strom (EG+OG)",
+      "description": "Taeglicher Stromverbrauch beider Zaehler summiert",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 11 },
+      "id": 3,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 80,
+            "gradientMode": "scheme",
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "kwatth",
+          "decimals": 1,
+          "color": { "mode": "fixed", "fixedColor": "yellow" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["sum", "mean"] }
+      },
+      "interval": "1d",
+      "targets": [
+        {
+          "expr": "sum(increase(homeassistant_sensor_energy_kwh{entity=~\"sensor.stromzahler_eg|sensor.stromzahler_og\"}[$__interval]))",
+          "legendFormat": "Strom/Tag (EG+OG)",
+          "refId": "A",
+          "interval": "1d"
+        }
+      ]
+    },
+    {
+      "title": "Tagesverbrauch Gas",
+      "description": "Taeglicher Gasverbrauch in kWh",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 11 },
+      "id": 4,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 80,
+            "gradientMode": "scheme",
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "kwatth",
+          "decimals": 1,
+          "color": { "mode": "fixed", "fixedColor": "red" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "green", "value": 0 },
+              { "color": "yellow", "value": 30 },
+              { "color": "orange", "value": 60 },
+              { "color": "red", "value": 100 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["sum", "mean"] }
+      },
+      "interval": "1d",
+      "targets": [
+        {
+          "expr": "max(increase(homeassistant_sensor_energy_kwh{entity=\"sensor.counter_gas_water_2_gas_verbrauch_kwh\"}[$__interval]))",
+          "legendFormat": "Gas/Tag",
+          "refId": "A",
+          "interval": "1d"
+        }
+      ]
+    },
+    {
+      "title": "Sonneneinstrahlung & Bewölkung",
+      "description": "Sonneneinstrahlung (W/m2) vs. Bewoelkungsgrad",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 11 },
+      "id": 5,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "spanNulls": 3600000
+          },
+          "unit": "watt",
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Sonneneinstrahlung" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Bewoelkung" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "percent" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "light-blue" } },
+              { "id": "custom.fillOpacity", "value": 30 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+      },
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_unit_w_per_mu0xb2{entity=\"sensor.bonn_friesdorf_sonneneinstrahlung\"})",
+          "legendFormat": "Sonneneinstrahlung",
+          "refId": "A"
+        },
+        {
+          "expr": "max(homeassistant_sensor_unit_percent{entity=\"sensor.bonn_friesdorf_bewolkungsgrad\"})",
+          "legendFormat": "Bewoelkung",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 },
+      "id": 200,
+      "title": "Klima & Heizung",
+      "type": "row"
+    },
+    {
+      "title": "Raumtemperaturen vs. Aussen",
+      "description": "Alle Raumtemperaturen verglichen mit Aussentemperatur",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 20 },
+      "id": 6,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": 3600000
+          },
+          "unit": "celsius",
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Aussen" },
+            "properties": [
+              { "id": "custom.lineWidth", "value": 3 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "lastNotNull"] }
+      },
+      "targets": [
+        {
+          "expr": "avg(homeassistant_sensor_temperature_celsius{entity=~\"sensor.(helena|klima_schlafzimmer|steffi|wohnzimmer)_outside_temperature\"})",
+          "legendFormat": "Aussen",
+          "refId": "A"
+        },
+        {
+          "expr": "max(homeassistant_climate_current_temperature_celsius{entity=\"climate.trv_wohnzimmer_1\"})",
+          "legendFormat": "Wohnzimmer",
+          "refId": "B"
+        },
+        {
+          "expr": "max(homeassistant_climate_current_temperature_celsius{entity=\"climate.schlafzimmer\"})",
+          "legendFormat": "Schlafzimmer",
+          "refId": "C"
+        },
+        {
+          "expr": "max(homeassistant_climate_current_temperature_celsius{entity=\"climate.kinderzimmer\"})",
+          "legendFormat": "Kinderzimmer",
+          "refId": "D"
+        },
+        {
+          "expr": "max(homeassistant_climate_current_temperature_celsius{entity=\"climate.trv_kueche_1\"})",
+          "legendFormat": "Kueche",
+          "refId": "E"
+        },
+        {
+          "expr": "max(homeassistant_climate_current_temperature_celsius{entity=\"climate.trv_buerothorsten_2\"})",
+          "legendFormat": "Buero Thorsten",
+          "refId": "F"
+        }
+      ]
+    },
+    {
+      "title": "Klimaanlagen — Kompressorleistung",
+      "description": "Geschaetzte Leistungsaufnahme der Klima-Kompressoren (gestapelt)",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 20 },
+      "id": 8,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "gradientMode": "scheme",
+            "showPoints": "never",
+            "stacking": { "mode": "normal" },
+            "spanNulls": 3600000
+          },
+          "unit": "kwatt",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }
+      },
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_power_kw{entity=\"sensor.wohnzimmer_compressor_estimated_power_consumption\"})",
+          "legendFormat": "Wohnzimmer",
+          "refId": "A"
+        },
+        {
+          "expr": "max(homeassistant_sensor_power_kw{entity=\"sensor.klima_schlafzimmer_compressor_estimated_power_consumption\"})",
+          "legendFormat": "Schlafzimmer",
+          "refId": "B"
+        },
+        {
+          "expr": "max(homeassistant_sensor_power_kw{entity=\"sensor.helena_compressor_estimated_power_consumption\"})",
+          "legendFormat": "Kinderzimmer",
+          "refId": "C"
+        },
+        {
+          "expr": "max(homeassistant_sensor_power_kw{entity=\"sensor.steffi_compressor_estimated_power_consumption\"})",
+          "legendFormat": "Buero Steffi",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "title": "Luftfeuchtigkeit Innen vs. Aussen",
+      "description": "Relative Luftfeuchtigkeit — 40-60% optimal, ueber 70% Schimmelgefahr",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 29 },
+      "id": 14,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": 3600000
+          },
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0,
+          "max": 100
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Aussen" },
+            "properties": [
+              { "id": "custom.lineWidth", "value": 3 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "lastNotNull"] }
+      },
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_humidity_percent{entity=\"sensor.bonn_friesdorf_luftfeuchtigkeit\"}) or avg(homeassistant_sensor_humidity_percent{entity=~\"sensor.(helena|klima_schlafzimmer|steffi|wohnzimmer)_humidity\"})",
+          "legendFormat": "Aussen",
+          "refId": "A"
+        },
+        {
+          "expr": "max(homeassistant_sensor_humidity_percent{entity=\"sensor.thermostat_wohnzimmer_1_humidity\"})",
+          "legendFormat": "Wohnzimmer",
+          "refId": "B"
+        },
+        {
+          "expr": "max(homeassistant_sensor_humidity_percent{entity=\"sensor.klima_schlafzimmer_humidity\"})",
+          "legendFormat": "Schlafzimmer",
+          "refId": "C"
+        },
+        {
+          "expr": "max(homeassistant_sensor_humidity_percent{entity=\"sensor.helena_humidity\"})",
+          "legendFormat": "Kinderzimmer",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "title": "CO2 & Luftdruck",
+      "description": "CO2 (ppm) — ueber 1000 lueften. Luftdruck-Abfall = schlechtes Wetter.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 29 },
+      "id": 15,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "unit": "ppm",
+          "decimals": 0,
+          "color": { "mode": "fixed", "fixedColor": "purple" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 800 },
+              { "color": "red", "value": 1000 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Luftdruck" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "pressurehpa" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "semi-dark-blue" } },
+              { "id": "custom.fillOpacity", "value": 0 },
+              { "id": "custom.thresholdsStyle", "value": { "mode": "off" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }
+      },
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_carbon_dioxide_ppm{entity=\"sensor.qingping_air_monitor_lite_co2_carbon_dioxide_2\"})",
+          "legendFormat": "CO2",
+          "refId": "A"
+        },
+        {
+          "expr": "max(homeassistant_sensor_pressure_hpa{entity=\"sensor.bonn_friesdorf_druck\"})",
+          "legendFormat": "Luftdruck",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 37 },
+      "id": 300,
+      "title": "Auto — BN-TH-980",
+      "type": "row"
+    },
+    {
+      "title": "Kilometerstand & Tagesfahrleistung",
+      "description": "Kilometerstand (links) und taegliche Fahrstrecke (rechts)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 38 },
+      "id": 10,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": 86400000
+          },
+          "unit": "km",
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Kilometerstand" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } },
+              { "id": "custom.lineWidth", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Tages-km" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } },
+              { "id": "custom.drawStyle", "value": "bars" },
+              { "id": "custom.fillOpacity", "value": 60 },
+              { "id": "custom.lineWidth", "value": 0 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["lastNotNull", "diff"] }
+      },
+      "interval": "1d",
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_distance_km{entity=\"sensor.bn_th_980_mileage\"})",
+          "legendFormat": "Kilometerstand",
+          "refId": "A"
+        },
+        {
+          "expr": "max(increase(homeassistant_sensor_distance_km{entity=\"sensor.bn_th_980_mileage\"}[$__interval]))",
+          "legendFormat": "Tages-km",
+          "refId": "B",
+          "interval": "1d"
+        }
+      ]
+    },
+    {
+      "title": "Tankreichweite",
+      "description": "Verbleibende Tank-Reichweite",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 38 },
+      "id": 11,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "scheme",
+            "showPoints": "never",
+            "spanNulls": 86400000
+          },
+          "unit": "km",
+          "decimals": 0,
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "red", "value": 0 },
+              { "color": "orange", "value": 100 },
+              { "color": "green", "value": 300 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["lastNotNull", "min", "max"] }
+      },
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_distance_km{entity=\"sensor.reichweite\"})",
+          "legendFormat": "Reichweite",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Service-Countdown",
+      "description": "Verbleibende km bis Oelwechsel und Service",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 38 },
+      "id": 12,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "km",
+          "decimals": 0,
+          "min": 0,
+          "max": 30000,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "red", "value": 0 },
+              { "color": "orange", "value": 3000 },
+              { "color": "yellow", "value": 8000 },
+              { "color": "green", "value": 15000 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_distance_km{entity=\"sensor.bn_th_980_oil_change_distance\"})",
+          "legendFormat": "Oelwechsel",
+          "refId": "A"
+        },
+        {
+          "expr": "max(homeassistant_sensor_distance_km{entity=\"sensor.bn_th_980_service_inspection_distance\"})",
+          "legendFormat": "Inspektion",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 46 },
+      "id": 350,
+      "title": "Benzinpreise",
+      "type": "row"
+    },
+    {
+      "title": "Diesel — Tagesverlauf (alle Tankstellen)",
+      "description": "Diesel-Preise im Tagesverlauf. Seit 01.04.2026: Preiserhoehungen nur noch um 12:00 Uhr erlaubt.",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 47 },
+      "id": 19,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never",
+            "spanNulls": 7200000
+          },
+          "unit": "currencyEUR",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "ARAL" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } },
+              { "id": "custom.lineWidth", "value": 3 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "asc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "min", "lastNotNull"] }
+      },
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.aral_im_wingert_20_diesel\"})",
+          "legendFormat": "ARAL",
+          "refId": "A"
+        },
+        {
+          "expr": "max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.hem_hausdorffstr_223_diesel\"})",
+          "legendFormat": "HEM",
+          "refId": "B"
+        },
+        {
+          "expr": "max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.totalenergies_kessenicher_str_212_diesel\"})",
+          "legendFormat": "TotalEnergies",
+          "refId": "C"
+        },
+        {
+          "expr": "max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.westfalen_reichsstr_3_5_diesel\"})",
+          "legendFormat": "Westfalen",
+          "refId": "D"
+        },
+        {
+          "expr": "max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.agip_eni_provinzialstr_55_diesel\"})",
+          "legendFormat": "AGIP",
+          "refId": "E"
+        }
+      ]
+    },
+    {
+      "title": "Super E10 — Tagesverlauf (alle Tankstellen)",
+      "description": "Super E10 Preise im Tagesverlauf",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 47 },
+      "id": 20,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never",
+            "spanNulls": 7200000
+          },
+          "unit": "currencyEUR",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "ARAL" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } },
+              { "id": "custom.lineWidth", "value": 3 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "asc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "min", "lastNotNull"] }
+      },
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.aral_im_wingert_20_super_e10\"})",
+          "legendFormat": "ARAL",
+          "refId": "A"
+        },
+        {
+          "expr": "max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.hem_hausdorffstr_223_super_e10\"})",
+          "legendFormat": "HEM",
+          "refId": "B"
+        },
+        {
+          "expr": "max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.totalenergies_kessenicher_str_212_super_e10\"})",
+          "legendFormat": "TotalEnergies",
+          "refId": "C"
+        },
+        {
+          "expr": "max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.westfalen_reichsstr_3_5_super_e10\"})",
+          "legendFormat": "Westfalen",
+          "refId": "D"
+        },
+        {
+          "expr": "max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.agip_eni_provinzialstr_55_super_e10\"})",
+          "legendFormat": "AGIP",
+          "refId": "E"
+        }
+      ]
+    },
+    {
+      "title": "Diesel Tages-Min/Max (ARAL)",
+      "description": "Taeglicher Min- und Max-Preis — zeigt die Preisspanne innerhalb eines Tages",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 },
+      "id": 21,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 0,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "currencyEUR",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Max" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } },
+              { "id": "custom.lineWidth", "value": 2 },
+              { "id": "custom.fillBelowTo", "value": "Min" },
+              { "id": "custom.fillOpacity", "value": 20 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Min" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } },
+              { "id": "custom.lineWidth", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Durchschnitt" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } },
+              { "id": "custom.lineWidth", "value": 2 },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["lastNotNull"] }
+      },
+      "interval": "1d",
+      "targets": [
+        {
+          "expr": "max_over_time(max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.aral_im_wingert_20_diesel\"})[$__interval:])",
+          "legendFormat": "Max",
+          "refId": "A",
+          "interval": "1d"
+        },
+        {
+          "expr": "min_over_time(max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.aral_im_wingert_20_diesel\"})[$__interval:])",
+          "legendFormat": "Min",
+          "refId": "B",
+          "interval": "1d"
+        },
+        {
+          "expr": "avg_over_time(max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.aral_im_wingert_20_diesel\"})[$__interval:])",
+          "legendFormat": "Durchschnitt",
+          "refId": "C",
+          "interval": "1d"
+        }
+      ]
+    },
+    {
+      "title": "Diesel Trend (ARAL) + Ersparnis guenstigste",
+      "description": "ARAL-Preis und die jeweils guenstigste Tankstelle",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
+      "id": 22,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": 7200000
+          },
+          "unit": "currencyEUR",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "ARAL" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Guenstigste" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } },
+              { "id": "custom.fillOpacity", "value": 10 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "asc" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "min", "lastNotNull"] }
+      },
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_unit_u0x20ac{entity=\"sensor.aral_im_wingert_20_diesel\"})",
+          "legendFormat": "ARAL",
+          "refId": "A"
+        },
+        {
+          "expr": "min(homeassistant_sensor_unit_u0x20ac{entity=~\"sensor.*_diesel\"})",
+          "legendFormat": "Guenstigste",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 64 },
+      "id": 500,
+      "title": "Wetter & Umwelt",
+      "type": "row"
+    },
+    {
+      "title": "Wind & Niederschlag",
+      "description": "Windgeschwindigkeit, Windboeen und Niederschlag",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 65 },
+      "id": 17,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": 3600000
+          },
+          "unit": "velocitykmh",
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Niederschlag" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "lengthmm" },
+              { "id": "custom.drawStyle", "value": "bars" },
+              { "id": "custom.fillOpacity", "value": 60 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Wind" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "light-green" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Boeen" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } },
+              { "id": "custom.lineWidth", "value": 1 },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [5, 5] } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+      },
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_unit_km_per_h{entity=\"sensor.bonn_friesdorf_windgeschwindigkeit\"})",
+          "legendFormat": "Wind",
+          "refId": "A"
+        },
+        {
+          "expr": "max(homeassistant_sensor_unit_km_per_h{entity=\"sensor.bonn_friesdorf_windboen\"})",
+          "legendFormat": "Boeen",
+          "refId": "B"
+        },
+        {
+          "expr": "max(homeassistant_sensor_unit_mm_per_h{entity=\"sensor.bonn_friesdorf_niederschlag\"})",
+          "legendFormat": "Niederschlag",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "title": "Rhein-Wasserstand Bonn",
+      "description": "Pegelstand des Rheins bei Bonn in cm",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 65 },
+      "id": 18,
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "scheme",
+            "showPoints": "never",
+            "spanNulls": 3600000
+          },
+          "unit": "cm",
+          "decimals": 0,
+          "color": { "mode": "fixed", "fixedColor": "dark-blue" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "lastNotNull", "max"] }
+      },
+      "targets": [
+        {
+          "expr": "max(homeassistant_sensor_unit_cm{entity=\"sensor.bonn_rhein_wasserstand\"})",
+          "legendFormat": "Wasserstand (cm)",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": ["home-assistant", "energy", "correlation", "long-term"],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "VictoriaMetrics",
+          "value": "VictoriaMetrics"
+        },
+        "hide": 2,
+        "includeAll": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-7d", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["5m", "15m", "30m", "1h"],
+    "time_options": ["1d", "3d", "7d", "14d", "30d", "90d", "6M", "1y"]
+  },
+  "timezone": "Europe/Berlin",
+  "title": "Home & Energie — Langzeit-Korrelation",
+  "uid": "ha-energy-correlation",
+  "version": 2
+}

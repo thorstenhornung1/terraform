@@ -1,0 +1,170 @@
+# =============================================================================
+# PostgreSQL Backup Stack for Docker Swarm
+# =============================================================================
+# Automated daily pg_dump of ALL databases in the Patroni HA cluster.
+# Backups stored on CephFS → automatically included in PBS backup.
+#
+# Databases backed up:
+#   homeassistant, vaultwarden, n8n, authentik, paperless, taiga, immich
+#
+# Schedule: Daily at 03:00 (+ weekly on Sunday at 04:00)
+# Retention: 14 daily + 4 weekly backups
+# Format: pg_dump --format=custom (selective restore possible)
+# Storage: /mnt/cephfs/swarm-state/stack-postgres-backup/
+#
+# Prerequisites:
+#   1. Docker secret "pg_superuser_password" (already exists from postgres-ha)
+#   2. CephFS mounted on all manager nodes
+#   3. Patroni cluster running with HAProxy at pg-haproxy.hornung-bn.de:5433
+#
+# Restore:
+#   pg_restore -h pg-haproxy.hornung-bn.de -p 5433 -U postgres -d <dbname> <backup.dump>
+# =============================================================================
+
+version: '3.8'
+
+services:
+  pg-backup:
+    image: postgres:16-alpine
+    hostname: pg-backup
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        # Install cron
+        echo "PostgreSQL Backup Service starting..."
+
+        # Read superuser password
+        export PGPASSWORD=$$(cat /run/secrets/pg_superuser_password)
+        export PGHOST=pg-haproxy.hornung-bn.de
+        export PGPORT=5433
+        export PGUSER=postgres
+
+        BACKUP_DIR=/backup
+        DATABASES="homeassistant vaultwarden n8n authentik paperless taiga immich"
+
+        # --- Backup function ---
+        run_backup() {
+          TYPE=$$1  # daily or weekly
+          DATE=$$(date +%Y%m%d_%H%M%S)
+          echo "[$$DATE] Starting $$TYPE backup..."
+
+          for DB in $$DATABASES; do
+            OUTFILE="$${BACKUP_DIR}/$${TYPE}/$${DB}_$${DATE}.dump"
+            echo "  Dumping $$DB..."
+            pg_dump --format=custom --compress=6 -d "$$DB" -f "$$OUTFILE" 2>&1
+            if [ $$? -eq 0 ]; then
+              SIZE=$$(du -h "$$OUTFILE" | cut -f1)
+              echo "  OK: $$DB ($$SIZE)"
+            else
+              echo "  FAILED: $$DB"
+              rm -f "$$OUTFILE"
+            fi
+          done
+
+          # Also dump globals (roles, tablespaces)
+          pg_dumpall --globals-only -f "$${BACKUP_DIR}/$${TYPE}/globals_$${DATE}.sql" 2>&1
+
+          echo "[$$DATE] $$TYPE backup complete"
+        }
+
+        # --- Cleanup function ---
+        cleanup() {
+          echo "Cleaning old backups..."
+          # Daily: keep 14 days
+          find $${BACKUP_DIR}/daily -name "*.dump" -o -name "*.sql" | sort | head -n -$$((14 * 8)) | xargs rm -f 2>/dev/null
+          # Weekly: keep 4 weeks
+          find $${BACKUP_DIR}/weekly -name "*.dump" -o -name "*.sql" | sort | head -n -$$((4 * 8)) | xargs rm -f 2>/dev/null
+          echo "Cleanup done"
+        }
+
+        # --- Create directories ---
+        mkdir -p $${BACKUP_DIR}/daily $${BACKUP_DIR}/weekly
+
+        # --- Wait for PostgreSQL ---
+        echo "Waiting for PostgreSQL..."
+        until pg_isready -h $$PGHOST -p $$PGPORT -U $$PGUSER 2>/dev/null; do
+          sleep 5
+        done
+        echo "PostgreSQL ready"
+
+        # --- Setup cron ---
+        cat > /etc/crontabs/root <<CRON
+        # Daily backup at 03:00
+        0 3 * * * /usr/local/bin/backup.sh daily >> /proc/1/fd/1 2>&1
+        # Weekly backup on Sunday at 04:00
+        0 4 * * 0 /usr/local/bin/backup.sh weekly >> /proc/1/fd/1 2>&1
+        # Cleanup at 05:00
+        0 5 * * * /usr/local/bin/backup.sh cleanup >> /proc/1/fd/1 2>&1
+        CRON
+
+        # --- Create backup script ---
+        cat > /usr/local/bin/backup.sh <<'SCRIPT'
+        #!/bin/sh
+        export PGPASSWORD=$$(cat /run/secrets/pg_superuser_password)
+        export PGHOST=pg-haproxy.hornung-bn.de
+        export PGPORT=5433
+        export PGUSER=postgres
+        BACKUP_DIR=/backup
+        DATABASES="homeassistant vaultwarden n8n authentik paperless taiga immich"
+        TYPE=$${1:-daily}
+        DATE=$$(date +%Y%m%d_%H%M%S)
+        echo "[$$(date)] Starting $$TYPE backup..."
+        mkdir -p $${BACKUP_DIR}/$$TYPE
+        for DB in $$DATABASES; do
+          OUTFILE="$${BACKUP_DIR}/$${TYPE}/$${DB}_$${DATE}.dump"
+          pg_dump --format=custom --compress=6 -d "$$DB" -f "$$OUTFILE" 2>&1
+          if [ $$? -eq 0 ]; then
+            SIZE=$$(du -h "$$OUTFILE" | cut -f1)
+            echo "  OK: $$DB ($$SIZE)"
+          else
+            echo "  FAILED: $$DB"
+            rm -f "$$OUTFILE"
+          fi
+        done
+        pg_dumpall --globals-only -f "$${BACKUP_DIR}/$${TYPE}/globals_$${DATE}.sql" 2>&1
+        # Cleanup
+        if [ "$$TYPE" = "cleanup" ]; then
+          find $${BACKUP_DIR}/daily -name "*.dump" -o -name "*.sql" | sort | head -n -112 | xargs rm -f 2>/dev/null
+          find $${BACKUP_DIR}/weekly -name "*.dump" -o -name "*.sql" | sort | head -n -32 | xargs rm -f 2>/dev/null
+        fi
+        echo "[$$(date)] $$TYPE backup complete"
+        SCRIPT
+        chmod +x /usr/local/bin/backup.sh
+
+        # --- Run initial backup ---
+        echo "Running initial daily backup..."
+        /usr/local/bin/backup.sh daily
+
+        # --- Start cron ---
+        echo "Starting cron scheduler..."
+        exec crond -f -l 2
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-postgres-backup:/backup
+    secrets:
+      - pg_superuser_password
+    networks:
+      - postgres-ha-stack_postgres-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 30s
+        window: 120s
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  postgres-ha-stack_postgres-network:
+    external: true
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  pg_superuser_password:
+    external: true

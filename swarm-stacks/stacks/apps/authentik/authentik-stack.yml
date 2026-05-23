@@ -1,6 +1,7 @@
 # =============================================================================
 # Authentik Stack — SSO / Identity Provider
 # =============================================================================
+# Deploy: GitOps via ssh-deploy (webhooks.conf, migrated 2026-04-21 from Portainer-Webhook).
 # Self-hosted identity provider with SAML, OAuth2, LDAP, and SCIM support.
 # PostgreSQL backend via Patroni HA cluster (pg-haproxy:5433).
 # CephFS for media/certs (auto-included in PBS backup).
@@ -28,7 +29,11 @@ services:
     command: server
     hostname: authentik-server
     environment:
-      AUTHENTIK_POSTGRESQL__HOST: pg-haproxy
+      # Connect via Swarm ingress (published port) instead of overlay DNS.
+      # The overlay pg-haproxy VIP causes ConnectionTimeout in Gunicorn's
+      # run_migrations() — likely a VXLAN/IPVS race in the Go→Python spawn path.
+      # Round-robin DNS: 192.168.4.40, .41, .42 (all 3 Swarm nodes)
+      AUTHENTIK_POSTGRESQL__HOST: "pg-haproxy.hornung-bn.de"
       AUTHENTIK_POSTGRESQL__PORT: "5433"
       AUTHENTIK_POSTGRESQL__USER: authentik
       AUTHENTIK_POSTGRESQL__NAME: authentik
@@ -37,8 +42,14 @@ services:
       AUTHENTIK_POSTGRESQL__CONN_MAX_AGE: "0"
       AUTHENTIK_POSTGRESQL__CONN_HEALTH_CHECKS: "true"
       AUTHENTIK_POSTGRESQL__DISABLE_SERVER_SIDE_CURSORS: "true"
+      # Disable GSSAPI encryption for psycopg3/libpq (client-side env var).
+      # NOTE: Do NOT put gssencmode in CONN_OPTIONS — the Go embedded outpost
+      # uses pgx which passes it as a server runtime parameter, causing
+      # FATAL: unrecognized configuration parameter "gssencmode" (SQLSTATE 42704)
+      PGGSSENCMODE: "disable"
       AUTHENTIK_SECRET_KEY: "file:///run/secrets/authentik_secret_key"
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
       AUTHENTIK_LOG_LEVEL: info
     volumes:
       - /mnt/cephfs/swarm-state/stack-authentik/data/media:/data/media
@@ -103,14 +114,14 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 180s
+      start_period: 600s
 
   authentik-worker:
     image: ghcr.io/goauthentik/server:2026.2
     command: worker
     hostname: authentik-worker
     environment:
-      AUTHENTIK_POSTGRESQL__HOST: pg-haproxy
+      AUTHENTIK_POSTGRESQL__HOST: "192.168.4.40"
       AUTHENTIK_POSTGRESQL__PORT: "5433"
       AUTHENTIK_POSTGRESQL__USER: authentik
       AUTHENTIK_POSTGRESQL__NAME: authentik
@@ -119,6 +130,10 @@ services:
       AUTHENTIK_POSTGRESQL__CONN_MAX_AGE: "0"
       AUTHENTIK_POSTGRESQL__CONN_HEALTH_CHECKS: "true"
       AUTHENTIK_POSTGRESQL__DISABLE_SERVER_SIDE_CURSORS: "true"
+      PGGSSENCMODE: "disable"
+      # Base64 of: {"connect_timeout": "30"}
+      # NOTE: gssencmode removed — breaks Go embedded outpost (pgx driver)
+      AUTHENTIK_POSTGRESQL__CONN_OPTIONS: "eyJjb25uZWN0X3RpbWVvdXQiOiAiMzAifQ=="
       AUTHENTIK_SECRET_KEY: "file:///run/secrets/authentik_secret_key"
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
       AUTHENTIK_LOG_LEVEL: info
@@ -174,7 +189,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.hostname == docker-infra-1
+          - node.role == manager
       resources:
         limits:
           cpus: '0.3'

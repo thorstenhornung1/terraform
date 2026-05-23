@@ -1,0 +1,29 @@
+# Grafana Datasource Provisioning — VictoriaMetrics + Loki
+# Deployed as Docker config, mounted at /etc/grafana/provisioning/datasources/
+apiVersion: 1
+
+datasources:
+  - name: VictoriaMetrics
+    uid: victoriametrics
+    type: prometheus
+    access: proxy
+    url: http://victoriametrics:8428
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 30s
+      httpMethod: POST
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki.hornung-bn.de:3100
+    editable: false
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        - datasourceUid: victoriametrics
+          matcherRegex: "host=(\\w+)"
+          name: Host
+          url: ""

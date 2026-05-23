@@ -1,0 +1,147 @@
+version: '3.8'
+
+# =============================================================================
+# Reisekosten Test-Stack — E2E-API-Test-Harness (Issue #71, v2.3.0)
+# =============================================================================
+# Isolierter Test-Server für die Business-Prozess-E2E-Suite. Bewusste
+# Abweichungen vom Produktiv-Pattern (Vorbild: docuseal-test):
+#
+#   - Eigene Postgres im Stack, NICHT postgres-ha/Patroni. DATABASE_URL zeigt
+#     auf @postgres:5432 — Stack-interner Service auf `internal: true`-Overlay,
+#     physikalisch unkoppelbar vom Cluster-Postgres. Test-TRUNCATEs/Inserts
+#     können die Produktion NIE erreichen.
+#   - KEIN OIDC: AUTHENTIK_* bewusst weggelassen → app.py _current_user_context()
+#     liefert (None, True) → Legacy-Mode → die JSON-API ist ohne Session-Cookie
+#     testbar. Genau das macht die E2E-Suite einfach. Test-Stack ist nur intern
+#     erreichbar, daher kein Sicherheitsrisiko durch fehlende Auth.
+#   - KEIN entrypoint-wrapper / keine Swarm-Secrets: das Image-Default-CMD
+#     (gunicorn -c gunicorn.conf.py app:app) startet direkt; db.get_database_url()
+#     liest schlicht $DATABASE_URL. Migrationen laufen beim App-Boot.
+#   - Named Docker Volumes statt /mnt/cephfs/swarm-state/stack-*
+#   - Single-Node-Pin auf infra_node==1 (deterministischer Cleanup, lokale Vols)
+#   - Secrets INLINE — bewusste Abweichung vom Repo-Standard, identisch zur
+#     docuseal-test-Begründung: Wegwerf-Test, privates Repo, Postgres im
+#     `internal: true`-Network von außen unerreichbar.
+#
+# Image-Pin :v2 (rolling) — testet by default die letzte gebaute Version.
+# integration-test.yml überschreibt das via `docker service update --image
+# ...:vX.Y.Z --force` auf den exakten Release-Tag (CI-Gate).
+#
+# Cleanup: ./cleanup.sh (im selben Verzeichnis)
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    hostname: postgres
+    environment:
+      POSTGRES_USER: reisekosten
+      POSTGRES_DB: reisekosten
+      # Inline password — throwaway eval, see top-of-file note.
+      POSTGRES_PASSWORD: 6cdbe5afeb868e3cbf7bc24f4b8f6794f3069f6b3083b128
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - reisekosten_test_db_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      update_config:
+        order: stop-first
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reisekosten -d reisekosten"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  app:
+    image: ghcr.io/thorstenhornung1/reisekosten:v2
+    hostname: reisekosten-test
+    # No entrypoint override — image's default CMD (gunicorn) starts directly.
+    # The prod wrapper that assembled DATABASE_URL from secret files is not
+    # needed: credentials live in env vars (throwaway, internal network).
+    environment:
+      DATABASE_URL: postgres://reisekosten:6cdbe5afeb868e3cbf7bc24f4b8f6794f3069f6b3083b128@postgres:5432/reisekosten
+      SECRET_KEY: a6cf0d4b5c08fad0020d9b22e4cebdc8496906662b5d82d3041798f49fb2c559
+      # AUTHENTIK_* bewusst NICHT gesetzt → Legacy-Mode (auth-frei).
+      FLASK_DEBUG: "0"
+      PYTHONUNBUFFERED: "1"
+      LANG: de_DE.UTF-8
+      LC_ALL: de_DE.UTF-8
+      TZ: Europe/Berlin
+    volumes:
+      - reisekosten_test_uploads:/app/uploads
+      - reisekosten_test_generated:/app/generated
+    networks:
+      - internal
+      - traefik_public
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.infra_node == 1
+      resources:
+        limits:
+          # WeasyPrint kann pro PDF-Render 200-500 MB spiken (gunicorn
+          # 2 workers × 4 threads). Cap wie im Prod-Stack.
+          memory: 1500M
+        reservations:
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 5
+      update_config:
+        order: stop-first
+        failure_action: rollback
+      labels:
+        - traefik.swarm.network=traefik_public
+        - traefik.enable=true
+        # HTTPS Router
+        - "traefik.http.routers.reisekosten-test.rule=Host(`reisekosten-test.hornung-bn.de`)"
+        - traefik.http.routers.reisekosten-test.entrypoints=websecure
+        - traefik.http.routers.reisekosten-test.tls=true
+        - traefik.http.routers.reisekosten-test.tls.certresolver=dns
+        - traefik.http.routers.reisekosten-test.service=reisekosten-test
+        - traefik.http.services.reisekosten-test.loadbalancer.server.port=8000
+        # HTTP → HTTPS Redirect (globale File-Middleware, wie Prod-Stack)
+        - "traefik.http.routers.reisekosten-test-http.rule=Host(`reisekosten-test.hornung-bn.de`)"
+        - traefik.http.routers.reisekosten-test-http.entrypoints=web
+        - traefik.http.routers.reisekosten-test-http.middlewares=https-redirect@file
+        - traefik.http.routers.reisekosten-test-http.service=reisekosten-test
+    depends_on:
+      - postgres
+    # Image-eigener HEALTHCHECK (/healthz) bleibt aktiv — anders als
+    # docuseal (kein /up) HAT die App einen funktionierenden /healthz.
+
+networks:
+  internal:
+    driver: overlay
+    internal: true
+  traefik_public:
+    external: true
+
+volumes:
+  reisekosten_test_db_data:
+    driver: local
+  reisekosten_test_uploads:
+    driver: local
+  reisekosten_test_generated:
+    driver: local

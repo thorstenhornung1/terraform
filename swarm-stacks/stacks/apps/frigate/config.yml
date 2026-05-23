@@ -1,19 +1,59 @@
 # =============================================================================
-# Frigate 0.17.1 Configuration — Production LXC with OpenVINO iGPU
+# Frigate 0.17.1 Configuration — Production LXC with OpenVINO iGPU 
 # =============================================================================
-# Environment variable substitution: entrypoint.sh resolves {ENVVAR} placeholders
-# before Frigate starts (ruamel.yaml does NOT do native substitution).
 #
-# Secrets loaded from .env.secrets (NOT Docker Swarm secrets):
-#   FRIGATE_MQTT_USER, FRIGATE_MQTT_PASSWORD
-#   FRIGATE_GARAGE_USER, FRIGATE_GARAGE_PASSWORD, FRIGATE_GARAGE_IP
-#   FRIGATE_GARTEN_USER, FRIGATE_GARTEN_PASSWORD, FRIGATE_GARTEN_IP
-#   FRIGATE_DOORBIRD_USER, FRIGATE_DOORBIRD_PASSWORD, FRIGATE_DOORBIRD_URL
-#   FRIGATE_PLUS_API_KEY, FRIGATE_PLUS_MODELID_2
+# ┌─ HOW ENVIRONMENT VARIABLE SUBSTITUTION WORKS ────────────────────────────┐
+# │                                                                          │
+# │ Frigate uses ruamel.yaml, which does NOT natively resolve ${ENV} or      │
+# │ {ENV} placeholders. Our entrypoint.sh wraps Frigate and performs the     │
+# │ substitution itself BEFORE handing off to s6-overlay:                    │
+# │                                                                          │
+# │   1. Docker Compose loads env_file: /etc/frigate/secrets.env into the    │
+# │      container's environment at container create time.                   │
+# │      (IMPORTANT: `docker compose restart` does NOT re-read env_file —    │
+# │       use `docker compose up -d --force-recreate` after secret changes.) │
+# │                                                                          │
+# │   2. /etc/frigate/secrets.env is itself generated at boot by the         │
+# │      frigate-secrets-copy.service, which copies from the CephFS source   │
+# │      of truth: /mnt/cephfs/swarm-state/stack-frigate/secrets.env         │
+# │      → edit that file (not the local one) for persistent changes.       │
+# │                                                                          │
+# │   3. entrypoint.sh reads /config/config.yml (this file), runs a Python   │
+# │      re.sub(r'\{(\w+)\}', ...) over it, and writes the result to        │
+# │      /config/config_resolved.yml, then points Frigate at it via         │
+# │      CONFIG_FILE=/config/config_resolved.yml.                            │
+# │                                                                          │
+# │   4. Any {FOO_BAR} in this file is replaced by $FOO_BAR from the env.   │
+# │      If the variable is missing, the literal {FOO_BAR} is kept           │
+# │      (Frigate then fails with a validation error — useful signal).      │
+# │                                                                          │
+# └──────────────────────────────────────────────────────────────────────────┘
+#
+# Expected env vars (defined in secrets.env on CephFS):
+#   Camera credentials:
+#     FRIGATE_MQTT_USER, FRIGATE_MQTT_PASSWORD
+#     FRIGATE_GARAGE_USER, FRIGATE_GARAGE_PASSWORD, FRIGATE_GARAGE_IP
+#     FRIGATE_GARTEN_USER, FRIGATE_GARTEN_PASSWORD, FRIGATE_GARTEN_IP
+#     FRIGATE_DOORBIRD_USER, FRIGATE_DOORBIRD_PASSWORD, FRIGATE_DOORBIRD_URL
+#   Frigate+:
+#     FRIGATE_PLUS_API_KEY  — API token (format: id:secret)
+#     FRIGATE_PLUS_MODELID  — hex ID of the active custom model (see model.path below)
+#
+# Model-ID rotation workflow (when deploying a new Frigate+ model):
+#   1. Train/download new model from https://plus.frigate.video, copy its ID.
+#   2. Edit /mnt/cephfs/swarm-state/stack-frigate/secrets.env on an infra
+#      node: update FRIGATE_PLUS_MODELID=<new-hex-id>
+#   3. `systemctl start frigate-secrets-copy` on the Frigate LXC (192.168.4.70)
+#      to re-sync /etc/frigate/secrets.env from CephFS.
+#   4. `cd /opt/frigate/compose && docker compose up -d --force-recreate frigate`
+#      (NOT restart — env_file is only read on create).
+#   5. Verify: `grep plus:// /mnt/cephfs/swarm-state/stack-frigate/config/config_resolved.yml`
+#      should show the new hex ID, and `docker logs frigate` must NOT contain
+#      "Model does not support detector type of openvino".
 #
 # Key changes vs. frigate-prod beta:
 #   - mqtt.client_id: frigate (not frigate-beta)
-#   - model.path: resolved from {FRIGATE_PLUS_MODELID_2} env var via entrypoint.sh
+#   - model.path: resolved from {FRIGATE_PLUS_MODELID} env var via entrypoint.sh
 # =============================================================================
 
 auth:
@@ -47,7 +87,7 @@ detectors:
 # Frigate+ custom yolov9s 640x640 model with OpenVINO support
 # Model metadata (width, height, labelmap, model_type) auto-loaded from Frigate+ API.
 model:
-  path: "plus://{FRIGATE_PLUS_MODELID_2}"
+  path: "plus://{FRIGATE_PLUS_MODELID}"
 
 ffmpeg:
   hwaccel_args: preset-vaapi
@@ -56,18 +96,20 @@ ffmpeg:
 
 record:
   enabled: true
+  # Continuous recording retention (all frames, 24/7)
+  retain:
+    days: 5
+    mode: all
+  # Alerts: events with confirmed objects (person, car, etc.)
   alerts:
     retain:
-      days: 14
+      days: 30
       mode: active_objects
+  # Detections: lower-confidence events
   detections:
     retain:
-      days: 2
+      days: 7
       mode: active_objects
-  continuous:
-    days: 7
-  motion:
-    days: 2
 
 snapshots:
   enabled: true
@@ -75,7 +117,7 @@ snapshots:
     default: 28
     objects:
       person: 28
-      car: 7
+      car: 28
       dog: 7
       cat: 7
       bird: 7
@@ -117,13 +159,92 @@ objects:
     - package
     - waste_bin
 
+  # ---------------------------------------------------------------------------
+  # Global Object Filters — per-class min_score + threshold
+  # ---------------------------------------------------------------------------
+  # Frigate default (both unset): min_score 0.5 / threshold 0.7
+  #   min_score = minimum per-frame detection score to enter tracker
+  #   threshold = minimum tracked-object score (running avg) to become event
+  #
+  # Camera-level filters merge property-wise with these globals, so
+  # per-camera masks in doorbird/garten stay intact.
+  # ---------------------------------------------------------------------------
+  filters:
+    # People / vehicles — tuned for Frigate+ yolov9s on this setup
+    person:
+      # Lowered to actively feed Frigate+ with more training candidates.
+      # Expect more false positives until enough verified images collected.
+      min_score: 0.50
+      threshold: 0.65
+    car:
+      min_score: 0.45
+      threshold: 0.70
+    bicycle:
+      min_score: 0.50
+      threshold: 0.75
+    motorcycle:
+      min_score: 0.50
+      threshold: 0.75
+    license_plate:
+      # Sub-object of car → lower min_score needed to get into tracker
+      min_score: 0.40
+      threshold: 0.60
+
+    # Delivery logos (DE) — conservative: Frigate+ needs more training
+    # data for logos before these can be relaxed. Reduces false alerts.
+    amazon:
+      min_score: 0.50
+      threshold: 0.80
+    dhl:
+      min_score: 0.50
+      threshold: 0.80
+    dpd:
+      min_score: 0.50
+      threshold: 0.80
+    gls:
+      min_score: 0.50
+      threshold: 0.80
+    fedex:
+      min_score: 0.50
+      threshold: 0.80
+    ups:
+      min_score: 0.50
+      threshold: 0.80
+
+    # Animals
+    dog:
+      min_score: 0.50
+      threshold: 0.70
+    cat:
+      min_score: 0.50
+      threshold: 0.70
+    deer:
+      min_score: 0.50
+      threshold: 0.75
+    fox:
+      min_score: 0.50
+      threshold: 0.75
+    raccoon:
+      min_score: 0.50
+      threshold: 0.75
+
+    # Packages / waste bins — often confused with bags/boxes
+    package:
+      min_score: 0.50
+      threshold: 0.75
+    waste_bin:
+      min_score: 0.50
+      threshold: 0.80
+
 semantic_search:
   enabled: true
   model_size: large
 
 face_recognition:
   enabled: true
-  model_size: small
+  model_size: large
+  min_area: 80
+  recognition_threshold: 0.7
 
 lpr:
   enabled: false
@@ -148,10 +269,15 @@ classification:
 cameras:
   doorbird:
     ffmpeg:
+      # DoorBird delivers MJPEG — disable VAAPI hwaccel (incompatible with MJPEG input)
+      hwaccel_args: []
       inputs:
         - path: "http://{FRIGATE_DOORBIRD_USER}:{FRIGATE_DOORBIRD_PASSWORD}@{FRIGATE_DOORBIRD_URL}/bha-api/video.cgi"
           input_args: -f mpjpeg
           roles: [detect, record]
+      # Transcode MJPEG → H.264 for playable recordings (pix_fmt fix for yuvj422p)
+      output_args:
+        record: -f segment -segment_time 10 -segment_format mp4 -reset_timestamps 1 -strftime 1 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -an
     detect:
       width: 1280
       height: 720
@@ -169,7 +295,7 @@ cameras:
       auto:
         coordinates:
           0.996,0.913,0.916,0.841,0.924,0.693,0.882,0.662,0.771,0.708,0.711,0.652,0.691,0.638,0.523,0.648,0.525,0.449,0.899,0.325,0.935,0.461,0.943,0.472,0.999,0.474
-
+#Secret updated
   garten:
     ffmpeg:
       inputs:

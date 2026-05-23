@@ -1,0 +1,50 @@
+# =============================================================================
+# Grafana Alerting — Notification Policies (Routing)
+# =============================================================================
+# Routes alerts to contact points based on severity and component.
+#
+# Routing logic:
+#   - critical → telegram-critical (immediate, no grouping delay)
+#   - warning  → telegram-default  (batched every 15min, silent notifications)
+#   - info     → telegram-default  (batched every 30min, silent notifications)
+#
+# Group by component label so related alerts arrive together.
+# =============================================================================
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: telegram-default
+    group_by:
+      - grafana_folder
+      - alertname
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      # Critical alerts: immediate delivery, short repeat
+      - receiver: telegram-critical
+        matchers:
+          - severity = critical
+        group_wait: 10s
+        group_interval: 2m
+        repeat_interval: 1h
+        continue: false
+
+      # Warning alerts: batched, moderate repeat
+      - receiver: telegram-default
+        matchers:
+          - severity = warning
+        group_wait: 60s
+        group_interval: 15m
+        repeat_interval: 4h
+        continue: false
+
+      # Info alerts: batched, long repeat (FYI only)
+      - receiver: telegram-default
+        matchers:
+          - severity = info
+        group_wait: 120s
+        group_interval: 30m
+        repeat_interval: 12h
+        continue: false
