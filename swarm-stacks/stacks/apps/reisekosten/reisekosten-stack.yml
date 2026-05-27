@@ -24,7 +24,7 @@
 #                        with access to both the local SQLite file and the
 #                        cluster Postgres (over Tailscale or SSH tunnel).
 #
-# Custom image: ghcr.io/thorstenhornung1/reisekosten:v2.6.0 — built by GHA
+# Custom image: ghcr.io/thorstenhornung1/reisekosten:v2.8.2 — built by GHA
 # release-build.yml on tag push from the Reisekostenabrechnung repo
 # (release-please-driven). Pinned to a specific SemVer tag for reproducible
 # deploys; bump on each release.
@@ -34,7 +34,7 @@ version: "3.8"
 
 services:
   reisekosten:
-    image: ghcr.io/thorstenhornung1/reisekosten:v2.6.0
+    image: ghcr.io/thorstenhornung1/reisekosten:v2.8.2
     hostname: reisekosten
     # Wrapper assembles DATABASE_URL from the db-password secret, then execs
     # the image's default CMD (gunicorn).
