@@ -133,11 +133,16 @@ EOF
 chmod 600 /opt/gha-runner/.env
 
 cat > /opt/gha-runner/docker-compose.yml <<'EOF'
-# Ephemeral self-hosted Runner — 1 Service je privatem Repo.
+# Ephemeral self-hosted Runner — ${runners_per_repo} Service(s) je privatem
+# Repo (Skalierung gegen FIFO-Queue-Stau am ein-Runner-pro-Repo-Bottleneck).
+# myoung34 vergibt mit EPHEMERAL=true + RUNNER_NAME_PREFIX selbst eindeutige
+# Suffixe pro Container → keine Namens-Kollision zwischen den Replicas.
 # ACCESS_TOKEN kommt aus /opt/gha-runner/.env (env_file).
+# Service-Name-Schema: runner-<repo-kebab>-<idx>  (idx = 1..runners_per_repo)
 services:
 %{ for repo in repos ~}
-  runner-${lower(replace(element(split("/", repo), 1), "_", "-"))}:
+%{ for idx in range(1, runners_per_repo + 1) ~}
+  runner-${lower(replace(element(split("/", repo), 1), "_", "-"))}-${idx}:
     image: myoung34/github-runner:latest
     restart: unless-stopped
     environment:
@@ -151,6 +156,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 %{ endfor ~}
+%{ endfor ~}
 EOF
 
 cat > /etc/systemd/system/gha-runner.service <<'EOF'
@@ -163,7 +169,7 @@ Requires=docker.service
 Type=oneshot
 RemainAfterExit=true
 WorkingDirectory=/opt/gha-runner
-ExecStart=/usr/bin/docker compose up -d
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
 ExecStop=/usr/bin/docker compose down
 TimeoutStartSec=0
 
@@ -180,6 +186,13 @@ if grep -qE '^ACCESS_TOKEN=.+' /opt/gha-runner/.env; then
   else
     echo "[gha-runner] WARN: Service-Start fehlgeschlagen (Unit ist definiert+enabled; 'journalctl -u gha-runner' bzw. 'cd /opt/gha-runner && docker compose logs' prüfen) — Script läuft weiter"
   fi
+  # Compose-Änderungen idempotent anwenden — `systemctl start` ist no-op auf
+  # bereits-aktiver RemainAfterExit=true Unit (Fall: re-apply nach script_hash-
+  # Bump verändert compose.yml, Service läuft schon). `compose up -d` rechnet
+  # selbst den Diff (neue Services starten, orphans killen, unveränderte
+  # Container bleiben unangefasst).
+  cd /opt/gha-runner && docker compose up -d --remove-orphans 2>&1 | tail -20 || \
+    echo "[gha-runner] WARN: 'docker compose up -d --remove-orphans' fehlgeschlagen — manuell auf LXC prüfen"
 else
   echo "[gha-runner] WARN: ACCESS_TOKEN leer — Service NICHT gestartet (gha_runner_pat in terraform.tfvars setzen, dann re-apply)"
 fi
@@ -188,7 +201,7 @@ echo "[gha-runner] (9/9) Wöchentlicher Image-Pull (Runner-Aktualität)"
 cat > /etc/cron.weekly/gha-runner-update <<'EOF'
 #!/bin/sh
 docker pull myoung34/github-runner:latest && \
-  cd /opt/gha-runner && /usr/bin/docker compose up -d
+  cd /opt/gha-runner && /usr/bin/docker compose up -d --remove-orphans
 EOF
 chmod +x /etc/cron.weekly/gha-runner-update
 

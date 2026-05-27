@@ -70,6 +70,23 @@ variable "gha_runner_labels" {
   default     = "self-hosted,linux,x64,homelab"
 }
 
+# Anzahl ephemeraler Runner-Container PRO PRIVATEM REPO. Persönliche
+# GitHub-Accounts können NUR Repo-Level-Runner registrieren (keine
+# Org-/User-weiten Pools) → Skalierung erfolgt durch Service-Duplikation
+# IM gha-runner LXC; alle Replicas teilen Docker-Layer-Cache + RAM-Image.
+# myoung34/github-runner vergibt mit EPHEMERAL=true + RUNNER_NAME_PREFIX
+# selbst eindeutige Suffixe je Container → keine Namens-Kollisionen.
+# Default 3 = 3 Repos × 3 Replicas = 9 parallele CI-Slots (statt 3).
+variable "gha_runners_per_repo" {
+  description = "Anzahl ephemeraler Runner-Container PRO PRIVATEM REPO (1=Pre-2026-05, 3=empfohlen)"
+  type        = number
+  default     = 3
+  validation {
+    condition     = var.gha_runners_per_repo >= 1 && var.gha_runners_per_repo <= 10
+    error_message = "1–10 Runner pro Repo (RAM-Druck im LXC: jeder Container ~150 MB idle)."
+  }
+}
+
 # Fine-grained GitHub PAT (administration:write auf die 3 PRIVATEN Repos),
 # nötig für die Runner-Registrierung. Kein Default = Pflicht: ohne Wert
 # bricht `terraform plan/apply` mit klarer Fehlermeldung ab statt einen
@@ -204,9 +221,10 @@ resource "proxmox_virtual_environment_container" "gha_runner" {
 
 resource "null_resource" "gha_runner_setup" {
   triggers = {
-    container_id = proxmox_virtual_environment_container.gha_runner.id
-    script_hash  = filemd5("${path.module}/terraform/gha-runner/setup-gha-runner.sh.tpl")
-    repos        = join(",", var.gha_runner_repos)
+    container_id     = proxmox_virtual_environment_container.gha_runner.id
+    script_hash      = filemd5("${path.module}/terraform/gha-runner/setup-gha-runner.sh.tpl")
+    repos            = join(",", var.gha_runner_repos)
+    runners_per_repo = var.gha_runners_per_repo
   }
 
   connection {
@@ -219,13 +237,14 @@ resource "null_resource" "gha_runner_setup" {
 
   provisioner "file" {
     content = templatefile("${path.module}/terraform/gha-runner/setup-gha-runner.sh.tpl", {
-      hostname       = var.gha_runner.hostname
-      dns_servers    = join(" ", var.dns_servers)
-      ghcr_user      = var.ghcr_user
-      ghcr_pat       = var.ghcr_pat
-      gha_runner_pat = var.gha_runner_pat
-      repos          = var.gha_runner_repos
-      labels         = var.gha_runner_labels
+      hostname         = var.gha_runner.hostname
+      dns_servers      = join(" ", var.dns_servers)
+      ghcr_user        = var.ghcr_user
+      ghcr_pat         = var.ghcr_pat
+      gha_runner_pat   = var.gha_runner_pat
+      repos            = var.gha_runner_repos
+      labels           = var.gha_runner_labels
+      runners_per_repo = var.gha_runners_per_repo
     })
     destination = "/tmp/setup-gha-runner.sh"
   }
@@ -250,14 +269,16 @@ resource "null_resource" "gha_runner_setup" {
 output "gha_runner" {
   description = "Self-hosted GitHub Actions Runner LXC"
   value = {
-    vm_id    = proxmox_virtual_environment_container.gha_runner.vm_id
-    hostname = var.gha_runner.hostname
-    ip       = var.gha_runner.ip
-    node     = var.gha_runner.node
-    cpu      = "${var.gha_runner.cores} cores"
-    memory   = "${var.gha_runner.memory} MB"
-    disk     = "${var.gha_runner.disk_size} GB (${coalesce(var.gha_runner.storage_pool, "local-lvm")})"
-    repos    = var.gha_runner_repos
+    vm_id            = proxmox_virtual_environment_container.gha_runner.vm_id
+    hostname         = var.gha_runner.hostname
+    ip               = var.gha_runner.ip
+    node             = var.gha_runner.node
+    cpu              = "${var.gha_runner.cores} cores"
+    memory           = "${var.gha_runner.memory} MB"
+    disk             = "${var.gha_runner.disk_size} GB (${coalesce(var.gha_runner.storage_pool, "local-lvm")})"
+    repos            = var.gha_runner_repos
+    runners_per_repo = var.gha_runners_per_repo
+    total_runners    = length(var.gha_runner_repos) * var.gha_runners_per_repo
   }
 }
 
