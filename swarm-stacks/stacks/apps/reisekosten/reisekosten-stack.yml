@@ -74,6 +74,26 @@ services:
       LANG: de_DE.UTF-8
       LC_ALL: de_DE.UTF-8
       TZ: Europe/Berlin
+      # belegparser 0.5.x LLM backend — uses existing LMStudio host on
+      # VLAN 2 (OpenAI-API-compatible). Routing VLAN 4 → VLAN 2 is set
+      # at UDM-Pro. Feature-flagged so the consumer can degrade to
+      # rule-based parsing when LLM is unreachable / disabled.
+      #
+      # ARCHITEKTUR-INVARIANTE: belegparser ist eine STATELESS library
+      # — LLM-Calls sind transient, KEINE Persistenz. Es darf KEIN
+      # belegparser-eigenes Cache-/Log-Volume auf shared CephFS angelegt
+      # werden. Was im uploads/generated-Volume liegt, ist Reisekosten-
+      # User-Material (Belege/PDFs der aufrufenden App), nicht LLM-State.
+      # Maximal Debug-Output landet in container-local /tmp (ephemer).
+      #
+      # Wired by swarm-stacks#54; consumed by RKA#222 after wheel-bump
+      # to belegparser 0.5.x. Until then, existing code ignores these
+      # vars (no-op for the current v2.8.x image).
+      BELEGPARSER_LLM_ENABLED: "true"
+      BELEGPARSER_LLM_PROVIDER: openai
+      BELEGPARSER_LLM_MODEL: phi-4
+      BELEGPARSER_LLM_API_URL: "http://192.168.2.236:1234/v1"
+      BELEGPARSER_LLM_API_KEY: "lm-studio"
     volumes:
       # Receipts, attachments, generated PDFs — persistent on CephFS
       - /mnt/cephfs/swarm-state/stack-reisekosten/uploads:/app/uploads
