@@ -1,0 +1,132 @@
+# Dependabot version updates for thorstenhornung1/swarm-stacks.
+# Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Repo conventions:
+#   - Single main branch (no devel) — Dependabot opens PRs directly against
+#     main. Auto-deploy via deploy-stacks.yml only triggers on changes
+#     under stacks/** or webhooks.conf, so dependabot churn on
+#     .github/workflows/** + Dockerfiles is CI-only, no production impact
+#     until a PR is merged.
+#   - Commit prefix `chore(deps):` — release-please is NOT used in this
+#     repo, but the prefix is GitOps-noise-friendly (no semantic-release
+#     loop, no auto-tag spam).
+#   - Schedule: WEDNESDAY (06:00). Off-hour from siblings:
+#       Reisekostenabrechnung = Monday (pip)
+#       Reisekosten-Steuer    = Thursday (pip), Friday (gh-actions/docker)
+#     With the new 9-runner pool (terraform 7448e15) FIFO-queue contention
+#     is no longer the dominant concern; staggering now primarily smooths
+#     review load.
+#   - Custom-image stack-files (stacks/**/*.yml) reference Docker-Hub /
+#     GHCR tags directly. Dependabot does NOT natively scan compose YAML
+#     for image updates — only Dockerfile FROM lines. Renovate would, but
+#     these tags are typically Release-pinned versions (v2.8.2, phi-4,
+#     postgres-ha custom builds) that we want to bump deliberately, NOT
+#     auto-bump. Acceptable gap.
+#
+# Sibling repos:
+#   Reisekostenabrechnung — dependabot.yml + dependabot-relock.yml (lock-resync)
+#   Reisekosten-Steuer    — dependabot.yml (no lock file)
+#   This repo             — dependabot.yml (no pip / no lock)
+
+version: 2
+updates:
+  # ---------------------------------------------------------------------------
+  # GitHub Actions used by workflows under .github/workflows/.
+  # 6 unique actions today (checkout, docker/login, docker/build-push,
+  # docker/metadata, docker/setup-buildx, tailscale/github-action). Group
+  # everything — actions majors are usually well-documented and low-risk.
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    reviewers:
+      - "thorstenhornung1"
+    assignees:
+      - "thorstenhornung1"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      # One PR per week for all actions bumps (both minor/patch AND
+      # majors). NO `applies-to:` — default
+      # `version-updates-and-security-updates` collapses CVE storms
+      # into the same PR (the K1 trap fixed in Reisekostenabrechnung
+      # PR #202). After the tj-actions/changed-files-Incident
+      # (March 2025), action-tag-tracking is security-relevant, not
+      # cosmetic — keep this group ungated.
+      github-actions:
+        patterns:
+          - "*"
+    # NOTE: workflows are tag-pinned (@v5/@v6/@v7) today. SHA-pinning per
+    # GitHub's post-incident recommendation is a separate follow-up.
+    # Dependabot keeps SHAs in sync natively when they are set up that way.
+
+  # ---------------------------------------------------------------------------
+  # Custom Docker images built in this repo. 5 Dockerfiles spread across
+  # /images/* and /stacks/{infrastructure,apps}/*/Dockerfile. Each lives
+  # in a different ecosystem-root, so `directories:` (plural) lists all
+  # of them — one weekly group-PR per Dockerfile keeps the review
+  # surface small.
+  #
+  # Why these 5 specifically:
+  #   - pbs-backup-client            — Proxmox-Backup client wrapper
+  #   - postgres-ha/docker           — Patroni-Postgres custom build
+  #     (must stay -march=x86-64-v3 to avoid the AVX-512 SIGILL trap,
+  #      see swarm-stacks #9 / #12)
+  #   - samba                        — Samba w/ Authentik LDAP sidecar
+  #   - taiga-openid/back, /front    — Custom Taiga OIDC build (PG16)
+  #
+  # Why NOT compose-files (stacks/**/*.yml):
+  #   - Dependabot `docker` ecosystem only scans Dockerfile FROM lines,
+  #     not compose `image:` directives. Production-pinned tags
+  #     (v2.8.2, phi-4, etc.) should NOT be auto-bumped anyway.
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "docker"
+    directories:
+      - "/images/pbs-backup-client"
+      - "/images/taiga-openid/back"
+      - "/images/taiga-openid/front"
+      - "/stacks/infrastructure/postgres-ha/docker"
+      - "/stacks/apps/samba"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "07:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    reviewers:
+      - "thorstenhornung1"
+    assignees:
+      - "thorstenhornung1"
+    labels:
+      - "dependencies"
+      - "docker"
+    groups:
+      docker-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      docker-major:
+        # Majors separated from minor/patch — base-image major bumps
+        # (e.g. postgres:16 → postgres:17) need extension-recompile
+        # checks (pgvector AVX-512 trap, swarm-stacks#9) and migration
+        # planning. Don't drown the minor/patch batch.
+        update-types:
+          - "major"
