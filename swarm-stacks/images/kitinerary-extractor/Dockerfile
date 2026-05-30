@@ -19,13 +19,21 @@
 FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb
 
 # Reproduzierbares apt-install: keine recommends, keine suggests, keine cache.
-# kitinerary-extractor-Version ist in bookworm-stable eingefroren -- explizite
-# Version-Pin im GitOps via Snapshot-Mirror (snapshot.debian.org) wenn gewuenscht.
+# Debian-Paket heisst `libkpimitinerary-bin` (verifiziert 2026-05-30 gegen
+# bookworm-Paketindex: das ehemals vermutete `kitinerary-extractor`-Paket
+# existiert in bookworm nicht). Das Paket liefert das Binary nach
+# /usr/lib/x86_64-linux-gnu/libexec/kf5/kitinerary-extractor -- da KF5
+# libexec absichtlich NICHT im PATH ist, setzen wir einen Symlink in
+# /usr/local/bin damit ENTRYPOINT + Caller-Aufrufe wie gewohnt kurz bleiben.
+# In trixie heisst das Paket `libkitinerary-bin` (KF6-Rename) -- bei
+# Base-Image-Bump auf trixie hier mit anpassen.
 RUN set -eux \
     && apt-get update \
     && apt-get install -y --no-install-recommends --no-install-suggests \
-        kitinerary-extractor \
+        libkpimitinerary-bin \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && ln -s /usr/lib/x86_64-linux-gnu/libexec/kf5/kitinerary-extractor \
+             /usr/local/bin/kitinerary-extractor \
     && useradd --system --no-create-home --shell /usr/sbin/nologin kitinerary
 
 # Non-root: kitinerary-extractor braucht weder root noch Filesystem-Writes.
