@@ -94,6 +94,25 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
+      - name: Smoke test — pull + run pushed image
+        # Verifies the image we just pushed (a) actually exists in the
+        # registry, (b) has a runnable ENTRYPOINT binary, (c) its shared
+        # libs load. Catches exactly the class of bug that bit the first
+        # build (ea8a831 / belegparser v0.6.1): wrong Debian package name
+        # made the binary disappear, but the BUILD itself was still green.
+        # `--help </dev/null` exits 0 on a healthy kitinerary-extractor
+        # without consuming/producing user data. /dev/null on stdin so the
+        # CLI's normal "read from stdin" mode does not hang the step.
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        run: |
+          echo "::group::Smoke-test target"
+          echo "$IMAGE_REF"
+          echo "::endgroup::"
+          docker pull "$IMAGE_REF"
+          docker run --rm -i "$IMAGE_REF" --help </dev/null
+          echo "::notice::Smoke test passed for $IMAGE_REF"
+
       - name: Print pulled digest (for consumer pinning)
         run: |
           echo "::notice::Image digest for consumer pinning: ${{ steps.build.outputs.digest }}"
