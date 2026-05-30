@@ -97,6 +97,7 @@ updates:
       - "/images/pbs-backup-client"
       - "/images/taiga-openid/back"
       - "/images/taiga-openid/front"
+      - "/images/kitinerary-extractor"
       - "/stacks/infrastructure/postgres-ha/docker"
       - "/stacks/apps/samba"
     target-branch: "main"
