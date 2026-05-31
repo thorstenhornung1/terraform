@@ -381,8 +381,13 @@ chmod 755 /usr/local/sbin/frigate-secrets-copy
 cat > /etc/systemd/system/frigate-secrets-copy.service << 'SVC'
 [Unit]
 Description=Copy Frigate secrets from CephFS to local
-After=mnt-cephfs.mount
-Requires=mnt-cephfs.mount
+# CephFS ends up as a direct kernel mount in production and the
+# mnt-cephfs.mount systemd unit gets masked; a hard Requires= on it makes this
+# oneshot FAIL ("Unit mnt-cephfs.mount is masked"), so secrets never re-sync
+# from CephFS — root cause of the 2026-05-31 frigate cert near-expiry, where
+# CF_DNS_API_TOKEN never propagated to the Traefik sidecar. Gate on the source
+# file instead: works whether CephFS is a mount unit, kernel mount, or bind.
+ConditionPathExists=/mnt/cephfs/swarm-state/stack-frigate/secrets.env
 Before=docker.service
 
 [Service]
