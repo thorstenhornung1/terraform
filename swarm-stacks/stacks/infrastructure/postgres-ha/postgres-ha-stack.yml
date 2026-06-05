@@ -552,6 +552,7 @@ services:
       - immich_db_password
       - reisekosten_db_password
       - reisekosten_steuer_db_password
+      - openarchiver_db_password
     environment:
       - PGHOST=pg-haproxy
       - PGPORT=5433
@@ -699,4 +700,6 @@ secrets:
   reisekosten_db_password:
     external: true
   reisekosten_steuer_db_password:
+    external: true
+  openarchiver_db_password:
     external: true

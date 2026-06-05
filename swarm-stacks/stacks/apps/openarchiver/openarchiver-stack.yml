@@ -1,0 +1,359 @@
+# =============================================================================
+# Open Archiver Stack — Self-Hosted E-Mail Archive
+# =============================================================================
+# Deploy: GitOps via ssh-deploy (webhooks.conf). Content-hash config naming
+# requires the SSH deploy path (Portainer webhook can't handle immutable configs).
+#
+# Zentrales Mailarchiv (M365/IMAP-Ingestion, Volltextsuche über Mails + Anhänge,
+# mbox-Import). SvelteKit-App (Frontend 3000, Backend 4000, BullMQ-Worker im
+# selben Container).
+#
+# Architektur:
+#   open-archiver        → App (PostgreSQL via pg-haproxy:5433, Patroni-HA)
+#   openarchiver-meili   → Meilisearch (Volltext-Index) auf CephFS, single-writer
+#                          (LMDB → 1 Replica, stop-first; bei Korruption re-index)
+#   openarchiver-valkey  → Valkey (BullMQ-Job-Queue), maxmemory-policy=noeviction
+#                          (zentrale Valkey nutzt allkeys-lru → würde Jobs evicten)
+#   openarchiver-tika    → Apache Tika (Textextraktion aus PDF/Office-Anhängen)
+#
+#   Mail-Blobs → Ceph RGW S3 (STORAGE_TYPE=s3, Endpoint http://s3-rgw, path-style).
+#                Skaliert auf die geplanten ~350 GB, ohne CephFS-Replikation 3x
+#                auf jedem App-Node. Der S3-RGW-HAProxy (s3-rgw-Stack) bündelt die
+#                3 radosgw-Daemons HA.
+#
+# Zugang: https://archive.hornung-bn.de  (eigene Benutzerverwaltung — Open Archiver
+#         OSS kennt keinen Header-/Proxy-Auto-Login, daher KEIN Traefik-forwardAuth).
+#
+# ⚠️  openarchiver_encryption_key verschlüsselt DB-Felder (u.a. die gespeicherten
+#     Mailbox-/Graph-Credentials). Bei Verlust müssen nur die Ingestion-Quellen
+#     neu verbunden werden — KEIN Verlust archivierter Mails. create-secrets.sh
+#     gibt den Key zur Sicherung aus.
+#     Mail-Blobs liegen bewusst UNVERSCHLÜSSELT im Ceph-RGW-S3-Pool (Homelab-
+#     Entscheidung: 3x repliziert) — kein STORAGE_ENCRYPTION_KEY.
+#
+# Deployment (Details: README.md):
+#   1. S3-Bucket:   s3cmd/aws mb s3://openarchiver  (Ceph RGW; S3-Keys = Secrets
+#                   openarchiver_s3_access_key/_secret_key, bereits extern angelegt)
+#   2. CephFS-Dirs: mkdir -p /mnt/cephfs/swarm-state/stack-openarchiver/{import,valkey,meili}
+#   3. Secrets:     ./create-secrets.sh   (auf einem Swarm-Manager)
+#   4. DB:          db-init.sh + postgres-ha-stack.yml erweitern → postgres-ha redeploy
+#   5. DNS:         archive.hornung-bn.de A → 192.168.4.40  (in dns1+dns2+dns3 EINZELN)
+#   6. Deploy:      git push → GitOps (ssh-deploy)
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # OPEN ARCHIVER — SvelteKit-App (Frontend + Backend + BullMQ-Worker)
+  # ===========================================================================
+  open-archiver:
+    image: logiclabshq/open-archiver:v0.5.0
+    hostname: open-archiver
+    # Eigener Wrapper lädt Docker-Secrets in ENV (die App kennt keine *_FILE-
+    # Konvention), dann exec auf das image-eigene Entrypoint, das pnpm db:migrate
+    # ausführt und die App startet. CMD muss explizit gesetzt werden, da das
+    # Überschreiben von entrypoint das image-CMD verwirft.
+    entrypoint: ["/bin/sh", "/entrypoint-wrapper.sh"]
+    command: ["docker-entrypoint.sh", "pnpm", "docker-start:oss"]
+    environment:
+      NODE_ENV: production
+      PORT_FRONTEND: "3000"
+      PORT_BACKEND: "4000"
+      APP_URL: "https://archive.hornung-bn.de"
+      ORIGIN: "https://archive.hornung-bn.de"
+      # --- Database (Patroni-HA via HAProxy primary port) ---
+      POSTGRES_HOST: pg-haproxy
+      POSTGRES_PORT: "5433"
+      POSTGRES_DB: open_archive
+      POSTGRES_USER: openarchiver
+      # POSTGRES_PASSWORD + DATABASE_URL werden vom entrypoint-wrapper gesetzt
+      # --- Full-Text Search ---
+      MEILI_HOST: "http://openarchiver-meili:7700"
+      # MEILI_MASTER_KEY wird vom entrypoint-wrapper gesetzt
+      MEILI_INDEXING_BATCH: "500"
+      # --- Job Queue (stack-interne Valkey, keine Auth im internen Overlay) ---
+      REDIS_HOST: openarchiver-valkey
+      REDIS_PORT: "6379"
+      REDIS_TLS_ENABLED: "false"
+      # --- Attachment Text Extraction ---
+      TIKA_URL: "http://openarchiver-tika:9998"
+      # --- Storage (Mail-Blobs in Ceph RGW S3 via s3-rgw HAProxy, path-style) ---
+      STORAGE_TYPE: s3
+      STORAGE_S3_ENDPOINT: "http://s3-rgw"
+      STORAGE_S3_BUCKET: "openarchiver"
+      STORAGE_S3_REGION: "us-east-1"
+      STORAGE_S3_FORCE_PATH_STYLE: "true"
+      # STORAGE_S3_ACCESS_KEY_ID + _SECRET_ACCESS_KEY: via entrypoint-wrapper aus Secrets
+      # Großzügig für mbox-Altbestand-Uploads (einzelne Files mehrere GB).
+      BODY_SIZE_LIMIT: "10G"
+      # --- Auth ---
+      # JWT_EXPIRES_IN ist im Backend PFLICHT (server.ts validiert hart) — ohne
+      # .env-Datei muss es hier gesetzt sein, sonst crasht der API-Server.
+      JWT_EXPIRES_IN: "7d"
+      # --- Ingestion ---
+      SYNC_FREQUENCY: "*/5 * * * *"
+      INGESTION_WORKER_CONCURRENCY: "3"
+      ALL_INCLUSIVE_ARCHIVE: "false"
+      # JWT_SECRET / ENCRYPTION_KEY: via entrypoint-wrapper aus Docker-Secrets
+    volumes:
+      # Mail-Blobs liegen in Ceph RGW S3 (s3-rgw) — kein lokales Storage-Volume.
+      # /import = Synology-NFS-Share (email_import) für mbox-Altbestand-Import:
+      # große mbox-Files (mehrere GB) sprengen das interne HTTP-Payload-Limit
+      # (~100 MB), daher Filesystem-Import statt Browser-Upload. Files via
+      # Synology ablegen → in der UI "Local Path" /import/<datei>.mbox.
+      - openarchiver_import:/import
+    secrets:
+      - openarchiver_db_password
+      - openarchiver_jwt_secret
+      - openarchiver_encryption_key
+      - openarchiver_meili_master_key
+      - openarchiver_s3_access_key
+      - openarchiver_s3_secret_key
+    configs:
+      - source: openarchiver_entrypoint_${ENTRYPOINT_WRAPPER_HASH:-latest}
+        target: /entrypoint-wrapper.sh
+        mode: 0555
+    networks:
+      - traefik_public
+      - postgres-ha-stack_postgres-network
+      - s3-rgw_s3-network
+      - default
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 3G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        # Der Container-Start dauert (Image macht pnpm install + db:migrate).
+        # failure_action: rollback verwarf die neue Config, bevor der Container
+        # healthy wurde (BODY_SIZE-Update rollte zurück). pause behält die neue
+        # Config; monitor gibt dem Start genug Zeit (innerhalb Workflow-Converge).
+        failure_action: pause
+        monitor: 150s
+      labels:
+        # --- Traefik Network (required: multi-network service) ---
+        - traefik.swarm.network=traefik_public
+        # --- Traefik HTTPS Router ---
+        - traefik.enable=true
+        - "traefik.http.routers.openarchiver.rule=Host(`archive.hornung-bn.de`)"
+        - traefik.http.routers.openarchiver.entrypoints=websecure
+        - traefik.http.routers.openarchiver.tls=true
+        - traefik.http.routers.openarchiver.tls.certresolver=dns
+        - traefik.http.services.openarchiver.loadbalancer.server.port=3000
+        # --- HTTP -> HTTPS Redirect ---
+        - "traefik.http.routers.openarchiver-http.rule=Host(`archive.hornung-bn.de`)"
+        - traefik.http.routers.openarchiver-http.entrypoints=web
+        - traefik.http.routers.openarchiver-http.middlewares=openarchiver-redirect
+        - traefik.http.middlewares.openarchiver-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.openarchiver-redirect.redirectscheme.permanent=true
+    healthcheck:
+      # TCP-Connect-Check auf den Frontend-Port (node ist im Image garantiert
+      # vorhanden; vermeidet false-unhealthy durch Login-Redirects auf "/").
+      test: ["CMD", "node", "-e", "require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Das Image installiert beim Start pnpm-Deps (~631 Pakete) + db:migrate;
+      # ein kalter Start braucht mehrere Minuten → großzügige start_period, sonst
+      # killt Swarm den Container vor App-Listening (Kill-vor-fertig-Schleife).
+      start_period: 600s
+
+  # ===========================================================================
+  # MEILISEARCH — Volltext-Index (CephFS, single-writer)
+  # ===========================================================================
+  # Der Index liegt auf CephFS (swarm-state). Meilisearch (LMDB, mmap) ist
+  # single-writer → der Service läuft als genau 1 Replica und wird stop-first
+  # aktualisiert (kein paralleler 2. Writer auf data.ms). Bei Index-Korruption
+  # ist kein Datenverlust: re-index aus der DB/den Mails (s. README).
+  openarchiver-meili:
+    image: getmeili/meilisearch:v1.15
+    hostname: openarchiver-meili
+    # Master-Key aus Docker-Secret lesen ($$ → $ zur Laufzeit; Pattern wie
+    # pg-backup-stack.yml). production-mode erzwingt den Key.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      # --db-path zeigt auf ein Unterverzeichnis (nicht den Mount-Root), sonst
+      # verwirrt das ext4-lost+found Meilisearch ("failed to infer DB version").
+      - 'exec meilisearch --master-key "$$(cat /run/secrets/openarchiver_meili_master_key)" --env production --db-path /meili_data/data.ms --http-addr 0.0.0.0:7700'
+    secrets:
+      - openarchiver_meili_master_key
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-openarchiver/meili:/meili_data
+    networks:
+      - default
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          # app-Node (CephFS ist dort gemountet); single-writer → 1 Replica.
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 2G
+        reservations:
+          cpus: '0.3'
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        # stop-first: LMDB ist single-writer — start-first würde während des
+        # Rolling-Updates kurz 2 Meili auf dieselbe data.ms lassen (Lock-Konflikt
+        # / Index-Korruption). Gleiche Regel wie vmagent (flock auf CephFS).
+        order: stop-first
+
+  # ===========================================================================
+  # VALKEY — BullMQ-Job-Queue (noeviction!)
+  # ===========================================================================
+  openarchiver-valkey:
+    image: valkey/valkey:8-alpine
+    hostname: openarchiver-valkey
+    command: >
+      valkey-server
+      --port 6379
+      --bind 0.0.0.0
+      --protected-mode no
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+      --appendonly yes
+      --appendfsync everysec
+      --dir /data
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-openarchiver/valkey:/data
+    networks:
+      - default
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 320M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================================================
+  # TIKA — Anhang-Textextraktion (stateless)
+  # ===========================================================================
+  openarchiver-tika:
+    image: apache/tika:3.1.0.0
+    hostname: openarchiver-tika
+    networks:
+      - default
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/9998' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  default:
+    driver: overlay
+  traefik_public:
+    external: true
+  postgres-ha-stack_postgres-network:
+    external: true
+  s3-rgw_s3-network:
+    external: true
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+# /import = Synology-NFS-Share (192.168.2.3:/volume1/email_import) für den
+# mbox-Altbestand-Import. NFS statt HTTP-Upload, weil große mbox-Files (mehrere
+# GB) das interne Payload-Limit (~100 MB) sprengen. Docker mountet den Share auf
+# dem Node, wo der Container läuft (Export erlaubt VLAN 4: 192.168.4.0/24).
+volumes:
+  openarchiver_import:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=192.168.2.3,nfsvers=4.1,rw,soft,timeo=100,retrans=5"
+      device: ":/volume1/email_import"
+
+# =============================================================================
+# CONFIGS (Content-Hash-Naming für Zero-Downtime-Updates)
+# =============================================================================
+# Der Deploy-Workflow (.github/workflows/deploy-stacks.yml) berechnet SHA256
+# über entrypoint-wrapper.sh und ersetzt ${ENTRYPOINT_WRAPPER_HASH}. Ändert
+# sich die Datei → neuer Config-Name → Service-Update; alte Config wird gepruned.
+configs:
+  openarchiver_entrypoint_${ENTRYPOINT_WRAPPER_HASH:-latest}:
+    file: ./entrypoint-wrapper.sh
+
+# =============================================================================
+# SECRETS  (extern; via ./create-secrets.sh auf einem Manager anlegen)
+# =============================================================================
+secrets:
+  openarchiver_db_password:
+    external: true
+  openarchiver_jwt_secret:
+    external: true
+  openarchiver_encryption_key:
+    external: true
+  openarchiver_meili_master_key:
+    external: true
+  openarchiver_s3_access_key:
+    external: true
+  openarchiver_s3_secret_key:
+    external: true

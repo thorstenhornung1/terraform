@@ -169,6 +169,10 @@ init_app "reisekosten" "$REISEKOSTEN_PASS" "reisekosten"
 REISEKOSTEN_STEUER_PASS=$(cat /run/secrets/reisekosten_steuer_db_password)
 init_app "reisekosten_steuer" "$REISEKOSTEN_STEUER_PASS" "reisekosten_steuer"
 
+# --- Open Archiver (E-Mail Archive; Mail-Blobs in Ceph RGW S3) ---
+OPENARCHIVER_PASS=$(cat /run/secrets/openarchiver_db_password)
+init_app "openarchiver" "$OPENARCHIVER_PASS" "open_archive"
+
 # --- Add future applications here ---
 
 echo "=== Central database initialization complete! ==="
