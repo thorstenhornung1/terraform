@@ -58,6 +58,10 @@ services:
     command: ["docker-entrypoint.sh", "pnpm", "docker-start:oss"]
     environment:
       NODE_ENV: production
+      # Container hat kein IPv6-Internet-Routing, aber Technitium liefert AAAA-
+      # Records (z.B. graph.microsoft.com) → node versucht IPv6 zuerst →
+      # connect ETIMEDOUT/ENETUNREACH beim M365-Import. IPv4 erzwingen.
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
       PORT_FRONTEND: "3000"
       PORT_BACKEND: "4000"
       APP_URL: "https://archive.hornung-bn.de"
