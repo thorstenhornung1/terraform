@@ -95,6 +95,10 @@ services:
       SYNC_FREQUENCY: "*/5 * * * *"
       INGESTION_WORKER_CONCURRENCY: "3"
       ALL_INCLUSIVE_ARCHIVE: "false"
+      # Löschen von Ingestion-Sources/Mails erlauben. Default ist deaktiviert
+      # ("Deletion is disabled for this instance" = revisionssicher/WORM). Homelab:
+      # aktiviert, damit falsch konfigurierte Sources entfernt werden können.
+      ENABLE_DELETION: "true"
       # JWT_SECRET / ENCRYPTION_KEY: via entrypoint-wrapper aus Docker-Secrets
     volumes:
       # Mail-Blobs liegen in Ceph RGW S3 (s3-rgw) — kein lokales Storage-Volume.
