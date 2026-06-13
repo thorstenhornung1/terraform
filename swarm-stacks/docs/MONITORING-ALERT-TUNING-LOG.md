@@ -40,7 +40,7 @@ Status: `offen` · `getunt` (deployt, Wirkung ausstehend) · `beobachten` · `er
 | B-04 | `patroni-no-leader` (:516), `etcd-no-leader` (:828) | flappt bei Leader-Election/Netz-Partition | Konsens-Metrik + nur `for: 2m` | `for: 3–5m` | bedingt | offen |
 | B-05 | `patroni-replica-not-streaming` (:651) | oszilliert um 16 MB WAL-Gap | Roh-Gap + `for: 3m` | `for: 5m` oder `min_over_time` | nein | offen |
 | B-06 | `vm-memory-high` (:1237) | GC-Zyklen kreuzen 1,5 GB-Threshold | Instant-Memory am Rand | `avg_over_time(...[5m])` | nein | offen |
-| B-07 | **Loki** (loki.hornung-bn.de:3100, v2.9.2) | **0 streams/bytes über 30 Tage** — Grafana-Loki-Datasource zeigt auf leeres Loki | Docker-Container-Log-Shipping landet nicht in diesem Loki (nur LXC-rsyslog→:1514 laut Memory, schlägt hier nicht durch) | Log-Pipeline prüfen (Promtail/Alloy/Logging-Driver). **Observability-Lücke**: Vorfälle nicht nachträglich über Logs analysierbar | n/a | offen |
+| B-07 | **Loki** (loki.hornung-bn.de:3100=192.168.2.3/Synology, v2.9.2) | Query liefert 0 streams; Grafana-Loki-Panels „No Data" | **Ingestion VERSIEGT**: Loki läuft + `:1514`-Listener da + historisch 2,69 Mio Zeilen empfangen, ABER `ingester_memory_streams=0` (nichts kommt mehr an) UND nur ~2h41m Store-Lookback (kein durabler Retention-Store). Sender (rsyslog Swarm-Nodes / Promtail) senden nicht mehr; alte Daten gealtert. NICHT „nie gebaut", NICHT kaputter Query. | (1) auf docker-infra-Node prüfen: `/etc/rsyslog.d/60-loki.conf` vorhanden + verbindet zu :1514? (2) was lauscht auf :1514 (Promtail?) und pusht es zu :3100? (3) durablen Store/Retention für Loki konfigurieren. **Observability-Lücke** | n/a | offen (RCA fertig) |
 | B-08 | Contact-Points (alle) | jeder Flap = 2 Telegrams (ALARM+RESOLVED) | `disableResolveMessage: false` überall | warning/info → `true`; critical behält Entwarnung | n/a | **getunt** (Phase 1) |
 | B-09 | Routing critical | enger Wiederhol-Takt | `group_interval 2m` + `repeat_interval 1h` | 5m / 4h | n/a | **getunt** (Phase 1) |
 | B-10 | Routing warning/info | Pro-Event-Spam | keine Bündelung / kein Digest | mute außerhalb 08:00–08:15 / 18:00–18:15 + `group_by [grafana_folder]` | n/a | **getunt** (Phase 1) |
@@ -48,6 +48,8 @@ Status: `offen` · `getunt` (deployt, Wirkung ausstehend) · `beobachten` · `er
 | B-12 | `homeassistant` scrape | flappt bei langsamer TLS/UI-Antwort | `scrape_timeout 20s` / `interval 30s` (66 %) | `scrape_timeout: 25s` | n/a | **getunt** (Phase 3) |
 | B-13 | `blackbox-tika` scrape | stille 60 s-Lücken nach Reschedule | `scrape_interval 60s` auf interner Service-Discovery | `30s` | ggf. (stale VIP) | **getunt** (Phase 3) |
 | B-14 | Transiente Infra-Flaps | „Flapping" das echt ist & wiederkehrt | stale CephFS-Mount / stale Service-VIP / totes Node-Mesh | Self-Heal-Detektor (Phase 4) | **ja** | offen |
+| B-15 | **Grafana-Service** `update_config` | Config-Änderungen greifen NICHT (Update pausiert still, alter Task läuft weiter) → mein Spam-Fix hängt fest | `order: start-first` + SQLite (grafana.db) auf CephFS: neuer Task kann DB nicht öffnen solange alter sie hält → stirbt → pause. Beweis: vmagent (stop-first) konvergierte im selben Deploy, Grafana (start-first) nicht. | `order: stop-first` (alter Task gibt SQLite frei, dann neuer). ~10-30s Downtime/Update. | n/a | **gefixt im Repo** (Deploy ausstehend) |
+| B-16 | **GitOps Deploy-Gate** (deploy-stacks.yml) | meldet „ROLLED BACK / did not stick" obwohl Service async konvergiert (false-red CI) | Gate gibt bei ~18s auf, wertet transientes `paused`/0-1 von `stop-first`-Services als Rollback. vmagent kam danach hoch, Gate war schon rot. | Gate-Geduld erhöhen / `paused→später-running` tolerieren (deploy-stacks.yml). Separat, größerer Scope. | n/a | offen |
 
 **Bewusst NICHT angefasst** (bereits gut geglättet): PBS-/TLS-/Backup-/Disk-Zeitmetriken,
 `ceph-health-warning` (15m `min_over_time`), `frigate-down`/`paperless-down`/`openarchiver-down`
@@ -82,6 +84,22 @@ neu `alerting/mute-times.yml`, `monitoring-stack.yml` (Config-Def + Mount).
 | `blackbox-tika` | interval 60s | `scrape_interval: 30s` | schnellere Erkennung verwaister Service-Discovery |
 
 **Gemessene Wirkung:** _ausstehend_ (in VM prüfen: keine Scrape-Lücken mehr in `up{job=...}`).
+
+### 2026-06-13 — Hardening: Grafana `update_config` start-first → stop-first (B-15)
+**Datei:** `monitoring-stack.yml` (grafana-Service).
+
+**Warum:** Der erste Deploy (Commit fdf38e4) ging „rot": vmagent (stop-first) konvergierte,
+aber Grafanas neuer Task starb → Update `paused`, alter Task lief auf alter Config weiter →
+**Spam-Fix nicht live**. Ursache: `start-first` + SQLite auf CephFS (zwei Grafanas auf einer
+grafana.db unmöglich). Provisioning-YAML wurde als schema-korrekt verifiziert (H2 ausgeschlossen).
+
+**Change:** grafana `order: start-first` → `stop-first`. Diagnose rein read-only (SSH-Inspect
+laufender/gescheiterter Tasks). Live-Stand vor Fix: alle `monitoring_*` n/n (kein Ausfall),
+grafana auf alter Config (contact_points_3d5d5c9a, notification_policies_a3a66ca0), vmagent
+bereits neu (prometheus_scrape_c3da3542).
+
+**Gemessene Wirkung:** _Deploy ausstehend_ — nach Push muss der neue Grafana-Task hochkommen
+und `alerting_mute_times_b2dc94f5` + die neuen contact/notification-Configs tragen.
 
 **Deploy-Hinweis:** `MUTE_TIMES_HASH` wird vom Deploy-Workflow automatisch aus `mute-times.yml`
 berechnet (globstar-Scan + Basename→HASH). Vor erstem Push verifizieren, dass ein Change im

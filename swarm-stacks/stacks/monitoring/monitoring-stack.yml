@@ -295,7 +295,16 @@ services:
       update_config:
         parallelism: 1
         delay: 10s
-        order: start-first
+        # stop-first (NICHT start-first!): Grafana nutzt SQLite (grafana.db) auf
+        # CephFS (/mnt/cephfs/.../grafana). Bei start-first startet Swarm den NEUEN
+        # Task, während der alte die DB noch hält → der neue kann grafana.db nicht
+        # öffnen ("database is locked") → Task stirbt → Update pausiert STILL, der
+        # alte Task läuft auf der alten Config weiter (Config-Drift, Alerting-/
+        # Notification-Änderungen greifen nie). Grafana unterstützt generell keine
+        # 2 Instanzen auf SQLite. stop-first = alter Task gibt DB frei, dann neuer.
+        # Kosten: ~10-30s Grafana-Downtime pro Update (für Dashboards/Alerting ok).
+        # Fix 2026-06-13. Gleiche Klasse wie vmagent (feedback_swarm_rolling_update_flock).
+        order: stop-first
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"]
       interval: 30s
