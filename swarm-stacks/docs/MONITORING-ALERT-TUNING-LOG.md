@@ -161,10 +161,20 @@ kein Patroni/etcd/#70-Bug.
 - ✅ **Schicht 2a — infra-2 Balloon-Floor 4000→8192** (live, 5,6→8,2GB; pve02 weiter 7GB frei). Befund:
   **Ballooning hungerte die VMs aus** (infra-1 balloon-aus = gesund; infra-2/3 deflationiert). Swarm-
   `reservations.memory` ist KEIN Kernel-OOM-Schutz (nur Scheduling) — live verifiziert (`MemoryReservation=0`).
-- ⏳ **Schicht 3 — apptier-Placement** (heavy Apps von infra-3 weg) — ausstehend (reschedult prod-Apps).
-- ⏳ **Schicht 4 — swap (aktuell 0!) + swappiness + Patroni ttl 30→45/loop_wait 10→15** — ausstehend.
-- ⏳ **Schicht 2b — infra-3 Balloon-Pin** — nach Schicht-3-Offload (dann hat pve03 Platz).
-- Voll-Plan: `docs/` Plan-File / Task #9. Frigate-Trim + #70-PGDATA-Subdir bleiben separate Follow-ups.
+- ✅ **Schicht 4 — Host-Hygiene LIVE**: Patroni `ttl 30→45`/`loop_wait 10→15` (patronictl edit-config,
+  DCS); 2 GB swap + `vm.swappiness=10` auf allen 3 Nodes (war swap=0 = binär-OOM). ansible: infra-swap-valve.yml.
+- ⚠️ **Schicht 3 — apptier-Placement TEILWEISE**: node-Labels gesetzt (infra-1/2=heavy, infra-3=light).
+  **taiga (7 svc) + paperless** auf heavy-Nodes verschoben → infra-3 29→~23 Tasks. **Gelernt:** Services
+  mit `failure_action: rollback` + `start_period` > `update_config.monitor` rollen den apptier-Move ZURÜCK
+  (paperless-webserver-Fix: `monitor: 330s`). **Bewusst NICHT verschoben:** authentik (stop-first+600s=
+  ~10min-SSO-Outage bzw. start-first=Migrations-Konflikt-Risiko); immich/n8n (node.role==manager, andere
+  Constraint); victoriametrics (in monitoring-stack mit vmagent gebündelt) — alle optional, marginaler
+  Nutzen seit postgres OOM-geschützt.
+- ⏭️ **Schicht 2b — infra-3 Balloon-Pin** bewusst übersprungen: pve03 eng (Frigate), infra-3 nur mild
+  ballooniert, postgres-3 ohnehin OOM-geschützt → marginaler Nutzen vs pve03-Risiko. Optional nach Frigate-Trim.
+- **Ergebnis:** Divergenz-Wurzel mit **4 Live-Defenses** gefixt (OOM-Guard + infra-2-RAM + ttl + swap) +
+  infra-3-Relief. Offene Follow-ups: Frigate-Trim (pve03-Headroom), #70-PGDATA-Subdir (Auto-Recovery),
+  restliche apptier-Moves (authentik/immich/n8n) bei Bedarf mit update_config-Härtung.
 
 **Placement-Caveat:** grafana-rbd + meili-rbd + postgres-Leader konzentrieren sich auf infra-2
 → Memory-Hotspot. Bei Fix #1 auseinanderziehen. Details: Memory `feedback_patroni_divergence_oom`.
