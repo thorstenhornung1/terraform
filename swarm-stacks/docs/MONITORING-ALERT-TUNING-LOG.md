@@ -143,3 +143,22 @@ Bekannte Signaturen & Fixes (Quelle: Projekt-Memory):
 - stale CephFS-Mount (`permission denied` auf `/mnt/cephfs`-Root als root) → `systemctl restart mnt-cephfs.mount` + `docker service update --force <svc>`
 - stale Service-Discovery (`ENOTFOUND` trotz gültiger VIP) → `docker service update --force <svc>`
 - totes Node-Mesh (mehrere tote VIPs auf einem Node) → `systemctl restart docker` auf dem Node
+
+## 5. Patroni-Divergenz RCA (#7, 2026-06-13)
+
+**Root Cause:** Memory-Druck → **OOM-Killer tötet postgres-Prozesse** → unsauberer Crash →
+Node verpasst 1-3 Timeline-Inkremente → Divergenz beim Wiederkommen. **Resource-Starvation**,
+kein Patroni/etcd/#70-Bug.
+
+**Beweise:** OOM-Killer killte aktiv `postgres` (infra-2 06-13 09:30+11:32; infra-3 06-11 05:07);
+`patronictl history` Failover-Kaskaden (06-07: 14 TL/8h, 06-08: 11 TL/1.5h). infra-3 = 7GB
+(knappster) → postgres-3 zuerst OOM'd → divergiert am häufigsten. etcd gesund (RAFT 2-30ms).
+
+**Permanente Fixes (priorisiert, OFFEN — Infra-Entscheidung):**
+1. Memory-Headroom (kritisch): Node-Free >2GB. pve03/infra-3 = Engpass (Frigate-LXC 12GB hart).
+2. Patroni `ttl 30→45`, `loop_wait 10→15` (weniger Kaskaden).
+3. postgres-Container memory-cgroup-Hard-Limit (sauberer Tod statt OOM-Roulette).
+4. `vm.overcommit_memory`; etcd-leader-changes + TL-Inkremente gemeinsam monitoren.
+
+**Placement-Caveat:** grafana-rbd + meili-rbd + postgres-Leader konzentrieren sich auf infra-2
+→ Memory-Hotspot. Bei Fix #1 auseinanderziehen. Details: Memory `feedback_patroni_divergence_oom`.
