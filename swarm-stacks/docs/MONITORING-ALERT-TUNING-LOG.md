@@ -50,6 +50,7 @@ Status: `offen` · `getunt` (deployt, Wirkung ausstehend) · `beobachten` · `er
 | B-14 | Transiente Infra-Flaps | „Flapping" das echt ist & wiederkehrt | stale CephFS-Mount / stale Service-VIP / totes Node-Mesh | Self-Heal-Detektor (Phase 4) | **ja** | offen |
 | B-15 | **Grafana-Service** `update_config` | Config-Änderungen greifen NICHT (Update pausiert still, alter Task läuft weiter) → mein Spam-Fix hängt fest | `order: start-first` + SQLite (grafana.db) auf CephFS: neuer Task kann DB nicht öffnen solange alter sie hält → stirbt → pause. Beweis: vmagent (stop-first) konvergierte im selben Deploy, Grafana (start-first) nicht. | `order: stop-first` (alter Task gibt SQLite frei, dann neuer). ~10-30s Downtime/Update. | n/a | **DEPLOYED+verifiziert** (39b58a0, 2026-06-13 09:21: neuer Task mit mute_times, /api/health 200, Provisioning ohne Fehler) |
 | B-16 | **GitOps Deploy-Gate** (deploy-stacks.yml) | meldet „ROLLED BACK / did not stick" obwohl Service async konvergiert (false-red CI) | Gate gibt bei ~18s auf, wertet transientes `paused`/0-1 von `stop-first`-Services als Rollback. vmagent kam danach hoch, Gate war schon rot. | Gate-Geduld erhöhen / `paused→später-running` tolerieren (deploy-stacks.yml). Separat, größerer Scope. | n/a | offen |
+| B-18 | **infra-1 CephFS-Mount** (192.168.4.40) | `ls /mnt/cephfs/...` = `Permission denied` als root (während infra-2/3 ok) | Stale Kernel-CephFS-Client nach Ceph-Event (`feedback_cephfs_stale_mount_recovery`) | `systemctl restart mnt-cephfs.mount` auf infra-1 + `docker service update --force <cephfs-svc auf infra-1>`. **GENAU der Self-Heal-Phase-4-Fall (live!)** | **ja** | offen (live, beim RBD-Cutover entdeckt) |
 | B-17 | **postgres-3** (Patroni) | crashloop, TL-Divergenz (forked @ TL198, Cluster TL201), heilt nicht selbst; Redundanz 2/3 | Replica abgehängt über ~3 Failover; `patronictl reinit` hängt an #70 (EBUSY, PGDATA=Mount-Root) | reinit → #70-Workaround (scale0 → pgdata beiseite → scale1 → basebackup). Struktureller Fix: PGDATA als Subdir (swarm-stacks#70, priorisieren — 2. Vorfall in 6 Tagen). Alert `patroni-replica-not-streaming` (B-05) hatte hier echten Anlass — Validität bestätigt. | n/a | **GELÖST** 2026-06-13 (3/3 streaming, lag 0); Backup `/srv/data/postgres-3-diverged-20260613-133017` (4.9G) nach Stabilität löschen |
 
 **Bewusst NICHT angefasst** (bereits gut geglättet): PBS-/TLS-/Backup-/Disk-Zeitmetriken,
@@ -109,6 +110,22 @@ berechnet (globstar-Scan + Basename→HASH). Vor erstem Push verifizieren, dass 
 (hier ohnehin geändert ✓).
 
 ---
+
+### 2026-06-13 — Phase 2: Regel-Tuning (config-basiert, B-02/03/04/05 + frigate-cam)
+**Datei:** `alert-rules.yml`. Reine `for:`-Erhöhungen (kein Provisioning-Risiko), deployt+verifiziert (Grafana reload fehlerfrei auf RBD).
+
+| Regel | alt | neu | Grund |
+|---|---|---|---|
+| ceph-health-error | 2m | 5m | HEALTH_ERR-Enum oszilliert bei Rebalance |
+| patroni-no-leader | 2m | 5m | Leader-Election bei Netz-Blips |
+| etcd-no-leader | 2m | 5m | etcd-Election bei Netz-Disruption |
+| patroni-replica-not-streaming | 3m | 5m | WAL-Gap um 16MB-Grenze |
+| frigate-camera-no-detection | 5m | 10m | FPS-0 bei RTSP-Stottern |
+
+**Bewusst NICHT (optionale Follow-ups, da Phase-1-Digest warnings ohnehin bündelt):**
+`keep_firing_for: 30m` auf den OOM-Regeln (B-01) und `avg_over_time` für `vm-memory-high` (B-06,
+expr-Umbau). down-Detektoren (swarm-node-down/ceph-osd-down/patroni-node-down/ha-down) unangetastet
+(Ausfall-Erkennung nicht verzögern). **Wirkung:** _ausstehend_ — über Tage beobachten.
 
 ## 4. Self-Heal-Logbuch
 
