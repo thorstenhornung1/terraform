@@ -98,7 +98,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.apptier == heavy
+          - node.labels.app == true
       resources:
         limits:
           cpus: '2.0'
@@ -155,7 +155,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.apptier == heavy
+          - node.labels.app == true
       resources:
         limits:
           cpus: '1.0'
@@ -189,7 +189,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.apptier == heavy
+          - node.labels.app == true
       resources:
         limits:
           cpus: '1.0'
