@@ -51,4 +51,17 @@ contactPoints:
           # ist bekannter Grafana-Sonderfall und wird bewusst nicht geshortcuttet,
           # damit der Normalfall "resolved below threshold" Instance-Info behält.
           message: "{{ if eq .Status \"firing\" }}⚠️ WARNUNG{{ else }}✅ RESOLVED{{ end }} {{ .CommonLabels.alertname }}\n{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}"
+        # 2026-06-13: Resolved-Messages für warning/info AUS — sie verdoppelten
+        # jeden Flap-Zyklus (⚠️ WARNUNG + ✅ RESOLVED). Die Digest-Fenster
+        # (mute-times.yml) zeigen ohnehin nur noch-aktive Probleme. critical
+        # behält die Entwarnung (siehe telegram-critical oben).
+        disableResolveMessage: true
+
+  - orgId: 1
+    name: email-homelab
+    receivers:
+      - uid: email-homelab-1
+        type: email
+        settings:
+          addresses: thorsten@hornung-bn.de
         disableResolveMessage: false

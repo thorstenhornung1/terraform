@@ -131,6 +131,11 @@ scrape_configs:
   # ---------------------------------------------------------------------------
   - job_name: pbs-exporter
     scrape_interval: 120s
+    # 2026-06-13: scrape_timeout job-lokal auf 30s (global 10s ≪ interval 120s).
+    # PBS-API-Queries (Job-Status, Snapshots, Verify) sind schwer; ein 10s-Timeout
+    # produzierte false „pbs-down" + Datenlücken. 30s gibt der API Luft, bleibt
+    # weit unter dem 120s-Intervall.
+    scrape_timeout: 30s
     static_configs:
       - targets:
           - pbs-exporter:10019
@@ -173,7 +178,10 @@ scrape_configs:
   # HTTPS with bearer token auth (Docker secret).
   - job_name: homeassistant
     scrape_interval: 30s
-    scrape_timeout: 20s
+    # 2026-06-13: 20s→25s. HA-Prometheus-Integration ist bei vielen Entities
+    # zäh; 20s (66% des Intervalls) riss bei langsamer TLS/UI-Antwort gelegentlich
+    # `up=0` → ha-down-Flap. 25s puffert, bleibt unter 30s Intervall.
+    scrape_timeout: 25s
     metrics_path: /api/prometheus
     scheme: https
     tls_config:
@@ -236,12 +244,68 @@ scrape_configs:
           - https://auth.hornung-bn.de
           - https://vault.hornung-bn.de
           - https://paperless.hornung-bn.de
+          - https://archive.hornung-bn.de
           - https://n8n.hornung-bn.de
           - https://grafana.hornung-bn.de
           - https://traefik.hornung-bn.de
           - https://uptime.hornung-bn.de
           - https://frigate.hornung-bn.de
           - https://admin.frigate.hornung-bn.de
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # ---------------------------------------------------------------------------
+  # Blackbox App-Verfügbarkeit — schnelles Up/Down für kritische Web-Apps
+  # ---------------------------------------------------------------------------
+  # 60s-Interval (vs. 5m beim cert-Job) für zeitnahes Down-Alerting.
+  # Modul http_2xx_tls folgt Redirects: paperless (302→200) und archive/
+  # openarchiver (307→200) leiten auf Login/OIDC um → probe_success=1 solange
+  # die App antwortet. Liefert probe_success (1/0) → app-down-Alerts (siehe
+  # alert-rules.yml Group "Applications"). Erkennt App-Down + Traefik-Ausfall.
+  - job_name: blackbox-apps
+    scrape_interval: 60s
+    scrape_timeout: 15s
+    metrics_path: /probe
+    params:
+      module: [http_2xx_tls]
+    static_configs:
+      - targets:
+          - https://paperless.hornung-bn.de
+          - https://archive.hornung-bn.de
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # ---------------------------------------------------------------------------
+  # Blackbox Tika-Probe — interne Abhängigkeit von Open Archiver
+  # ---------------------------------------------------------------------------
+  # Probet openarchiver-tika:9998/version (HTTP 200 "Apache Tika 3.1.0") über das
+  # openarchiver_default-Overlay (blackbox-exporter ist dort mit angeschlossen).
+  # Liefert probe_success (1/0) → openarchiver-tika-down-Alert (siehe alert-rules.yml
+  # Group "Applications"). Schließt den blinden Fleck, dass die App extern „up" ist,
+  # aber intern Tika nicht erreicht (verwaiste Service-Discovery / ENOTFOUND nach
+  # Reschedule) → Mails würden still ohne Anhang-Volltext indexiert (Fall 2026-06-07).
+  - job_name: blackbox-tika
+    # 2026-06-13: 60s→30s. Bei verwaister Service-Discovery nach Reschedule
+    # (ENOTFOUND, vgl. Fall 2026-06-07, 2h still ohne Anhang-Volltext) erkennt
+    # ein 30s-Intervall den Ausfall doppelt so schnell. Timeout 15s bleibt.
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    metrics_path: /probe
+    params:
+      module: [http_internal]
+    static_configs:
+      - targets:
+          - http://openarchiver-tika:9998/version
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

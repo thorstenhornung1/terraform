@@ -4,11 +4,18 @@
 # Routes alerts to contact points based on severity and component.
 #
 # Routing logic:
-#   - critical → telegram-critical (immediate, no grouping delay)
-#   - warning  → telegram-default  (batched every 15min, silent notifications)
-#   - info     → telegram-default  (batched every 30min, silent notifications)
+#   - critical → telegram-critical (sofort; repeat 4h, group_interval 5m)
+#   - warning  → telegram-default  (DIGEST: still gemutet, Zustellung nur in den
+#                                   Fenstern 08:00–08:15 / 18:00–18:15, silent)
+#   - info     → telegram-default  (DIGEST: gleiche Fenster, silent)
 #
-# Group by component label so related alerts arrive together.
+# Anti-Spam-Design (2026-06-13, User-Entscheidung):
+#   - warning/info referenzieren das Zeitintervall `outside-digest-windows`
+#     (mute-times.yml) per `mute_time_intervals` → werden NUR zu festen Zeiten
+#     zugestellt ("Zusammenfassung zu festen Zeiten") statt bei jedem Flap.
+#   - group_by auf [grafana_folder] verbreitert → ein Telegram je Ordner/Fenster
+#     statt eine Nachricht pro Alert.
+#   - critical bleibt ungemutet und behält die Entwarnung (✅ RESOLVED).
 # =============================================================================
 apiVersion: 1
 
@@ -22,29 +29,41 @@ policies:
     group_interval: 5m
     repeat_interval: 4h
     routes:
-      # Critical alerts: immediate delivery, short repeat
+      # Critical alerts: immediate delivery, entschärfter Wiederhol-Takt
+      # (2026-06-13: repeat 1h→4h, group_interval 2m→5m — echte Notlagen kommen
+      # weiter sofort, aber ein dauer-feuernder critical wiederholt nicht im
+      # Minutentakt). Kein Mute, behält Entwarnung.
       - receiver: telegram-critical
         matchers:
           - severity = critical
         group_wait: 10s
-        group_interval: 2m
-        repeat_interval: 1h
-        continue: false
-
-      # Warning alerts: batched, moderate repeat
-      - receiver: telegram-default
-        matchers:
-          - severity = warning
-        group_wait: 60s
-        group_interval: 15m
+        group_interval: 5m
         repeat_interval: 4h
         continue: false
 
-      # Info alerts: batched, long repeat (FYI only)
+      # Warning alerts: DIGEST — nur in den Fenstern 08:00–08:15 / 18:00–18:15
+      # zugestellt (mute außerhalb), breit gebündelt je Ordner.
+      - receiver: telegram-default
+        matchers:
+          - severity = warning
+        group_by:
+          - grafana_folder
+        group_wait: 60s
+        group_interval: 15m
+        repeat_interval: 4h
+        mute_time_intervals:
+          - outside-digest-windows
+        continue: false
+
+      # Info alerts: DIGEST — gleiche Fenster, langer Wiederhol-Takt (FYI).
       - receiver: telegram-default
         matchers:
           - severity = info
+        group_by:
+          - grafana_folder
         group_wait: 120s
         group_interval: 30m
         repeat_interval: 12h
+        mute_time_intervals:
+          - outside-digest-windows
         continue: false

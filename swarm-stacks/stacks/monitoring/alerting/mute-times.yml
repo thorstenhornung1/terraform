@@ -1,0 +1,40 @@
+# =============================================================================
+# Grafana Alerting — Time Intervals (Mute Timings)
+# =============================================================================
+# Provisioned via Docker config at /etc/grafana/provisioning/alerting/
+#
+# Zweck: warning/info-Alerts NICHT mehr im Sekunden-/Minutentakt durchreichen,
+# sondern nur zu festen Zeiten ("Digest"). Erreicht über ein Zeitintervall, das
+# ALLES AUSSER den zwei Zustellfenstern abdeckt — die warning- und info-Routes
+# in notification-policies.yml referenzieren es per `mute_time_intervals`.
+#
+# Zustellfenster (= NICHT gemutet):  08:00–08:15  und  18:00–18:15  (Europe/Berlin)
+# Folge:
+#   - critical: unberührt (sofort, eigene Route ohne Mute) — siehe notification-policies.yml
+#   - warning/info: feuern still im Hintergrund; eine noch aktive Meldung wird beim
+#     nächsten Fenster (08:00 / 18:00) zugestellt. Was zwischen den Fenstern feuert
+#     UND wieder resolved, erzeugt keine Nachricht (gewollt: "Zusammenfassung zu
+#     festen Zeiten", User-Entscheidung 2026-06-13).
+#
+# Warum mute_time_intervals (Komplement) statt active_time_intervals:
+#   mute_time_intervals ist in File-Provisioning über alle Grafana-Versionen stabil
+#   unterstützt; active_time_intervals ist neuer und in der Provisioning-Datei
+#   fehleranfälliger (ein Parse-Fehler beim Start kippt das GESAMTE Alerting-
+#   Provisioning). Semantisch identisch.
+#
+# "24:00" = Tagesende (Mitternacht) — von Grafana akzeptiert.
+# =============================================================================
+apiVersion: 1
+
+muteTimes:
+  - orgId: 1
+    name: outside-digest-windows
+    time_intervals:
+      - times:
+          - start_time: "00:00"
+            end_time: "08:00"
+          - start_time: "08:15"
+            end_time: "18:00"
+          - start_time: "18:15"
+            end_time: "24:00"
+        location: "Europe/Berlin"
