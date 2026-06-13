@@ -154,11 +154,17 @@ kein Patroni/etcd/#70-Bug.
 `patronictl history` Failover-Kaskaden (06-07: 14 TL/8h, 06-08: 11 TL/1.5h). infra-3 = 7GB
 (knappster) → postgres-3 zuerst OOM'd → divergiert am häufigsten. etcd gesund (RAFT 2-30ms).
 
-**Permanente Fixes (priorisiert, OFFEN — Infra-Entscheidung):**
-1. Memory-Headroom (kritisch): Node-Free >2GB. pve03/infra-3 = Engpass (Frigate-LXC 12GB hart).
-2. Patroni `ttl 30→45`, `loop_wait 10→15` (weniger Kaskaden).
-3. postgres-Container memory-cgroup-Hard-Limit (sauberer Tod statt OOM-Roulette).
-4. `vm.overcommit_memory`; etcd-leader-changes + TL-Inkremente gemeinsam monitoren.
+**Remediation-Umsetzung (2026-06-13, Research-validiert — 64GB sind genug, Verteilung war das Problem):**
+- ✅ **Schicht 1 — postgres OOM-Schutz LIVE**: `pg-memory-guard` (ansible) setzt oom_score_adj=-900 auf
+  alle postgres-Prozesse (host-seitig, da Image non-root; 60s-Timer; zero Disruption). postgres-3 war
+  `oom_score_adj=0` = Wunsch-Opfer → jetzt geschützt. **Kern-Fix gegen die Divergenz.**
+- ✅ **Schicht 2a — infra-2 Balloon-Floor 4000→8192** (live, 5,6→8,2GB; pve02 weiter 7GB frei). Befund:
+  **Ballooning hungerte die VMs aus** (infra-1 balloon-aus = gesund; infra-2/3 deflationiert). Swarm-
+  `reservations.memory` ist KEIN Kernel-OOM-Schutz (nur Scheduling) — live verifiziert (`MemoryReservation=0`).
+- ⏳ **Schicht 3 — apptier-Placement** (heavy Apps von infra-3 weg) — ausstehend (reschedult prod-Apps).
+- ⏳ **Schicht 4 — swap (aktuell 0!) + swappiness + Patroni ttl 30→45/loop_wait 10→15** — ausstehend.
+- ⏳ **Schicht 2b — infra-3 Balloon-Pin** — nach Schicht-3-Offload (dann hat pve03 Platz).
+- Voll-Plan: `docs/` Plan-File / Task #9. Frigate-Trim + #70-PGDATA-Subdir bleiben separate Follow-ups.
 
 **Placement-Caveat:** grafana-rbd + meili-rbd + postgres-Leader konzentrieren sich auf infra-2
 → Memory-Hotspot. Bei Fix #1 auseinanderziehen. Details: Memory `feedback_patroni_divergence_oom`.
