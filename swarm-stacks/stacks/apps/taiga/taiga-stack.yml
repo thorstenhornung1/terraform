@@ -62,8 +62,12 @@ services:
       TAIGA_SITES_SCHEME: "https"
       TAIGA_SUBPATH: ""
       # Email (disabled — use Authentik for user management)
-      EMAIL_BACKEND: "django.core.mail.backends.console.EmailBackend"
-      DEFAULT_FROM_EMAIL: "taiga@hornung-bn.de"
+      EMAIL_BACKEND: "django.core.mail.backends.smtp.EmailBackend"
+      EMAIL_HOST: "192.168.4.71"
+      EMAIL_PORT: "587"
+      EMAIL_USE_TLS: "False"
+      EMAIL_USE_SSL: "False"
+      DEFAULT_FROM_EMAIL: "homelab@hornung-bn.de"
       # RabbitMQ (stack-internal)
       RABBITMQ_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
       CELERY_BROKER_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
@@ -89,7 +93,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.app == true
+          - node.labels.apptier == heavy
       resources:
         limits:
           cpus: '1.0'
@@ -146,8 +150,12 @@ services:
       TAIGA_SITES_SCHEME: "https"
       TAIGA_SUBPATH: ""
       # Email
-      EMAIL_BACKEND: "django.core.mail.backends.console.EmailBackend"
-      DEFAULT_FROM_EMAIL: "taiga@hornung-bn.de"
+      EMAIL_BACKEND: "django.core.mail.backends.smtp.EmailBackend"
+      EMAIL_HOST: "192.168.4.71"
+      EMAIL_PORT: "587"
+      EMAIL_USE_TLS: "False"
+      EMAIL_USE_SSL: "False"
+      DEFAULT_FROM_EMAIL: "homelab@hornung-bn.de"
       # RabbitMQ
       RABBITMQ_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
       CELERY_BROKER_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
@@ -173,7 +181,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.app == true
+          - node.labels.apptier == heavy
       resources:
         limits:
           cpus: '1.0'
@@ -216,7 +224,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.app == true
+          - node.labels.apptier == heavy
       resources:
         limits:
           cpus: '0.5'
@@ -252,7 +260,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.app == true
+          - node.labels.apptier == heavy
       resources:
         limits:
           cpus: '0.5'
@@ -296,7 +304,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.app == true
+          - node.labels.apptier == heavy
       resources:
         limits:
           cpus: '0.5'
@@ -332,7 +340,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.app == true
+          - node.labels.apptier == heavy
       resources:
         limits:
           cpus: '0.5'
@@ -394,7 +402,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.app == true
+          - node.labels.apptier == heavy
       resources:
         limits:
           cpus: '0.5'

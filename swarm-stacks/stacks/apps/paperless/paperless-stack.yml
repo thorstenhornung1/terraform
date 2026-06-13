@@ -28,7 +28,7 @@ version: '3.8'
 
 services:
   paperless-webserver:
-    image: ghcr.io/paperless-ngx/paperless-ngx:2.15
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.15
     hostname: paperless-webserver
     entrypoint: ["/bin/bash", "/oidc-init.sh"]
     environment:
@@ -49,6 +49,12 @@ services:
       PAPERLESS_URL: "https://paperless.hornung-bn.de"
       PAPERLESS_SECRET_KEY_FILE: /run/secrets/paperless_secret_key
       PAPERLESS_TIME_ZONE: "Europe/Berlin"
+      # SMTP via Homelab-Mail-Relay (Variante C) — keine Auth, From=homelab@ (Pflicht). Siehe docs/MAIL-RELAY.md.
+      PAPERLESS_EMAIL_HOST: "192.168.4.71"
+      PAPERLESS_EMAIL_PORT: "587"
+      PAPERLESS_EMAIL_USE_TLS: "false"
+      PAPERLESS_EMAIL_USE_SSL: "false"
+      PAPERLESS_EMAIL_FROM: "homelab@hornung-bn.de"
       # OCR
       PAPERLESS_OCR_LANGUAGE: "deu+eng"
       PAPERLESS_OCR_MODE: "skip"
@@ -92,7 +98,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.app == true
+          - node.labels.apptier == heavy
       resources:
         limits:
           cpus: '2.0'
@@ -109,6 +115,10 @@ services:
         delay: 10s
         order: start-first
         failure_action: rollback
+        # monitor > healthcheck.start_period (300s): sonst wertet Swarm den
+        # langsamen (Major-Upgrade-)Start als Fehlschlag und rollt zurück
+        # (so scheiterte die apptier-Migration 2026-06-13). 330s = 30s Marge.
+        monitor: 330s
       labels:
         # --- Traefik Network (required: multi-network service) ---
         - traefik.swarm.network=traefik_public
@@ -130,7 +140,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 90s
+      # 300s (statt 90s): Major-Version-Upgrades führen beim Erststart DB-Migrationen
+      # aus; 90s reichten beim 2.15→2.20-Sprung nicht → Healthcheck markierte den
+      # Container unhealthy → Rollback. 300s deckt den Migrations-Erststart ab.
+      start_period: 300s
 
   tika:
     image: apache/tika:3.1.0.0
@@ -142,7 +155,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.app == true
+          - node.labels.apptier == heavy
       resources:
         limits:
           cpus: '1.0'
@@ -176,7 +189,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.app == true
+          - node.labels.apptier == heavy
       resources:
         limits:
           cpus: '1.0'
