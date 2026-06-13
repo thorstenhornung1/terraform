@@ -348,7 +348,9 @@ groups:
                     type: gt
                     params: [0]
               refId: C
-        for: 2m
+        # 2026-06-13: for 2m→5m — HEALTH_ERR ist eine Enum, die bei Rebalance/
+        # transienten OSD-Stalls kurz oszilliert; 5m verlangt anhaltenden Fehler.
+        for: 5m
         noDataState: OK
         execErrState: OK
         labels:
@@ -513,7 +515,9 @@ groups:
                     type: gt
                     params: [0]
               refId: C
-        for: 2m
+        # 2026-06-13: for 2m→5m — Leader-Election/Konsens kann bei Netz-Blips kurz
+        # ohne Leader sein; 5m toleriert Rebalancing, fängt echten Ausfall.
+        for: 5m
         noDataState: OK
         execErrState: OK
         labels:
@@ -648,7 +652,9 @@ groups:
                     type: gt
                     params: [0]
               refId: C
-        for: 3m
+        # 2026-06-13: for 3m→5m — WAL-Receive-Gap kann bei Netz-Jitter kurz um die
+        # 16MB-Grenze oszillieren; 5m verlangt anhaltend gebrochenes Streaming.
+        for: 5m
         noDataState: OK
         execErrState: OK
         labels:
@@ -825,7 +831,9 @@ groups:
                     type: gt
                     params: [0]
               refId: C
-        for: 2m
+        # 2026-06-13: for 2m→5m — etcd-Leader-Election kann bei Netz-Disruption kurz
+        # leaderlos sein; 5m toleriert Konsens-Rebalancing.
+        for: 5m
         noDataState: OK
         execErrState: OK
         labels:
@@ -1367,7 +1375,9 @@ groups:
                     type: gt
                     params: [0]
               refId: C
-        for: 5m
+        # 2026-06-13: for 5m→10m — FPS fällt bei RTSP-/Netz-Stottern kurz auf 0;
+        # 10m verlangt anhaltenden Ausfall (gegen transiente Kamera-Blips).
+        for: 10m
         noDataState: OK
         execErrState: OK
         labels:
@@ -1416,6 +1426,138 @@ groups:
         annotations:
           summary: "OOM-kill on pve03 in last 10min — likely Frigate LXC 4502"
           description: "node_vmstat_oom_kill increased. Frühwarnung: Frigate-Container wurde vom Kernel gekillt. Check 'pct exec 4502 -- dmesg | tail' für killed processes + anon-rss values. Bei wiederholtem Auftreten: memory/swap im LXC weiter anheben (aktuell 12 GiB + 4 GiB swap)."
+
+  # ===========================================================================
+  # APPLICATIONS — Web-App-Verfügbarkeit (Blackbox)
+  # ===========================================================================
+  # Source: blackbox_exporter via job=blackbox-apps (60s, http_2xx_tls).
+  # Metric: probe_success (1=erreichbar, 0=down). Paperless + Open Archiver
+  # haben keine nativen Prometheus-Metrics → Blackbox-Probe auf die öffentliche
+  # HTTPS-URL (folgt Redirects: 302/307 → 200). Logik wie frigate-down:
+  # min_over_time(...[5m]) + threshold lt 1 + for 5m, noDataState=Alerting
+  # (probe_success liefert 0/1 solange der Job läuft; noData = Job/Target weg =
+  # echtes Problem). Einzelner Scrape-Miss (Deploy-Restart) feuert nicht;
+  # echter Ausfall >~10min schon.
+
+  - orgId: 1
+    name: Applications
+    folder: Applications
+    interval: 60s
+    rules:
+
+      - uid: paperless-down
+        title: Paperless unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: min_over_time(probe_success{job="blackbox-apps", instance="https://paperless.hornung-bn.de"}[5m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "Paperless (paperless.hornung-bn.de) ist nicht erreichbar"
+          description: "probe_success=0 für 10+ min (5min min_over_time + 5min for). Check: docker service ps paperless-stack_paperless-webserver, Traefik-Routing, OIDC (Authentik), CephFS-Mount auf dem App-Node."
+
+      - uid: openarchiver-down
+        title: Open Archiver unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: min_over_time(probe_success{job="blackbox-apps", instance="https://archive.hornung-bn.de"}[5m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "Open Archiver (archive.hornung-bn.de) ist nicht erreichbar"
+          description: "probe_success=0 für 10+ min. Check: openarchiver_open-archiver — Backend-Port 4000 (Frontend 3000 kann laufen während Backend tot ist! Healthcheck prüft nur 3000 → Service trügerisch 1/1), meili-Index (MDB_CORRUPTED?), Traefik-Routing."
+
+      # --- Open Archiver Tika unreachable (interne Abhängigkeit) ---
+      # 2026-06-07: Schließt den blinden Fleck, dass openarchiver-down (Blackbox auf
+      # archive.hornung-bn.de) nur die EXTERNE Erreichbarkeit prüft. Tika ist eine
+      # interne Abhängigkeit ohne öffentliche URL: fiel es 2h still aus (verwaiste
+      # Service-Discovery nach Reschedule, DNS ENOTFOUND), blieb die App "up", aber
+      # alle Mails wurden OHNE Anhang-Volltext indexiert. job=blackbox-tika probet
+      # openarchiver-tika:9998/version über das openarchiver_default-Overlay.
+      # Logik wie openarchiver-down: min_over_time[5m] + lt 1 + for 5m. warning
+      # (Degradation, kein Totalausfall — Suche im Mail-Text läuft weiter).
+      - uid: openarchiver-tika-down
+        title: Open Archiver Tika unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: min_over_time(probe_success{job="blackbox-tika"}[5m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "Open Archiver Tika nicht erreichbar — Anhänge werden ohne Volltext indexiert"
+          description: "probe_success=0 für 10+ min (blackbox-tika gegen openarchiver-tika:9998/version). Open Archiver indexiert Mails dann STILL ohne Anhang-Volltext (PDF/Office/Bilder nicht durchsuchbar), ohne zu crashen — die App bleibt extern erreichbar. Häufigste Ursache: verwaiste Swarm-Service-Discovery nach Tika-Reschedule (DNS ENOTFOUND). Fix: docker service update --force openarchiver_openarchiver-tika; danach von open-archiver aus 'getent hosts openarchiver-tika' + node-fetch verifizieren. Siehe Fall 2026-06-07."
 
   # ===========================================================================
   # TLS / SSL Certificate Expiry — all public-facing HTTPS endpoints
