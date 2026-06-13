@@ -257,7 +257,13 @@ services:
         target: /etc/grafana/grafana-entrypoint.sh
         mode: 0555
     volumes:
-      - /mnt/cephfs/swarm-state/stack-monitoring/grafana:/var/lib/grafana
+      # RBD (lokales ext4) statt CephFS (2026-06-13): Grafana nutzt SQLite
+      # (grafana.db). SQLite-POSIX-Locking auf CephFS ist fragil und brach
+      # Rolling-Updates ("database is locked"). Das RBD-Device wird vom Host
+      # (systemd rbd-map-grafana) auf dem grafana-rbd=active-Node bereitgestellt;
+      # Auto-Failover via grafana-rbd-failover Watchdog (Lock-Steal -o exclusive).
+      # Setup: ansible/rbd-mount-grafana.yml. Image: swarm-volumes/grafana-data.
+      - /mnt/rbd/grafana:/var/lib/grafana
     networks:
       - monitoring-network
       - traefik_public
@@ -265,8 +271,12 @@ services:
       mode: replicated
       replicas: 1
       placement:
+        # grafana folgt dem RBD-Holder: der grafana-rbd-failover Watchdog setzt
+        # das Label auf den Node, der das exclusive-lock RBD wirklich hält.
+        # max 1/Node: SQLite ist single-writer, RBD ist exclusive-lock.
+        max_replicas_per_node: 1
         constraints:
-          - node.labels.app == true
+          - node.labels.grafana-rbd == active
       labels:
         - traefik.enable=true
         # HTTPS Router
