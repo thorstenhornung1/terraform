@@ -129,11 +129,15 @@ expr-Umbau). down-Detektoren (swarm-node-down/ceph-osd-down/patroni-node-down/ha
 
 ## 4. Self-Heal-Logbuch
 
-**Status: noch nicht implementiert (Phase 4).** Detektor läuft erst log-only („WOULD HEAL").
+**Status: DEPLOYED log-only (2026-06-13).** `ansible/selfheal-detector.yml` +
+`files/selfheal-detector.sh` (systemd-Timer 60s auf docker_swarm_infra). Loggt
+„WOULD HEAL …" nach `/var/log/selfheal-detector.log` + journald (`-t selfheal`),
+führt NICHTS aus. Scharfschalten pro Signatur via `SELFHEAL_ARMED_<SIG>=1`
+(systemd-Override). Signaturen: stale-cephfs, failed-units, stuck-service.
 
 | Datum | Signatur | Node/Service | Erkannt | Aktion (geplant) | Scharf? |
 |---|---|---|---|---|---|
-| _–_ | | | | | nein |
+| 2026-06-13 | stale-cephfs | docker-infra-1 (B-18) | ✅ erkannt+geloggt | `systemctl restart mnt-cephfs.mount` | nein (log-only) |
 
 Bekannte Signaturen & Fixes (Quelle: Projekt-Memory):
 - stale CephFS-Mount (`permission denied` auf `/mnt/cephfs`-Root als root) → `systemctl restart mnt-cephfs.mount` + `docker service update --force <svc>`
