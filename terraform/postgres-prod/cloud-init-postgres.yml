@@ -1,0 +1,182 @@
+#cloud-config
+# ============================================================================
+# postgres-prod VM Cloud-Init — Standalone PostgreSQL 16 + pgvector
+# ============================================================================
+# Patroni-Ablösung: eine PG-VM auf tank (ZFS) + Proxmox-HA. KEIN Docker.
+# Standard-Pattern: APT-Proxy, LDAP/SSSD, rsyslog→Loki, qemu-guest-agent.
+# DB-User/-Daten + feingranulares pg_hba kommen beim Cutover (pro App).
+# Template vars: vm_hostname
+package_update: true
+package_upgrade: false
+locale: en_US.UTF-8
+timezone: Europe/Berlin
+
+hostname: ${vm_hostname}
+fqdn: ${vm_hostname}.hornung-bn.de
+manage_etc_hosts: true
+
+keyboard:
+  layout: de
+  variant: ''
+
+users:
+  - name: ansible
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHDiYk2/cmfKjky19j+RQCDjNK1r0xd8VYi4VpR6tX/P thorsten@hornung-bn.de
+
+ssh_authorized_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHDiYk2/cmfKjky19j+RQCDjNK1r0xd8VYi4VpR6tX/P thorsten@hornung-bn.de
+
+ssh_pwauth: false
+disable_root: false
+
+write_files:
+  - path: /etc/apt/apt.conf.d/01proxy
+    content: |
+      Acquire::http::Proxy "http://apt-cacher.hornung-bn.de:3142";
+      Acquire::https::Proxy "DIRECT";
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/default/keyboard
+    content: |
+      XKBMODEL="pc105"
+      XKBLAYOUT="de"
+      XKBVARIANT=""
+      XKBOPTIONS=""
+      BACKSPACE="guess"
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/sssd/sssd.conf
+    content: |
+      [sssd]
+      domains = default
+      config_file_version = 2
+      services = nss, pam
+
+      [domain/default]
+      id_provider = ldap
+      auth_provider = ldap
+      ldap_uri = ldap://ldap.hornung-bn.de
+      ldap_search_base = dc=ldap,dc=hornung-bn,dc=de
+      ldap_default_bind_dn = uid=root,cn=users,dc=ldap,dc=hornung-bn,dc=de
+      ldap_default_authtok = jyFD6gS1eyWAYCOe
+      ldap_tls_reqcert = never
+      cache_credentials = true
+      enumerate = true
+      entry_cache_timeout = 300
+      ldap_id_mapping = false
+      ldap_user_uid_number = uidNumber
+      ldap_user_gid_number = gidNumber
+      ldap_group_gid_number = gidNumber
+      ldap_user_search_base = cn=users,dc=ldap,dc=hornung-bn,dc=de
+      ldap_group_search_base = cn=groups,dc=ldap,dc=hornung-bn,dc=de
+      override_homedir = /home/%u
+      default_shell = /bin/bash
+      fallback_homedir = /home/%u
+      ldap_pwd_policy = none
+      debug_level = 0x0070
+    owner: root:root
+    permissions: '0600'
+
+  - path: /etc/pam.d/common-session
+    content: |
+      session [default=1]   pam_permit.so
+      session requisite     pam_deny.so
+      session required      pam_permit.so
+      session optional      pam_umask.so
+      session required      pam_unix.so
+      session optional      pam_sss.so
+      session required      pam_mkhomedir.so skel=/etc/skel umask=0022
+      session optional      pam_systemd.so
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/nsswitch.conf
+    content: |
+      passwd:         files sss systemd
+      group:          files sss systemd
+      shadow:         files sss
+      gshadow:        files
+      hosts:          files dns
+      networks:       files
+      protocols:      db files
+      services:       db files sss
+      ethers:         db files
+      rpc:            db files
+      netgroup:       nis sss
+      automount:      sss
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/rsyslog.d/60-loki.conf
+    content: |
+      *.* @@loki.hornung-bn.de:1514
+      *.* @loki.hornung-bn.de:1514
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/sysctl.d/99-postgres.conf
+    content: |
+      vm.swappiness = 10
+      vm.overcommit_memory = 2
+      vm.overcommit_ratio = 90
+    owner: root:root
+    permissions: '0644'
+
+packages:
+  - qemu-guest-agent
+  - curl
+  - wget
+  - gnupg
+  - ca-certificates
+  - apt-transport-https
+  - sssd
+  - sssd-ldap
+  - sssd-tools
+  - libnss-sss
+  - libpam-sss
+  - oddjob-mkhomedir
+  - jq
+  - htop
+  - iotop
+  - net-tools
+  - postgresql-common
+
+runcmd:
+  - setupcon --save-only
+  - loadkeys de
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  - chmod 600 /etc/sssd/sssd.conf
+  - systemctl enable sssd
+  - systemctl restart sssd
+  - pam-auth-update --enable mkhomedir
+
+  # --- PostgreSQL 16 + pgvector aus PGDG ---
+  - install -d /usr/share/postgresql-common/pgdg
+  - curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+  - sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+  - apt-get update
+  - apt-get install -y postgresql-16 postgresql-16-pgvector
+
+  # --- Basis-Config: listen + pg_hba (feinkörnig beim Cutout) + sichere Defaults ---
+  - sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" /etc/postgresql/16/main/postgresql.conf
+  - sed -i "s/^#\?shared_buffers.*/shared_buffers = 2GB/" /etc/postgresql/16/main/postgresql.conf
+  - sed -i "s/^#\?effective_cache_size.*/effective_cache_size = 6GB/" /etc/postgresql/16/main/postgresql.conf
+  - sed -i "s/^#\?work_mem.*/work_mem = 16MB/" /etc/postgresql/16/main/postgresql.conf
+  - sed -i "s/^#\?maintenance_work_mem.*/maintenance_work_mem = 512MB/" /etc/postgresql/16/main/postgresql.conf
+  # pg_hba: nur interne VLANs, scram-sha-256 (KEIN 0.0.0.0/0)
+  - sh -c 'printf "host all all 192.168.4.0/24 scram-sha-256\nhost all all 192.168.2.0/24 scram-sha-256\nhost all all 192.168.12.0/24 scram-sha-256\n" >> /etc/postgresql/16/main/pg_hba.conf'
+  - sed -i "s/^#\?password_encryption.*/password_encryption = scram-sha-256/" /etc/postgresql/16/main/postgresql.conf
+  - systemctl enable postgresql
+  - systemctl restart postgresql
+
+  - systemctl restart rsyslog
+  - echo "Cloud-init completed for ${vm_hostname}" > /var/log/cloud-init-complete.log
+
+final_message: "postgres-prod ${vm_hostname} ready after $UPTIME seconds"

@@ -153,7 +153,7 @@ variable "infra_nodes" {
     ip_vlan4       = string
     ip_vlan12      = string
     data_disk_size = number
-    storage_pool   = optional(string)  # Override storage pool (default: var.storage_pool)
+    storage_pool   = optional(string) # Override storage pool (default: var.storage_pool)
   }))
   default = {
     "1" = {
@@ -161,22 +161,22 @@ variable "infra_nodes" {
       vm_id          = 4200
       ip_vlan4       = "192.168.4.40"
       ip_vlan12      = "192.168.12.40"
-      data_disk_size = 50   # Limited by tank space on pve01
+      data_disk_size = 50 # Limited by tank space on pve01
     }
     "2" = {
       node           = "pve02"
       vm_id          = 4201
       ip_vlan4       = "192.168.4.41"
       ip_vlan12      = "192.168.12.41"
-      data_disk_size = 100  # Medium size on pve02
-      storage_pool   = "local-lvm"  # ZFS tank on pve02 is full
+      data_disk_size = 100         # Medium size on pve02
+      storage_pool   = "local-lvm" # ZFS tank on pve02 is full
     }
     "3" = {
       node           = "pve03"
       vm_id          = 4202
       ip_vlan4       = "192.168.4.42"
       ip_vlan12      = "192.168.12.42"
-      data_disk_size = 200  # Full size on pve03 (1.2TB available)
+      data_disk_size = 200 # Full size on pve03 (1.2TB available)
     }
   }
 }
@@ -221,7 +221,7 @@ variable "swarm_control_cores" {
 variable "swarm_control_memory" {
   description = "Memory in MB for swarm-control container"
   type        = number
-  default     = 6144  # 6GB: Portainer + Swarmpit services
+  default     = 6144 # 6GB: Portainer + Swarmpit services
 }
 
 variable "swarm_control_disk_size" {
@@ -244,7 +244,7 @@ variable "etcd_nodes" {
     vm_id        = number
     ip_vlan4     = string
     ip_vlan12    = string
-    storage_pool = optional(string)  # Override storage pool (default: local-lvm)
+    storage_pool = optional(string) # Override storage pool (default: local-lvm)
   }))
   default = {
     "4" = {
@@ -252,13 +252,13 @@ variable "etcd_nodes" {
       vm_id        = 4301
       ip_vlan4     = "192.168.4.53"
       ip_vlan12    = "192.168.12.53"
-      storage_pool = "tank"  # local-lvm thin pool full on pve02
+      storage_pool = "tank" # local-lvm thin pool full on pve02
     }
     "5" = {
-      node         = "pve03"
-      vm_id        = 4302
-      ip_vlan4     = "192.168.4.54"
-      ip_vlan12    = "192.168.12.54"
+      node      = "pve03"
+      vm_id     = 4302
+      ip_vlan4  = "192.168.4.54"
+      ip_vlan12 = "192.168.12.54"
     }
   }
 }
@@ -321,7 +321,7 @@ variable "dns_nodes" {
     node         = string
     vm_id        = number
     ip           = string
-    storage_pool = optional(string)  # Override storage pool (default: var.storage_pool / tank)
+    storage_pool = optional(string) # Override storage pool (default: var.storage_pool / tank)
   }))
   default = {
     "1" = {
@@ -330,10 +330,10 @@ variable "dns_nodes" {
       ip    = "192.168.4.2"
     }
     "2" = {
-      node  = "pve02"
-      vm_id = 4101
-      ip    = "192.168.4.3"
-      storage_pool = "tank"  # local-lvm thin pool full on pve02
+      node         = "pve02"
+      vm_id        = 4101
+      ip           = "192.168.4.3"
+      storage_pool = "tank" # local-lvm thin pool full on pve02
     }
     "3" = {
       node  = "pve03"
@@ -391,19 +391,19 @@ variable "tailscale_nodes" {
   }))
   default = {
     "1" = {
-      node     = "pve01"
-      vm_id    = 4503
-      ip       = "192.168.4.56"
-      asn      = 64512
-      bgp_med  = 0      # Primary
+      node    = "pve01"
+      vm_id   = 4503
+      ip      = "192.168.4.56"
+      asn     = 64512
+      bgp_med = 0 # Primary
     }
     "2" = {
-      node     = "pve02"
-      vm_id    = 4504
-      ip       = "192.168.4.57"
-      asn      = 64513
-      bgp_med  = 100    # Backup
-      storage_pool = "tank"  # local-lvm thin pool full on pve02
+      node         = "pve02"
+      vm_id        = 4504
+      ip           = "192.168.4.57"
+      asn          = 64513
+      bgp_med      = 100    # Backup
+      storage_pool = "tank" # local-lvm thin pool full on pve02
     }
   }
 }
@@ -472,6 +472,37 @@ variable "influxdb_rescue" {
     cores        = 2
     memory       = 4096
     disk_size    = 30
+    storage_pool = "tank"
+  }
+}
+
+# ============================================================================
+# POSTGRESQL PROD VM (Patroni-Ablösung: Single-VM + Proxmox-HA)
+# ============================================================================
+# Standalone PostgreSQL 16 + pgvector auf tank (ZFS, lokale NVMe-fsync-Latenz)
+# + pvesr-Replikation + Proxmox-HA. Ersetzt den 3-Node-Patroni-Cluster.
+# Storage-Entscheidung (Research 2026-06-14): NICHT Ceph RBD — fsync übers
+# geteilte 1GbE wäre der Performance-Killer. Plan: docs/POSTGRES-SINGLE-VM-HA-MIGRATION-PLAN.md
+variable "postgres_prod" {
+  description = "Standalone PostgreSQL 16 VM (Patroni replacement)"
+  type = object({
+    node         = string
+    vm_id        = number
+    ip_vlan4     = string
+    ip_vlan12    = string
+    cores        = number
+    memory       = number
+    disk_size    = number
+    storage_pool = string
+  })
+  default = {
+    node         = "pve02"
+    vm_id        = 4600
+    ip_vlan4     = "192.168.4.45"
+    ip_vlan12    = "192.168.12.45"
+    cores        = 4
+    memory       = 8192
+    disk_size    = 40
     storage_pool = "tank"
   }
 }
