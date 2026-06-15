@@ -163,6 +163,16 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # 2026-06-15: externer DNS-Fallback. Greift NUR, wenn alle internen Technitium
+  # (192.168.4.2/3/4) unerreichbar sind → Grafana/Apps können dann noch externe
+  # Namen (api.telegram.org!) auflösen, damit der dns-all-down-Alert rausgeht.
+  - path: /etc/systemd/resolved.conf.d/10-fallback.conf
+    content: |
+      [Resolve]
+      FallbackDNS=1.1.1.1 9.9.9.9
+    owner: root:root
+    permissions: '0644'
+
 packages:
   - qemu-guest-agent
   - curl
@@ -188,6 +198,9 @@ runcmd:
   # Configure keyboard
   - setupcon --save-only
   - loadkeys de
+
+  # externen DNS-Fallback aktivieren (drop-in oben) — für Alert-Pfad bei DNS-Ausfall
+  - systemctl restart systemd-resolved
 
   # Enable and start QEMU guest agent
   - systemctl enable qemu-guest-agent
