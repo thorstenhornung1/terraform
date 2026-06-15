@@ -154,6 +154,8 @@ variable "infra_nodes" {
     ip_vlan12      = string
     data_disk_size = number
     storage_pool   = optional(string) # Override storage pool (default: var.storage_pool)
+    memory         = optional(number) # Override RAM in MB (default: var.infra_node_memory)
+    balloon        = optional(number) # Balloon-Minimum in MB (0 = Ballooning aus). Greift nur bei Host-Druck.
   }))
   default = {
     "1" = {
@@ -162,6 +164,9 @@ variable "infra_nodes" {
       ip_vlan4       = "192.168.4.40"
       ip_vlan12      = "192.168.12.40"
       data_disk_size = 50 # Limited by tank space on pve01
+      # 2026-06-15: Ballooning aktiviert (war 0/aus) als RAM-Puffer für kritische
+      # HA-Dienste (Resilienz-Strategie DNS>HA>Frigate>Swarm).
+      balloon = 4096
     }
     "2" = {
       node           = "pve02"
@@ -170,6 +175,8 @@ variable "infra_nodes" {
       ip_vlan12      = "192.168.12.41"
       data_disk_size = 100         # Medium size on pve02
       storage_pool   = "local-lvm" # ZFS tank on pve02 is full
+      memory         = 12000       # pve02 = Workhorse (31GB), mehr RAM für infra-2
+      balloon        = 6144        # RAM-Puffer (greift nur bei Host-Druck)
     }
     "3" = {
       node           = "pve03"
@@ -177,6 +184,8 @@ variable "infra_nodes" {
       ip_vlan4       = "192.168.4.42"
       ip_vlan12      = "192.168.12.42"
       data_disk_size = 200 # Full size on pve03 (1.2TB available)
+      # pve03 eng (Frigate-LXC) → aggressiver Puffer, damit Frigate (Prio 3) bei Druck Vorrang hat.
+      balloon = 3072
     }
   }
 }
@@ -501,7 +510,7 @@ variable "postgres_prod" {
     ip_vlan4     = "192.168.4.45"
     ip_vlan12    = "192.168.12.45"
     cores        = 4
-    memory       = 8192
+    memory       = 6144 # 2026-06-15: 8192→6144 (RAM-Headroom für HA-Failover; DB nutzt real ~3-4GB)
     disk_size    = 40
     storage_pool = "tank"
   }
@@ -603,7 +612,7 @@ variable "frigate" {
     ip_vlan4     = "192.168.4.70"
     ip_vlan12    = "192.168.12.70"
     cores        = 4
-    memory       = 8192
+    memory       = 6144 # 2026-06-15: →6144 (IaC war 8192, live-cap war 12288); real ~4GB, Spike-Schutz da pve03 eng
     disk_size    = 30
     storage_pool = "tank"
   }

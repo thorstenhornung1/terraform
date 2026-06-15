@@ -56,7 +56,8 @@ resource "proxmox_virtual_environment_vm" "infra_nodes" {
   }
 
   memory {
-    dedicated = var.infra_node_memory
+    dedicated = coalesce(each.value.memory, var.infra_node_memory)
+    floating  = coalesce(each.value.balloon, 0) # >0 = Ballooning (min=floating, max=dedicated)
   }
 
   boot_order = ["scsi0"]
