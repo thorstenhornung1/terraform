@@ -128,6 +128,86 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # --- pgBackRest: Repo auf Synology-NFS (posix), PITR + Auto-Backups ---
+  - path: /etc/pgbackrest/pgbackrest.conf
+    content: |
+      [global]
+      repo1-path=/mnt/pg-backup/repo
+      repo1-retention-full=4
+      repo1-retention-diff=8
+      repo1-bundle=y
+      repo1-block=y
+      compress-type=zst
+      compress-level=3
+      process-max=4
+      log-level-console=info
+      log-level-file=detail
+      start-fast=y
+      archive-async=y
+      spool-path=/var/spool/pgbackrest
+      log-path=/var/log/pgbackrest
+
+      [main]
+      pg1-path=/var/lib/postgresql/16/main
+      pg1-port=5432
+      pg1-user=postgres
+    owner: root:root
+    permissions: '0640'
+
+  - path: /etc/systemd/system/pgbackrest-full.service
+    content: |
+      [Unit]
+      Description=pgBackRest Full Backup (stanza main)
+      After=network-online.target postgresql.service
+      Wants=network-online.target
+      RequiresMountsFor=/mnt/pg-backup
+      [Service]
+      Type=oneshot
+      User=postgres
+      ExecStart=/usr/bin/pgbackrest --stanza=main --type=full backup
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/pgbackrest-diff.service
+    content: |
+      [Unit]
+      Description=pgBackRest Diff Backup (stanza main)
+      After=network-online.target postgresql.service
+      Wants=network-online.target
+      RequiresMountsFor=/mnt/pg-backup
+      [Service]
+      Type=oneshot
+      User=postgres
+      ExecStart=/usr/bin/pgbackrest --stanza=main --type=diff backup
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/pgbackrest-full.timer
+    content: |
+      [Unit]
+      Description=pgBackRest Full Backup weekly (Sun 02:00)
+      [Timer]
+      OnCalendar=Sun *-*-* 02:00:00
+      Persistent=true
+      RandomizedDelaySec=300
+      [Install]
+      WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/pgbackrest-diff.timer
+    content: |
+      [Unit]
+      Description=pgBackRest Diff Backup daily (Mon-Sat 02:30)
+      [Timer]
+      OnCalendar=Mon..Sat *-*-* 02:30:00
+      Persistent=true
+      RandomizedDelaySec=300
+      [Install]
+      WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
 packages:
   - qemu-guest-agent
   - curl
@@ -146,6 +226,8 @@ packages:
   - iotop
   - net-tools
   - postgresql-common
+  - nfs-common
+  - pgbackrest
 
 runcmd:
   - setupcon --save-only
@@ -175,6 +257,21 @@ runcmd:
   - sed -i "s/^#\?password_encryption.*/password_encryption = scram-sha-256/" /etc/postgresql/16/main/postgresql.conf
   - systemctl enable postgresql
   - systemctl restart postgresql
+
+  # --- pgBackRest: NFS-Mount (nofail=Boot-Safety) + WAL-Archiving + Stanza + Auto-Timer ---
+  # Voraussetzung: Synology-NFS-Export /volume1/backup-postgres für diese VM-IP (Map all users to admin).
+  - mkdir -p /mnt/pg-backup /var/spool/pgbackrest /var/log/pgbackrest
+  - chown postgres:postgres /var/spool/pgbackrest /var/log/pgbackrest
+  - grep -q /mnt/pg-backup /etc/fstab || echo "192.168.2.3:/volume1/backup-postgres /mnt/pg-backup nfs4 _netdev,nofail,x-systemd.device-timeout=30,soft,timeo=100,retrans=3,noatime 0 0" >> /etc/fstab
+  - systemctl daemon-reload
+  - mount /mnt/pg-backup || true
+  - mkdir -p /mnt/pg-backup/repo || true
+  - sudo -u postgres psql -c "ALTER SYSTEM SET archive_mode = 'on';"
+  - sudo -u postgres psql -c "ALTER SYSTEM SET archive_command = 'pgbackrest --stanza=main archive-push %p';"
+  - sudo -u postgres psql -c "ALTER SYSTEM SET archive_timeout = '60';"
+  - systemctl restart postgresql
+  - sudo -u postgres pgbackrest --stanza=main stanza-create || true
+  - systemctl enable --now pgbackrest-full.timer pgbackrest-diff.timer
 
   - systemctl restart rsyslog
   - echo "Cloud-init completed for ${vm_hostname}" > /var/log/cloud-init-complete.log
