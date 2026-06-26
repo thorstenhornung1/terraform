@@ -246,6 +246,14 @@ runcmd:
   - apt-get update
   - apt-get install -y postgresql-16 postgresql-16-pgvector
 
+  # --- Apache AGE (Graph-Extension für LightRAG Graph-RAG) aus Source ---
+  # Kein PGDG-apt-Paket für PG16 → From-Source-Build. AGE läuft PER-SESSION
+  # (LightRAG: CREATE EXTENSION age CASCADE + SET search_path je Connection) →
+  # KEIN shared_preload_libraries, KEIN Postgres-Neustart nötig. Nur in der
+  # DB `lightrag` via CREATE EXTENSION age aktiviert; andere App-DBs unberührt.
+  - apt-get install -y postgresql-server-dev-16 build-essential bison flex git
+  - sh -c 'cd /tmp && rm -rf age && git clone --depth 1 -b PG16 https://github.com/apache/age.git && cd age && make PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config && make install PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config'
+
   # --- Basis-Config: listen + pg_hba (feinkörnig beim Cutout) + sichere Defaults ---
   - sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" /etc/postgresql/16/main/postgresql.conf
   - sed -i "s/^#\?shared_buffers.*/shared_buffers = 2GB/" /etc/postgresql/16/main/postgresql.conf
