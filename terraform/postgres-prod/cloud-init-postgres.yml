@@ -253,6 +253,11 @@ runcmd:
   # DB `lightrag` via CREATE EXTENSION age aktiviert; andere App-DBs unberührt.
   - apt-get install -y postgresql-server-dev-16 build-essential bison flex git
   - sh -c 'cd /tmp && rm -rf age && git clone --depth 1 -b PG16 https://github.com/apache/age.git && cd age && make PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config && make install PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config'
+  # LightRAG (v1.5.x) ruft create_graph() OHNE vorheriges `LOAD 'age'` auf →
+  # AGE MUSS via shared_preload_libraries vorgeladen sein (sonst
+  # "function create_graph(unknown) does not exist"). Cluster-global; nur DB
+  # `lightrag` nutzt AGE tatsächlich (CREATE EXTENSION age dort).
+  - sh -c "echo \"shared_preload_libraries = 'age'\" >> /etc/postgresql/16/main/postgresql.conf"
 
   # --- Basis-Config: listen + pg_hba (feinkörnig beim Cutout) + sichere Defaults ---
   - sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" /etc/postgresql/16/main/postgresql.conf
