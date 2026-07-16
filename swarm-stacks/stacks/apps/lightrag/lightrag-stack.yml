@@ -103,10 +103,14 @@ services:
       EMBEDDING_BINDING_API_KEY: ollama
       EMBEDDING_MODEL: "bge-m3"                  # ollama pull bge-m3
       EMBEDDING_DIM: "1024"                      # bge-m3 nativ 1024 — nach Erst-Index fix!
-      # Ollamas bge-m3-Runner (0.12.6) crasht bei Embedding-Batches >~8k Gesamt-Token
-      # (EOF; Messreihe DEPLOY-SPEC Block 4, 2026-07-16). Default 32 × ~1200-Token-
-      # Chunks lag weit darüber — kleine Ingests blieben zufällig unter der Schwelle.
-      EMBEDDING_BATCH_NUM: "4"
+      # Historie (DEPLOY-SPEC Block 4 + 4a, 2026-07-16): Ollama 0.12.6 crashte bei
+      # Batches >~8k Token (EOF) -> Batch war auf 4 reduziert. Nach Ollama-Update
+      # auf 0.32.0 (Batch-Bug fix, 18k-Token-Batch verifiziert) invertierte das
+      # Problem: 4er-Mini-Batches stauten sich in Ollamas Ein-Slot-Queue, Requests
+      # >60s Wartezeit starben am Worker-Timeout -> Kaskade (~123 failed).
+      # Daher: Batch zurück auf Default 32 + Timeout-Headroom 180s.
+      EMBEDDING_BATCH_NUM: "32"
+      EMBEDDING_TIMEOUT: "180"                   # Default 30s zu knapp bei Queue-Wartezeiten (config.py:667)
       # --- Concurrency ---
       # phi4-Baseline war 1x2 wegen EINER lokalen M1-Max-GPU (mehr -> extract-Timeouts).
       # P1 TEMPORÄR: Extraktion läuft in der CLOUD (gpt-4.1-mini) -> die lokale GPU ist NICHT
