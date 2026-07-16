@@ -300,6 +300,9 @@ groups:
                     params: [0]
               refId: C
         for: 0s
+        # 2026-06-30: keep_firing_for entprellt — mehrere OOMs in kurzer Folge
+        # (z.B. Memory-Druck-Welle) = EIN Alert-Fenster statt N Telegram (B-01).
+        keep_firing_for: 30m
         noDataState: OK
         execErrState: OK
         labels:
@@ -332,7 +335,10 @@ groups:
               to: 0
             datasourceUid: victoriametrics
             model:
-              expr: ceph_health_status >= 2
+              # 2026-06-30: max(...) aggregiert die 3 MON-Scrape-Instanzen — eine
+              # STALE mgr-Series (z.B. nach mgr-Failover/Crash) kann sonst einen
+              # falschen HEALTH_ERR-Critical auslösen. Eine Cluster-Lage = 1 Alert.
+              expr: max(ceph_health_status) >= 2
               instant: true
               refId: A
           - refId: C
@@ -375,7 +381,8 @@ groups:
               to: 0
             datasourceUid: victoriametrics
             model:
-              expr: min_over_time(ceph_health_status[15m]) == 1
+              # 2026-06-30: max(...) über die 3 MON-Instanzen (stale-mgr-sicher).
+              expr: max(min_over_time(ceph_health_status[15m])) == 1
               instant: true
               refId: A
           - refId: C
@@ -395,7 +402,12 @@ groups:
         noDataState: OK
         execErrState: OK
         labels:
-          severity: warning
+          # 2026-06-30: warning→info — HEALTH_WARN ist hier ein GELATCHTER Zustand
+          # (slow-ops/BlueFS-Indikatoren + alter mgr-Crash klären sich nicht selbst,
+          # Wurzel = osd.2-NVMe-Kühlung). Als 'info' nur 12h-Digest-Takt statt 4h →
+          # raus aus dem Dauer-Rauschen, bleibt aber sichtbar. ceph-health-error
+          # (critical) bleibt scharf für echte ERR-Lagen.
+          severity: info
         annotations:
           summary: "Ceph cluster is in HEALTH_WARN state (sustained)"
           description: "HEALTH_WARN für 15+20=35min durchgehend. Check 'ceph health detail'. Bei BLUESTORE_SLOW_OP_ALERT auf osd.2 (pve01 nvme0n1): thermal throttling (Sensor 2 Warning), NVMe braucht Heatsink/bessere Kühlung."
@@ -472,22 +484,59 @@ groups:
         annotations:
           summary: "Ceph pool {{ $labels.pool_id }} > 85% full"
           description: "Ceph enters read-only at ~95%. Clean up or expand storage."
-
   # ===========================================================================
-  # POSTGRESQL HA — Patroni Cluster
+  # POSTGRESQL — Single-VM postgres-prod (192.168.4.45)
   # ===========================================================================
-  # Source: Patroni /metrics on 192.168.4.40-42:8008 (job=patroni)
-  # Instances: postgres-1, postgres-2, postgres-3
+  # 2026-06-15: Patroni-3-Node-Cluster + etcd durch Single-PG-VM ersetzt.
+  # Source: prometheus-postgres-exporter (job=postgres-exporter, :9187) +
+  # node-exporter (job=node-exporter, instance=postgres-prod, :9100) auf der VM.
+  # Alte Patroni-/etcd-Alertgruppen entfernt; bei Reaktivierung aus git holen.
 
   - orgId: 1
-    name: PostgreSQL HA
+    name: PostgreSQL Single-VM
     folder: Databases
     interval: 60s
     rules:
 
-      # --- No Patroni leader ---
-      - uid: patroni-no-leader
-        title: Patroni has no leader
+      # --- postgres-prod postmaster restart-loop (Crash-Loop; portiert aus alter PostgreSQL-HA-Gruppe 2026-07-06) ---
+      - uid: postgres-prod-crash-loop
+        title: postgres-prod postmaster restart loop
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: changes(pg_postmaster_start_time_seconds{instance="postgres-prod"}[10m]) > 2
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 2m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "postgres-prod PostgreSQL postmaster restart loop detected"
+          description: "pg_postmaster_start_time_seconds aenderte sich >2x in 10min = Crash-Loop. Check: ssh ansible@192.168.4.45 'sudo journalctl -u postgresql -n 100' (OOM? Disk voll? Corrupt WAL?)"
+
+      # --- postgres-prod DB down (DB läuft nicht / Exporter unerreichbar) ---
+      - uid: postgres-prod-down
+        title: postgres-prod PostgreSQL down
         condition: C
         data:
           - refId: A
@@ -497,9 +546,9 @@ groups:
             datasourceUid: victoriametrics
             model:
               expr: |
-                count(patroni_primary{job="patroni"} == 1) == 0
+                pg_up{instance="postgres-prod"} == 0
                 or
-                absent(patroni_primary{job="patroni"})
+                up{job="postgres-exporter"} == 0
               instant: true
               refId: A
           - refId: C
@@ -515,20 +564,19 @@ groups:
                     type: gt
                     params: [0]
               refId: C
-        # 2026-06-13: for 2m→5m — Leader-Election/Konsens kann bei Netz-Blips kurz
-        # ohne Leader sein; 5m toleriert Rebalancing, fängt echten Ausfall.
-        for: 5m
+        for: 2m
+        # noDataState: OK — Scrape-Luecke != DB down; up{job}==0 faengt Exporter-down MIT Daten ab (EEMUA: keine False-Positives)
         noDataState: OK
         execErrState: OK
         labels:
           severity: critical
         annotations:
-          summary: "Patroni cluster has no running leader"
-          description: "All PostgreSQL writes will fail. Check Patroni REST API on all nodes: curl http://<node>:8008/"
+          summary: "postgres-prod PostgreSQL is down"
+          description: "Single-PG-VM postgres-prod (192.168.4.45) DB unreachable. ALL apps affected. Check: ssh ansible@192.168.4.45 'sudo systemctl status postgresql'"
 
-      # --- Patroni node down ---
-      - uid: patroni-node-down
-        title: Patroni node unreachable
+      # --- postgres-prod VM unreachable (node-exporter down) ---
+      - uid: postgres-prod-node-down
+        title: postgres-prod VM unreachable
         condition: C
         data:
           - refId: A
@@ -537,7 +585,7 @@ groups:
               to: 0
             datasourceUid: victoriametrics
             model:
-              expr: up{job="patroni"} == 0
+              expr: up{job="node-exporter", instance="postgres-prod"} == 0
               instant: true
               refId: A
           - refId: C
@@ -559,34 +607,23 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "Patroni node {{ $labels.instance }} is unreachable"
-          description: "Patroni REST API not responding. Check if the postgres container is running on the host."
+          summary: "postgres-prod VM (192.168.4.45) unreachable"
+          description: "node-exporter not responding. VM may be down — check Proxmox (pve02) and HA status."
 
-      # --- Replication lag > 100MB (per replica, replay lag) ---
-      # Leader's xlog_location is taken as a label-free scalar; subtracted from each
-      # replica's replayed_location so the result keeps the instance label.
-      # `and on(instance) patroni_replica == 1` filters the leader (whose
-      # replayed≈xlog so it would otherwise self-alert with value 0).
-      # `and on(instance) patroni_xlog_replayed_location > 0` filters fresh-bootstrap
-      # replicas (pg_basebackup not yet done → replayed=0 → would show full LSN
-      # counter as "lag" which is semantically misleading). See issue #10.
-      - uid: patroni-replication-lag
-        title: PostgreSQL replication lag high
+      # --- postgres-prod disk space critical (< 12% on the data filesystem) ---
+      - uid: postgres-prod-disk-critical
+        title: postgres-prod disk space critical
         condition: C
         data:
           - refId: A
             relativeTimeRange:
-              from: 600
+              from: 300
               to: 0
             datasourceUid: victoriametrics
             model:
               expr: |
-                (
-                  scalar(max(patroni_xlog_location{job="patroni"}))
-                  - patroni_xlog_replayed_location{job="patroni"}
-                ) > 104857600
-                and on(instance) patroni_replica{job="patroni"} == 1
-                and on(instance) patroni_xlog_replayed_location{job="patroni"} > 0
+                min(node_filesystem_avail_bytes{instance="postgres-prod", fstype!~"tmpfs|overlay|squashfs"}
+                / node_filesystem_size_bytes{instance="postgres-prod", fstype!~"tmpfs|overlay|squashfs"}) * 100
               instant: true
               refId: A
           - refId: C
@@ -599,91 +636,32 @@ groups:
               expression: A
               conditions:
                 - evaluator:
-                    type: gt
-                    params: [0]
+                    type: lt
+                    params: [12]
               refId: C
-        for: 5m
-        noDataState: OK
-        execErrState: OK
-        labels:
-          severity: warning
-        annotations:
-          summary: "Replication lag > 100MB on {{ $labels.instance }}"
-          description: "Replica is falling behind in WAL replay. Could indicate network issues, slow disk, or heavy write load. Consider curl -X POST http://{{ $labels.instance }}:8008/reinitialize if lag keeps growing."
-
-      # --- Replica not streaming from leader (receive lag > 16MB) ---
-      # Catches the failure mode found in the 2026-05-07 night incident: replicas
-      # had `replication_state != streaming`, so failover was no longer possible
-      # but no alert fired. Compares leader's xlog_location to each replica's
-      # received_location — if the gap exceeds one WAL segment (16 MB), the WAL
-      # stream is effectively broken (replica is catching up via archive/basebackup
-      # or has no connection to leader).
-      # Bootstrap-filter (received_location > 0) excludes fresh replicas in
-      # pg_basebackup phase — those have received=0 by definition. See issue #10.
-      - uid: patroni-replica-not-streaming
-        title: Patroni replica not streaming from leader
-        condition: C
-        data:
-          - refId: A
-            relativeTimeRange:
-              from: 600
-              to: 0
-            datasourceUid: victoriametrics
-            model:
-              expr: |
-                (
-                  scalar(max(patroni_xlog_location{job="patroni"}))
-                  - patroni_xlog_received_location{job="patroni"}
-                ) > 16777216
-                and on(instance) patroni_replica{job="patroni"} == 1
-                and on(instance) patroni_xlog_received_location{job="patroni"} > 0
-              instant: true
-              refId: A
-          - refId: C
-            relativeTimeRange:
-              from: 300
-              to: 0
-            datasourceUid: __expr__
-            model:
-              type: threshold
-              expression: A
-              conditions:
-                - evaluator:
-                    type: gt
-                    params: [0]
-              refId: C
-        # 2026-06-13: for 3m→5m — WAL-Receive-Gap kann bei Netz-Jitter kurz um die
-        # 16MB-Grenze oszillieren; 5m verlangt anhaltend gebrochenes Streaming.
         for: 5m
         noDataState: OK
         execErrState: OK
         labels:
           severity: critical
         annotations:
-          summary: "Replica {{ $labels.instance }} not streaming (receive lag > 16MB)"
-          description: "Replica is not receiving WAL from leader — streaming replication is broken. Failover from this replica may be impossible. Verify on leader: SELECT * FROM pg_stat_replication; — if no row for this replica, restart Patroni or reinitialize: curl -X POST http://{{ $labels.instance }}:8008/reinitialize"
+          summary: "postgres-prod disk space < 12%"
+          description: "Free disk on postgres-prod is critically low. WAL/DB growth can stall PostgreSQL. Check df -h on 192.168.4.45."
 
-      # --- Replica bootstrapping (pg_basebackup phase) ---
-      # Provides INFO-severity visibility for the normal post-restart bootstrap
-      # window without alarming. A replica with patroni_replica==1 and
-      # replayed_location==0 is in pg_basebackup. For our cluster this typically
-      # finishes within ~5 min (DB cluster ~2 GB total). If it stays in this
-      # state for 5+ min the alert fires — useful to spot stuck bootstraps
-      # (e.g. network blip between replica and master, slow disk on target).
-      # See issue #10.
-      - uid: patroni-replica-bootstrapping
-        title: Patroni replica is bootstrapping (pg_basebackup)
+      # --- postgres-prod connection saturation (> 80% of max_connections) ---
+      - uid: postgres-prod-connections-high
+        title: postgres-prod connection saturation
         condition: C
         data:
           - refId: A
             relativeTimeRange:
-              from: 600
+              from: 300
               to: 0
             datasourceUid: victoriametrics
             model:
               expr: |
-                patroni_replica{job="patroni"} == 1
-                and on(instance) patroni_xlog_replayed_location{job="patroni"} == 0
+                sum(pg_stat_database_numbackends{instance="postgres-prod"})
+                / max(pg_settings_max_connections{instance="postgres-prod"}) * 100
               instant: true
               refId: A
           - refId: C
@@ -697,88 +675,7 @@ groups:
               conditions:
                 - evaluator:
                     type: gt
-                    params: [0]
-              refId: C
-        for: 5m
-        noDataState: OK
-        execErrState: OK
-        labels:
-          severity: info
-        annotations:
-          summary: "Replica {{ $labels.instance }} is bootstrapping"
-          description: "Replica has replayed_location=0 for 5+ min — pg_basebackup from leader is running (normal after a force-restart) or is stuck. Expected duration for our ~2 GB cluster: 1-5 min. Verify state: curl http://{{ $labels.instance }}:8008/patroni — should show state='creating replica' or similar transient state. If stuck, check leader-replica connectivity on VLAN 12 and disk I/O on the replica's host."
-
-      # --- Postgres backend crash-loop detection ---
-      # Catches the failure mode that the LSN-gap-based rules are blind to:
-      # if the postmaster restarts repeatedly (SIGILL, SIGSEGV, OOM, etc.),
-      # `pg_postmaster_start_time_seconds` jumps each crash. Normal ops never
-      # see this — postgres doesn't auto-restart by itself. 3+ restarts in 10
-      # min is a definitive crash loop signal.
-      # See incident swarm-stacks#9 (pgvector AVX-512 SIGILL) — that crash
-      # loop ran undetected by all existing rules until manual investigation.
-      - uid: postgres-crash-loop-detected
-        title: PostgreSQL postmaster restart loop detected
-        condition: C
-        data:
-          - refId: A
-            relativeTimeRange:
-              from: 600
-              to: 0
-            datasourceUid: victoriametrics
-            model:
-              expr: |
-                changes(pg_postmaster_start_time_seconds[10m]) > 2
-              instant: true
-              refId: A
-          - refId: C
-            relativeTimeRange:
-              from: 300
-              to: 0
-            datasourceUid: __expr__
-            model:
-              type: threshold
-              expression: A
-              conditions:
-                - evaluator:
-                    type: gt
-                    params: [0]
-              refId: C
-        for: 2m
-        noDataState: OK
-        execErrState: OK
-        labels:
-          severity: critical
-        annotations:
-          summary: "Postmaster on {{ $labels.instance }} restarted 3+ times in 10 min"
-          description: "PostgreSQL backend is in a crash loop. Check `docker logs <postgres-container> | grep -E 'signal|terminated|FATAL'` for SIGILL/SIGSEGV/OOM. Likely root causes: a buggy SIMD code path (see #9 history), bad query plan, memory pressure, or a config change requiring restart. If the exporter is scaled to 0 (e.g. as workaround during incident), this rule cannot fire — exporter being off is itself an obvious red flag."
-
-      # --- Timeline divergence (split-brain indicator) ---
-      - uid: patroni-timeline-diverged
-        title: Patroni timeline diverged
-        condition: C
-        data:
-          - refId: A
-            relativeTimeRange:
-              from: 300
-              to: 0
-            datasourceUid: victoriametrics
-            model:
-              expr: |
-                count(count by (patroni_postgres_timeline) (patroni_postgres_timeline{job="patroni"})) > 1
-              instant: true
-              refId: A
-          - refId: C
-            relativeTimeRange:
-              from: 300
-              to: 0
-            datasourceUid: __expr__
-            model:
-              type: threshold
-              expression: A
-              conditions:
-                - evaluator:
-                    type: gt
-                    params: [0]
+                    params: [80]
               refId: C
         for: 5m
         noDataState: OK
@@ -786,134 +683,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Patroni nodes are on different timelines"
-          description: "Possible split-brain or failed failover. Reinitialize the lagging replica: curl -X POST http://<replica>:8008/reinitialize"
-
-  # ===========================================================================
-  # ETCD CLUSTER — Distributed Consensus
-  # ===========================================================================
-  # Source: etcd metrics on :2379 (job=etcd)
-  # 5 nodes: etcd-1..5, quorum requires 3/5
-
-  - orgId: 1
-    name: etcd Cluster
-    folder: Infrastructure
-    interval: 60s
-    rules:
-
-      # --- etcd has no leader ---
-      - uid: etcd-no-leader
-        title: etcd cluster has no leader
-        condition: C
-        data:
-          - refId: A
-            relativeTimeRange:
-              from: 300
-              to: 0
-            datasourceUid: victoriametrics
-            model:
-              expr: |
-                count(etcd_server_has_leader{job="etcd"} == 1) == 0
-                or
-                absent(etcd_server_has_leader{job="etcd"})
-              instant: true
-              refId: A
-          - refId: C
-            relativeTimeRange:
-              from: 300
-              to: 0
-            datasourceUid: __expr__
-            model:
-              type: threshold
-              expression: A
-              conditions:
-                - evaluator:
-                    type: gt
-                    params: [0]
-              refId: C
-        # 2026-06-13: for 2m→5m — etcd-Leader-Election kann bei Netz-Disruption kurz
-        # leaderlos sein; 5m toleriert Konsens-Rebalancing.
-        for: 5m
-        noDataState: OK
-        execErrState: OK
-        labels:
-          severity: critical
-        annotations:
-          summary: "etcd cluster has lost its leader"
-          description: "Patroni depends on etcd for leader election. All PostgreSQL failovers blocked. Check etcdctl endpoint health on all 5 nodes."
-
-      # --- etcd node down (less than 5 responding) ---
-      - uid: etcd-member-down
-        title: etcd member unreachable
-        condition: C
-        data:
-          - refId: A
-            relativeTimeRange:
-              from: 300
-              to: 0
-            datasourceUid: victoriametrics
-            model:
-              expr: up{job="etcd"} == 0
-              instant: true
-              refId: A
-          - refId: C
-            relativeTimeRange:
-              from: 300
-              to: 0
-            datasourceUid: __expr__
-            model:
-              type: threshold
-              expression: A
-              conditions:
-                - evaluator:
-                    type: gt
-                    params: [0.5]
-              refId: C
-        for: 5m
-        noDataState: OK
-        execErrState: OK
-        labels:
-          severity: warning
-        annotations:
-          summary: "etcd member {{ $labels.instance }} is unreachable"
-          description: "5-node cluster tolerates 2 failures (quorum=3). Investigate soon to maintain fault tolerance."
-
-      # --- etcd database size > 500MB (default limit is 2GB) ---
-      - uid: etcd-db-size
-        title: etcd database growing large
-        condition: C
-        data:
-          - refId: A
-            relativeTimeRange:
-              from: 300
-              to: 0
-            datasourceUid: victoriametrics
-            model:
-              expr: |
-                etcd_mvcc_db_total_size_in_bytes{job="etcd"} > 524288000
-              instant: true
-              refId: A
-          - refId: C
-            relativeTimeRange:
-              from: 300
-              to: 0
-            datasourceUid: __expr__
-            model:
-              type: threshold
-              expression: A
-              conditions:
-                - evaluator:
-                    type: gt
-                    params: [0]
-              refId: C
-        for: 30m
-        noDataState: OK
-        execErrState: OK
-        labels:
-          severity: warning
-        annotations:
-          summary: "etcd database > 500MB on {{ $labels.instance }}"
-          description: "etcd default quota is 2GB. Run etcdctl compact and defrag to reclaim space."
+          summary: "postgres-prod using > 80% of max_connections"
+          description: "Connection pool near exhaustion. Check for connection leaks (apps without pooling) or raise max_connections."
 
   # ===========================================================================
   # BACKUPS — Proxmox Backup Server
@@ -963,10 +734,15 @@ groups:
           description: "PBS exporter cannot connect to pbs.hornung-bn.de. Check if PBS service is running."
 
       # --- Backup older than 48 hours for any VM ---
-      # Archive-Namespace "Backup" (retired VMs wie HAOS VM 101) wird per
-      # namespace-Filter ausgeschlossen. Neue VMs in diesem NS werden
-      # automatisch still; neu angelegte Produktiv-VMs mit wiederverwendeter
-      # ID (z.B. 101) landen im Root-NS und werden wieder alertiert.
+      # 2026-06-14: Statt manueller vm_name-Blocklist (retirte VMs wie dock01/100)
+      # nun EXISTENZ-basiert: Alert feuert nur, wenn der Gast LIVE im Cluster
+      # existiert. "Live" = PVE-Metric-Export liefert in den letzten 60min
+      # Per-Gast-Metriken (qemu→blockstat_rd_bytes, lxc→system_uptime). GESTOPPTE
+      # Reserve-Gäste haben keine Live-Metriken → automatisch ausgeschlossen.
+      # 2026-06-30: dock01 (vm:100) ist eine LAUFENDE HA-Reserve (Memory-Puffer) →
+      # emittiert Live-qemu-Metriken → leakt durch den Existenz-Filter. Da bewusst
+      # NICHT gesichert, explizit per vm_id!="100" ausgeschlossen (sonst Dauer-Alert).
+      # namespace!="Backup" bleibt (Archiv-NS). Label-Brücke: PBS=vm_id, PVE=vmid.
       - uid: pbs-backup-stale
         title: Backup older than 48h
         condition: C
@@ -978,7 +754,15 @@ groups:
             datasourceUid: victoriametrics
             model:
               expr: |
-                (time() - last_over_time(pbs_snapshot_vm_last_timestamp{namespace!="Backup",vm_name!~"haos-2025-10|haos12.2|seaweed3|swarmpit|ubuntusetup|VM 999|dock02|ARCHIVED.*|infisical-bootstrap",vm_id!~"frigate-recordings-archive|swarm-backup-client|9000"}[15m])) > 172800
+                (
+                  (time() - last_over_time(pbs_snapshot_vm_last_timestamp{namespace!="Backup", vm_id!="100"}[15m]) > 172800)
+                  and on(vm_id)
+                  (
+                    label_replace(count by(vmid)(last_over_time(blockstat_rd_bytes{object="qemu"}[1h])), "vm_id", "$1", "vmid", "(.+)")
+                    or
+                    label_replace(count by(vmid)(last_over_time(system_uptime{object="lxc"}[1h])), "vm_id", "$1", "vmid", "(.+)")
+                  )
+                )
               instant: true
               refId: A
           - refId: C
@@ -998,16 +782,18 @@ groups:
         noDataState: OK
         execErrState: OK
         labels:
-          severity: critical
+          # 2026-06-30: critical→warning — ein 48h-altes Backup ist kein Sofort-
+          # Page (pbs-backup-missed-daily/26h deckt das Frühsignal ab); wandert in
+          # den 2x/Tag-Digest statt Instant-Telegram.
+          severity: warning
         annotations:
           summary: "Backup >48h: {{ $labels.vm_name }} ({{ $labels.vm_id }})"
           description: "No successful backup in 2 days. Check PBS backup jobs."
 
       # --- Backup older than 26 hours (missed daily) ---
-      # Siehe pbs-backup-stale: Archiv-NS "Backup" ist per namespace-Filter
-      # ausgeschlossen, damit retirte VMs (z.B. HAOS VM 101) keinen Alert
-      # mehr triggern, neu vergebene IDs im Root-NS aber weiterhin alertiert
-      # werden.
+      # Siehe pbs-backup-stale: EXISTENZ-basiert (2026-06-14) statt vm_name-Blocklist
+      # — Alert nur für Gäste, die LIVE im Cluster existieren (PVE-Metric in letzter
+      # Stunde). Gestoppte/Reserve-Gäste (dock01) automatisch ausgeschlossen.
       - uid: pbs-backup-missed-daily
         title: Daily backup missed
         condition: C
@@ -1019,7 +805,15 @@ groups:
             datasourceUid: victoriametrics
             model:
               expr: |
-                (time() - last_over_time(pbs_snapshot_vm_last_timestamp{namespace!="Backup",vm_name!~"haos-2025-10|haos12.2|seaweed3|swarmpit|ubuntusetup|VM 999|dock02|ARCHIVED.*|infisical-bootstrap",vm_id!~"frigate-recordings-archive|swarm-backup-client|9000"}[15m])) > 93600
+                (
+                  (time() - last_over_time(pbs_snapshot_vm_last_timestamp{namespace!="Backup", vm_id!="100"}[15m]) > 93600)
+                  and on(vm_id)
+                  (
+                    label_replace(count by(vmid)(last_over_time(blockstat_rd_bytes{object="qemu"}[1h])), "vm_id", "$1", "vmid", "(.+)")
+                    or
+                    label_replace(count by(vmid)(last_over_time(system_uptime{object="lxc"}[1h])), "vm_id", "$1", "vmid", "(.+)")
+                  )
+                )
               instant: true
               refId: A
           - refId: C
@@ -1091,6 +885,100 @@ groups:
         annotations:
           summary: "Home Assistant is unreachable"
           description: "HA Prometheus endpoint not responding on 192.168.2.5:8123. Check VM and HA container."
+
+      # --- HA entities mass-unavailable (OOM / addon-crash canary) ---
+      # Interim-Canary 2026-06-14: VM103-OOM (~22:59, vermutlich getriggert durch das
+      # nächtliche HA→Synology-Backup) killte ~600 Entities (3510→2880), die die ganze
+      # Nacht weg blieben — war NICHT alarmierbar (HA-Core blieb meist up, kein Memory-
+      # Sensor). Diese Regel fängt den Symptom-Einbruch. Baseline gesund ~3510 (Band
+      # 3506-3517); Schwellwert 3300 = ~6% darunter, weit über OOM-Level (~2880).
+      # ABSOLUT (nicht selbst-kalibrierend), damit ein STUNDENLANGER Ausfall feuernd
+      # bleibt (max_over_time-Baseline würde nach 3h auf das degradierte Niveau
+      # nachziehen und fälschlich clearen). Bei legitimem Entity-Wachstum/Abbau Wert
+      # anpassen. severity=critical → sofortige Telegram-Benachrichtigung (kein Digest).
+      - uid: ha-entities-mass-unavailable
+        title: HA entities mass-unavailable (OOM/addon crash)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: sum(homeassistant_entity_available)
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [3300]
+              refId: C
+        for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "HA: nur {{ $values.A.Value }} Entities verfügbar (<3300, Baseline ~3510)"
+          description: "Massiver Entity-Einbruch = Addon-Crash/OOM (z.B. node-red/matter/mariadb nach Memory-Spike, evtl. durch HA-Backup). VM-100-RAM (haos, 6GB seit 2026-07-01) prüfen: ssh root@pve02 'qm config 100 | grep memory'. Verlauf: Grafana → Smart Home."
+
+      # --- HA host memory pressure (OOM-Vorwarnung) ---
+      # Ergänzt 2026-06-14 nach HA-OOM. Pre-Event-Warnung (das Pendant zur
+      # Post-Event-Regel ha-entities-mass-unavailable). Quelle: HA System-Monitor
+      # (sensor.system_monitor_arbeitsspeicherauslastung, % belegt).
+      # Doku korrigiert 2026-07-16: HA-VM ist VMID 100 (haos, pve02) mit 6GB seit
+      # 2026-07-01 (balloon=maxmem, kein aktives Ballooning) — NICHT mehr VM103/10GB.
+      # 85% ≈ 4,9GiB used. Baseline frisch ~56-58%, driftet ohne HA-Neustart auf
+      # ~68% (Add-on-Leak-Verdacht); Synology-Backup-Fenster (real 21:15-23:45
+      # CEST, nicht "~23:00") legt +~15pp obendrauf.
+      # EEMUA-Nuisance-Fix 2026-07-16: Query mit avg_over_time[10m] geglättet —
+      # am 14.07. feuerten 3-4 Kurz-Episoden (5-8min) in 2h einzeln. Glättung
+      # bündelt dicht aufeinanderfolgende Episoden, filtert Kurz-Blips <5min,
+      # anhaltende Lagen alarmieren unverändert.
+      # severity critical → sofort, damit vor dem OOM-Kill eingegriffen werden kann.
+      - uid: ha-memory-high
+        title: HA host memory high (OOM-Vorwarnung)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: avg_over_time(homeassistant_sensor_unit_percent{entity="sensor.system_monitor_arbeitsspeicherauslastung"}[10m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [85]
+              refId: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "HA RAM {{ $values.A.Value }}% (10m-Mittel >85%, Baseline frisch ~56%) — OOM droht"
+          description: "VM 100 (haos, 6GB) nähert sich der Grenze. Bei ~100% killt der OOM-Killer Addons (Mosquitto/node-red/matter/mariadb) → ~600 Entities fallen aus. Prüfen: ssh root@pve02 'qm config 100 | grep memory'; was allokiert (Add-on-Leak/Backup 21:15-23:45/Integration)? Baseline >65% ohne Backup = Drift → HA-Neustart erwägen. Verlauf: Grafana → Smart Home."
 
       # --- Zigbee2MQTT bridge offline ---
       - uid: ha-z2m-offline
@@ -1262,8 +1150,13 @@ groups:
               to: 0
             datasourceUid: victoriametrics
             model:
+              # 2026-06-30: Catch-all NUR für Jobs OHNE eigenen Down-Alert. Jobs mit
+              # dediziertem up-basiertem Alert (node-exporter→swarm-node-down,
+              # frigate→frigate-down, postgres-exporter→postgres-prod-down) raus —
+              # sonst Doppel-/Dreifach-Alerts pro Ausfall. (blackbox bleibt drin:
+              # fängt einen down-Exporter als 1 Alert statt N Probe-Fails ab.)
               expr: |
-                up{job!~"ceph|homeassistant"} == 0
+                up{job!~"ceph|homeassistant|node-exporter|postgres-exporter|frigate"} == 0
               instant: true
               refId: A
           - refId: C
@@ -1381,10 +1274,73 @@ groups:
         noDataState: OK
         execErrState: OK
         labels:
-          severity: critical
+          # 2026-06-30: critical→warning — eine EINZELNE Kamera auf 0 FPS ist kein
+          # Notfall (Frigate selbst läuft, frigate-down deckt den Total-Ausfall).
+          # Wandert in den Digest statt Instant-Page.
+          severity: warning
         annotations:
           summary: "Frigate camera {{ $labels.camera_name }} has 0 FPS"
           description: "Camera feed is not being received. Check camera network, RTSP stream, or ffmpeg process in Frigate logs."
+
+      # --- Camera pipeline stalled (Stream liefert, Verarbeitung tot) ---
+      # Fehlerbild 12.07.+14.07.2026: OpenVINO-Detektor haengt ("Detection appears
+      # to be stuck" + Force-Kill im frigate.watchdog), danach bleiben einzelne
+      # Kamera-Prozesse im Deadlock: camera_fps normal (Stream lebt), aber
+      # process_fps ~0 / skipped_fps = camera_fps. Livebild eingefroren, keine
+      # Objekte, Recording-Segmente werden verworfen. frigate-camera-no-detection
+      # (camera_fps==0) greift hier NICHT, der ffmpeg-Watchdog heilt es NICHT.
+      #
+      # Expression: process_fps (max ueber 10m) NUR fuer Kameras mit lebendem
+      # Stream (camera_fps > 0.5). Kamera komplett tot -> Serie faellt raus ->
+      # noData -> OK (deckt frigate-camera-no-detection); Scrape weg -> deckt
+      # frigate-down. Threshold lt 0.5: gesund sind 2-5 fps (doorbird 2, Reolink 5).
+      # ACHTUNG: setzt voraus, dass keine Kamera mit detect-fps < 1 konfiguriert wird.
+      #
+      # Schutzzeit: max_over_time[10m] + for 15m = ~25min anhaltender Stall vor
+      # Alarm. Begruendung: Frigate-/LXC-Neustart = 3-5min Metrik-Luecke+Ramp-up
+      # (Reboot 13.07. 19:28), Detector-Restart <1min — beides feuert nicht.
+      # Beobachtete echte Staelle: 0.9h-20.4h. keep_firing_for 30m: garten
+      # flappte am 15.07. 02:05-04:25 im 10-20min-Takt tot/lebendig — das wird
+      # zu EINEM Alarm entprellt (Hysterese, EEMUA 191 Anti-Flap).
+      - uid: frigate-camera-pipeline-stalled
+        title: Frigate camera pipeline stalled (stream ok, processing dead)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                max_over_time(frigate_process_fps{job="frigate"}[10m])
+                  and (max_over_time(frigate_camera_fps{job="frigate"}[10m]) > 0.5)
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [0.5]
+              refId: C
+        for: 15m
+        keep_firing_for: 30m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          # Einzelne Kamera degradiert, Frigate laeuft -> warning/Digest
+          # (Konvention 2026-06-30, analog frigate-camera-no-detection).
+          severity: warning
+        annotations:
+          summary: "Frigate camera {{ $labels.camera_name }}: stream ok but pipeline stalled"
+          description: "Kamera liefert Frames (camera_fps > 0), aber Frigate verarbeitet sie nicht (process_fps < 0.5 fuer 25+ min): Livebild eingefroren, keine Detection, Recording-Luecken. Typische Ursache: Kamera-Prozess-Deadlock nach OpenVINO-Detektor-Hang (docker logs frigate | grep -i stuck). Fix: Frigate-Container neu starten (192.168.4.70: cd /opt/frigate/compose && docker compose restart frigate). ffmpeg-Watchdog-Restarts und Kamera-Reboots heilen das NICHT."
 
       # --- OOM-kill watchdog on pve03 (Frigate-LXC Memory-Druck) ---
       # Signal aus node-exporter: node_vmstat_oom_kill steigt bei jedem OOM.
@@ -1419,6 +1375,7 @@ groups:
                     params: [0]
               refId: C
         for: 0s
+        keep_firing_for: 30m   # 2026-06-30: OOM-Welle entprellen (1 Fenster statt N)
         noDataState: OK
         execErrState: OK
         labels:
@@ -1506,9 +1463,10 @@ groups:
                     type: lt
                     params: [1]
               refId: C
-        for: 5m
-        noDataState: Alerting
-        execErrState: Alerting
+        for: 10m
+        # for 10m + min_over_time[5m] = ~15min Debounce gegen Backend-Flapping (:4000 flappt, Healthcheck prueft nur :3000); noDataState OK (EEMUA: kein Chattering)
+        noDataState: OK
+        execErrState: OK
         labels:
           severity: critical
         annotations:
@@ -1683,4 +1641,104 @@ groups:
         annotations:
           summary: "HTTPS probe for {{ $labels.instance }} failing for 20+ min"
           description: "Either service is down, Traefik not routing, DNS broken, or TLS handshake failing. Check app service status first."
-# Trigger redeploy 2026-04-26: previous push 5bfef9c failed with CI-runner glitch ("webhooks.conf not found") — this trivial change forces a fresh push-trigger.
+
+  # ===========================================================================
+  # DNS — Technitium Resolver (Prio-1-Infra, 2026-06-15)
+  # ===========================================================================
+  # Source: blackbox dns_resolve probe (job=blackbox-dns) gegen dns1/2/3.
+  - orgId: 1
+    name: DNS
+    folder: Infrastructure
+    interval: 60s
+    rules:
+
+      # --- Einzelner DNS-Resolver down (Redundanz: 2 Knoten übrig) ---
+      - uid: dns-node-down
+        title: DNS-Resolver unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: probe_success{job="blackbox-dns"} == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 3m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "DNS-Resolver {{ $labels.dns_node }} ({{ $labels.instance }}) löst nicht auf"
+          description: "Ein Technitium-Knoten antwortet nicht auf DNS-Queries (dns1.hornung-bn.de A). Redundanz: 2 weitere Knoten aktiv. Prüfen: ssh root@<node> 'systemctl status dns' im LXC."
+
+      # --- ALLE DNS-Resolver down (Prio-1-Notfall) ---
+      - uid: dns-all-down
+        title: ALLE DNS-Resolver down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                count(probe_success{job="blackbox-dns"} == 1) == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 3m
+        # noDataState: OK — fehlende blackbox-dns-Serie (Exporter-Restart) != DNS tot; count()==0 feuert nur bei ECHTEN 0-Erfolgen (EEMUA)
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "ALLE DNS-Resolver ausgefallen — Prio-1-Notfall"
+          description: "Kein Technitium-Knoten (dns1/2/3) löst mehr auf. Namensauflösung clusterweit tot → Apps/Traefik/Browser brechen. SOFORT prüfen: dns1/2/3 LXC + pve-Hosts."
+
+  # --- GitOps-Orphan-Prune (2026-07-06): leere Alt-Gruppen zwingen den File-Provisioner (provenance=file),
+  #     die verwaisten Patroni/etcd-Regeln zu loeschen. Grafana pruned aus Files ENTFERNTE Gruppen NICHT selbst;
+  #     die API kann provenance=file-Regeln nicht loeschen ("cannot delete ... needs 'file'"). Leere File-Gruppen
+  #     sind der einzige Weg. Nach erfolgreichem Prune in Folge-Commit entfernbar (leere Gruppen sind harmlos).
+  - orgId: 1
+    name: etcd Cluster
+    folder: Infrastructure
+    interval: 60s
+    rules: []
+  - orgId: 1
+    name: PostgreSQL HA
+    folder: Databases
+    interval: 60s
+    rules: []
+# Trigger redeploy 2026-06-15: DNS-Probe + DNS-Alerts (Prio-1-Infra) hinzugefügt.
+# Trigger redeploy 2026-07-06: EEMUA-Nuisance-Fix (absent/noDataState) + GitOps-Orphan-Prune (etcd/Patroni-Altgruppen).

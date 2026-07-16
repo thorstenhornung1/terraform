@@ -67,6 +67,10 @@ services:
       labels:
         # Traefik HTTPS routing
         - traefik.enable=true
+        # Portainer hängt an 3 Overlays (ingress, agent_network, traefik_public) —
+        # ohne explizites Netz-Label würfelt Traefik das Backend-Netz und erwischt
+        # ggf. eines, an dem es selbst nicht hängt -> Dial-Hänger/504 (Vorfall 2026-07-16).
+        - traefik.swarm.network=traefik_public
         - "traefik.http.routers.portainer.rule=Host(`portainer.hornung-bn.de`)"
         - traefik.http.routers.portainer.entrypoints=websecure
         - traefik.http.routers.portainer.tls=true

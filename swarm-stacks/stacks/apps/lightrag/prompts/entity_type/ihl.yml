@@ -1,0 +1,240 @@
+### Entity type prompt profile "ihl" — IHL Graph-RAG (ihl_core workspace)
+### Schema: prompts/samples/entity_type_prompt.sample.yml @ LightRAG v1.5.4
+###   (archived: deploy-spec-files/lightrag/reference/entity_type_prompt.sample.v1.5.4.yml)
+### Loader:  lightrag/prompt.py v1.5.4, load_entity_extraction_prompt_profile (l.619-675)
+### When ENTITY_EXTRACTION_USE_JSON=false, entity_extraction_examples section must include in this file
+### When ENTITY_EXTRACTION_USE_JSON=true, entity_extraction_json_examples section must include in this file
+### Purpose: qualified entity names ("GC I Article 15", never bare "Article 15") to stop
+###   name-collision merges across instruments/cases/press (entity bleeding).
+
+entity_types_guidance: |
+  Classify each entity using one of the following types. If no type fits, use `Other`.
+
+  - TREATY: An international legal instrument as a whole (e.g. "Geneva Convention I (1949)", "Additional Protocol I (1977)")
+  - TREATY_ARTICLE: A single article of a treaty, always qualified with its instrument (e.g. "GC I Article 15", "AP I Article 57")
+  - CUSTOMARY_RULE: A rule of the ICRC Customary IHL Study (e.g. "CIHL Rule 109")
+  - COMMENTARY: Authoritative commentary on a treaty provision (e.g. "ICRC Commentary on GC I (2016), Article 15")
+  - CASE: A judicial decision or proceeding, named with the parties and case number (e.g. "Prosecutor v. Karadžić (IT-95-5/18-T)")
+  - COURT: A court or tribunal (e.g. "ICTY", "International Court of Justice")
+  - STATE: A state or country (e.g. "Ukraine", "Switzerland")
+  - ORGANIZATION: Organizations, institutions, armed forces and research institutes (e.g. "ICRC", "RUSI")
+  - MILITARY_ORDER: A military order, directive or operational document, qualified with its case or conflict context (e.g. "Directive 7 (Karadžić)")
+  - MEDICAL_UNIT: Medical units, facilities, transports and personnel categories (e.g. "hospital ship", "uncrewed ground medical transport")
+  - WEAPON_SYSTEM: Weapons and weapon platforms (e.g. "FPV drone", "loitering munition")
+  - LEGAL_CONCEPT: Legal notions, obligations, protections and doctrines (e.g. "Search and Collection of the Wounded", "Suspension of Fire", "Medical Evacuation")
+  - EVENT: Occurrences, operations and incidents, including a place name standing for the events that took place there (e.g. "Battle of Solferino", "Srebrenica")
+  - PERSON: Human individuals (e.g. "Henry Dunant", "Radovan Karadžić")
+  - PUBLICATION: Reports, papers, studies and other published works when they are named in the text
+  - Other: Anything that fits none of the types above, including geographic locations that are not States
+
+  Naming rules (mandatory):
+  1. Every article or rule number MUST be qualified with its instrument. Derive the instrument from the `[Quelle:]` header line at the top of the input text. Write "GC I Article 15", "AP I Article 57", "CIHL Rule 109" — never a bare "Article 15" or "Rule 109".
+  2. Use these instrument abbreviations: Geneva Conventions I–IV = "GC I", "GC II", "GC III", "GC IV"; Additional Protocols = "AP I", "AP II", "AP III"; ICRC Customary IHL Study rules = "CIHL Rule <number>"; commentaries = "ICRC Commentary on <instrument> (<year>), Article <number>".
+  3. Case-specific orders, directives and documents MUST be qualified with their case or context: "Directive 7 (Karadžić)" — never a bare "Directive 7".
+  4. Use the `[Quelle:]` header only to qualify entity names and to identify the source instrument, court or issuing organization; do not extract the header's database names or URLs as entities.
+  5. Describe LEGAL_CONCEPT entities in neutral, general terms. Keep the facts of a specific case, conflict or report in the relationship descriptions — never in the concept entity's own description.
+
+entity_extraction_examples:
+  - |
+    entity{tuple_delimiter}Geneva Convention I (1949){tuple_delimiter}TREATY{tuple_delimiter}The First Geneva Convention of 1949 for the Amelioration of the Condition of the Wounded and Sick in Armed Forces in the Field.
+    entity{tuple_delimiter}GC I Article 15{tuple_delimiter}TREATY_ARTICLE{tuple_delimiter}Article 15 of Geneva Convention I (1949). It obliges parties to the conflict to search for and collect the wounded and sick without delay, and provides for a suspension of fire whenever circumstances permit so that the wounded left on the battlefield can be removed.
+    entity{tuple_delimiter}Search and Collection of the Wounded{tuple_delimiter}LEGAL_CONCEPT{tuple_delimiter}The obligation of parties to an armed conflict to take all possible measures, particularly after an engagement, to search for and collect the wounded and sick.
+    relation{tuple_delimiter}GC I Article 15{tuple_delimiter}Geneva Convention I (1949){tuple_delimiter}treaty provision, instrument{tuple_delimiter}GC I Article 15 is a provision of Geneva Convention I (1949); the article name is qualified with the instrument identified in the [Quelle:] header.
+    relation{tuple_delimiter}GC I Article 15{tuple_delimiter}Search and Collection of the Wounded{tuple_delimiter}obligation, wounded and sick{tuple_delimiter}GC I Article 15 establishes the obligation to search for and collect the wounded and sick without delay.
+    {completion_delimiter}
+
+entity_extraction_json_examples:
+  - |
+    Example 1 — treaty article chunk:
+
+    Input:
+    [Quelle: Geneva Convention I (1949), Article 15 — ICRC IHL Treaties Database]
+    At all times, and particularly after an engagement, Parties to the conflict shall, without delay, take all possible measures to search for and collect the wounded and sick, to protect them against pillage and ill-treatment, and to ensure their adequate care. Whenever circumstances permit, an armistice or a suspension of fire shall be arranged, or local arrangements made, to permit the removal, exchange and transport of the wounded left on the battlefield.
+
+    Output:
+    {
+      "entities": [
+        {
+          "name": "Geneva Convention I (1949)",
+          "type": "TREATY",
+          "description": "The First Geneva Convention of 1949 for the Amelioration of the Condition of the Wounded and Sick in Armed Forces in the Field."
+        },
+        {
+          "name": "GC I Article 15",
+          "type": "TREATY_ARTICLE",
+          "description": "Article 15 of Geneva Convention I (1949). It obliges parties to the conflict, at all times and particularly after an engagement, to search for and collect the wounded and sick without delay, and provides for a suspension of fire whenever circumstances permit so that the wounded left on the battlefield can be removed."
+        },
+        {
+          "name": "Search and Collection of the Wounded",
+          "type": "LEGAL_CONCEPT",
+          "description": "The obligation of parties to an armed conflict to take all possible measures, particularly after an engagement, to search for and collect the wounded and sick."
+        },
+        {
+          "name": "Suspension of Fire",
+          "type": "LEGAL_CONCEPT",
+          "description": "An armistice or local arrangement to be made whenever circumstances permit, so that the wounded left on the battlefield can be removed, exchanged and transported."
+        }
+      ],
+      "relationships": [
+        {
+          "source": "GC I Article 15",
+          "target": "Geneva Convention I (1949)",
+          "keywords": "treaty provision, instrument",
+          "description": "GC I Article 15 is a provision of Geneva Convention I (1949); the article name is qualified with the instrument identified in the [Quelle:] header."
+        },
+        {
+          "source": "GC I Article 15",
+          "target": "Search and Collection of the Wounded",
+          "keywords": "obligation, wounded and sick",
+          "description": "GC I Article 15 establishes the obligation to search for and collect the wounded and sick without delay."
+        },
+        {
+          "source": "GC I Article 15",
+          "target": "Suspension of Fire",
+          "keywords": "evacuation mechanism, armistice",
+          "description": "GC I Article 15 provides for a suspension of fire, whenever circumstances permit, to enable the removal of the wounded."
+        }
+      ]
+    }
+  - |
+    Example 2 — case-law pinpoint extract chunk:
+
+    Input:
+    [Quelle: ICTY, Prosecutor v. Karadžić (IT-95-5/18-T), Trial Judgement, 24 March 2016 — curated pinpoint extract]
+    The Trial Chamber found that Directive 7, signed by Radovan Karadžić in March 1995, ordered the restriction of humanitarian convoy approvals to the Srebrenica enclave. The Chamber held that the resulting restrictions on humanitarian aid and on medical evacuation formed part of the strategy directed against the population of the enclave.
+
+    Output:
+    {
+      "entities": [
+        {
+          "name": "ICTY",
+          "type": "COURT",
+          "description": "The International Criminal Tribunal for the former Yugoslavia, which tried the case of Prosecutor v. Karadžić."
+        },
+        {
+          "name": "Prosecutor v. Karadžić (IT-95-5/18-T)",
+          "type": "CASE",
+          "description": "ICTY trial proceedings against Radovan Karadžić; the Trial Judgement of 24 March 2016 made findings on Directive 7 and the restriction of humanitarian access to the Srebrenica enclave."
+        },
+        {
+          "name": "Directive 7 (Karadžić)",
+          "type": "MILITARY_ORDER",
+          "description": "A military directive signed by Radovan Karadžić in March 1995 ordering the restriction of humanitarian convoy approvals to the Srebrenica enclave, as found in the Karadžić Trial Judgement."
+        },
+        {
+          "name": "Radovan Karadžić",
+          "type": "PERSON",
+          "description": "President of Republika Srpska who signed Directive 7 in March 1995 and was the accused in Prosecutor v. Karadžić (IT-95-5/18-T)."
+        },
+        {
+          "name": "Srebrenica",
+          "type": "EVENT",
+          "description": "The Srebrenica enclave and the events surrounding it, examined in the Karadžić Trial Judgement in connection with restrictions on humanitarian access."
+        },
+        {
+          "name": "Medical Evacuation",
+          "type": "LEGAL_CONCEPT",
+          "description": "The removal and transport of the wounded and sick from a combat area or besieged locality to medical care."
+        }
+      ],
+      "relationships": [
+        {
+          "source": "Prosecutor v. Karadžić (IT-95-5/18-T)",
+          "target": "ICTY",
+          "keywords": "adjudication, trial judgement",
+          "description": "The case Prosecutor v. Karadžić (IT-95-5/18-T) was tried before the ICTY."
+        },
+        {
+          "source": "Radovan Karadžić",
+          "target": "Directive 7 (Karadžić)",
+          "keywords": "issuance, signature",
+          "description": "Radovan Karadžić signed Directive 7 in March 1995."
+        },
+        {
+          "source": "Directive 7 (Karadžić)",
+          "target": "Prosecutor v. Karadžić (IT-95-5/18-T)",
+          "keywords": "judicial findings, evidence",
+          "description": "The Karadžić Trial Chamber made findings on Directive 7 as an order restricting humanitarian convoy approvals."
+        },
+        {
+          "source": "Directive 7 (Karadžić)",
+          "target": "Srebrenica",
+          "keywords": "restriction, humanitarian access",
+          "description": "Directive 7 ordered the restriction of humanitarian convoy approvals to the Srebrenica enclave."
+        },
+        {
+          "source": "Directive 7 (Karadžić)",
+          "target": "Medical Evacuation",
+          "keywords": "restriction, denial of evacuation",
+          "description": "The Karadžić Trial Chamber found that Directive 7 led to restrictions on medical evacuation from the Srebrenica enclave."
+        }
+      ]
+    }
+  - |
+    Example 3 — empirical report chunk:
+
+    Input:
+    [Quelle: Drone Warfare and Casualty Evacuation in Ukraine — RUSI Report 2025, https://rusi.org/explore-our-research — CITABLE]
+    Field research by RUSI in Ukraine documents that FPV drones maintain persistent surveillance and strike coverage over a zone extending more than 15 km behind the front line. Ground casualty evacuation across this zone is frequently delayed by days, and Russia targets evacuation routes with FPV drones at night. In response, Ukraine has begun to field uncrewed ground vehicles as medical transports to move wounded soldiers through the kill zone.
+
+    Output:
+    {
+      "entities": [
+        {
+          "name": "RUSI",
+          "type": "ORGANIZATION",
+          "description": "The Royal United Services Institute, a defence and security research institute that publishes field research on the war in Ukraine."
+        },
+        {
+          "name": "FPV drone",
+          "type": "WEAPON_SYSTEM",
+          "description": "A first-person-view attack drone; in Ukraine FPV drones maintain persistent surveillance and strike coverage over a zone extending more than 15 km behind the front line."
+        },
+        {
+          "name": "Medical Evacuation",
+          "type": "LEGAL_CONCEPT",
+          "description": "The removal and transport of the wounded and sick from a combat area or besieged locality to medical care."
+        },
+        {
+          "name": "Uncrewed ground medical transport",
+          "type": "MEDICAL_UNIT",
+          "description": "An uncrewed ground vehicle used as a medical transport to move wounded soldiers."
+        },
+        {
+          "name": "Ukraine",
+          "type": "STATE",
+          "description": "State party to the armed conflict in which drone warfare conditions and casualty evacuation delays are documented."
+        },
+        {
+          "name": "Russia",
+          "type": "STATE",
+          "description": "State party to the armed conflict reported to target evacuation routes with FPV drones at night."
+        }
+      ],
+      "relationships": [
+        {
+          "source": "FPV drone",
+          "target": "Medical Evacuation",
+          "keywords": "evacuation delay, kill zone",
+          "description": "Persistent FPV drone coverage over the zone behind the front line delays ground casualty evacuation by days."
+        },
+        {
+          "source": "Russia",
+          "target": "FPV drone",
+          "keywords": "employment, targeting of evacuation routes",
+          "description": "Russia targets evacuation routes with FPV drones at night."
+        },
+        {
+          "source": "Ukraine",
+          "target": "Uncrewed ground medical transport",
+          "keywords": "fielding, adaptation",
+          "description": "Ukraine fields uncrewed ground vehicles as medical transports to move wounded soldiers through the kill zone."
+        },
+        {
+          "source": "RUSI",
+          "target": "Ukraine",
+          "keywords": "field research, documentation",
+          "description": "RUSI conducts field research in Ukraine documenting drone warfare conditions and casualty evacuation delays."
+        }
+      ]
+    }

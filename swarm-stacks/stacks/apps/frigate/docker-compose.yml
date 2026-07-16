@@ -49,7 +49,7 @@ services:
       retries: 3
 
   frigate:
-    image: ghcr.io/blakeblackshear/frigate:0.17.1
+    image: ghcr.io/blakeblackshear/frigate:0.17.2
     container_name: frigate
     restart: unless-stopped
     security_opt:

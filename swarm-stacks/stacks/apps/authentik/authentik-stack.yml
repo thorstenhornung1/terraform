@@ -25,16 +25,14 @@ version: '3.8'
 
 services:
   authentik-server:
-    image: ghcr.io/goauthentik/server:2026.2
+    image: ghcr.io/goauthentik/server:2026.5.5
     command: server
     hostname: authentik-server
     environment:
-      # Connect via Swarm ingress (published port) instead of overlay DNS.
-      # The overlay pg-haproxy VIP causes ConnectionTimeout in Gunicorn's
-      # run_migrations() — likely a VXLAN/IPVS race in the Go→Python spawn path.
-      # Round-robin DNS: 192.168.4.40, .41, .42 (all 3 Swarm nodes)
-      AUTHENTIK_POSTGRESQL__HOST: "pg-haproxy.hornung-bn.de"
-      AUTHENTIK_POSTGRESQL__PORT: "5433"
+      # Single-PG-VM postgres-prod (seit 2026-06-15, zuvor Patroni pg-haproxy:5433).
+      # Direkte VM (kein overlay/HAProxy) → keine VXLAN/IPVS-ConnectionTimeouts mehr.
+      AUTHENTIK_POSTGRESQL__HOST: "postgres.hornung-bn.de"
+      AUTHENTIK_POSTGRESQL__PORT: "5432"
       AUTHENTIK_POSTGRESQL__USER: authentik
       AUTHENTIK_POSTGRESQL__NAME: authentik
       AUTHENTIK_POSTGRESQL__PASSWORD: "file:///run/secrets/authentik_db_password"
@@ -51,6 +49,13 @@ services:
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
       AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
       AUTHENTIK_LOG_LEVEL: info
+      # SMTP via Homelab-Mail-Relay (Variante C) — keine Auth, From=homelab@ (Pflicht). Siehe docs/MAIL-RELAY.md.
+      AUTHENTIK_EMAIL__HOST: "192.168.4.71"
+      AUTHENTIK_EMAIL__PORT: "587"
+      AUTHENTIK_EMAIL__USE_TLS: "false"
+      AUTHENTIK_EMAIL__USE_SSL: "false"
+      AUTHENTIK_EMAIL__TIMEOUT: "10"
+      AUTHENTIK_EMAIL__FROM: "homelab@hornung-bn.de"
     volumes:
       - /mnt/cephfs/swarm-state/stack-authentik/data/media:/data/media
       - /mnt/cephfs/swarm-state/stack-authentik/data/certs:/data/certs
@@ -117,12 +122,13 @@ services:
       start_period: 600s
 
   authentik-worker:
-    image: ghcr.io/goauthentik/server:2026.2
+    image: ghcr.io/goauthentik/server:2026.5.5
     command: worker
     hostname: authentik-worker
     environment:
-      AUTHENTIK_POSTGRESQL__HOST: "192.168.4.40"
-      AUTHENTIK_POSTGRESQL__PORT: "5433"
+      # Single-PG-VM postgres-prod (seit 2026-06-15, zuvor Patroni via 192.168.4.40:5433)
+      AUTHENTIK_POSTGRESQL__HOST: "postgres.hornung-bn.de"
+      AUTHENTIK_POSTGRESQL__PORT: "5432"
       AUTHENTIK_POSTGRESQL__USER: authentik
       AUTHENTIK_POSTGRESQL__NAME: authentik
       AUTHENTIK_POSTGRESQL__PASSWORD: "file:///run/secrets/authentik_db_password"
@@ -137,6 +143,13 @@ services:
       AUTHENTIK_SECRET_KEY: "file:///run/secrets/authentik_secret_key"
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
       AUTHENTIK_LOG_LEVEL: info
+      # SMTP via Homelab-Mail-Relay (Variante C) — keine Auth, From=homelab@ (Pflicht). Siehe docs/MAIL-RELAY.md.
+      AUTHENTIK_EMAIL__HOST: "192.168.4.71"
+      AUTHENTIK_EMAIL__PORT: "587"
+      AUTHENTIK_EMAIL__USE_TLS: "false"
+      AUTHENTIK_EMAIL__USE_SSL: "false"
+      AUTHENTIK_EMAIL__TIMEOUT: "10"
+      AUTHENTIK_EMAIL__FROM: "homelab@hornung-bn.de"
     volumes:
       - /mnt/cephfs/swarm-state/stack-authentik/data/media:/data/media
       - /mnt/cephfs/swarm-state/stack-authentik/data/certs:/data/certs
@@ -169,7 +182,7 @@ services:
         failure_action: continue
 
   authentik-ldap-outpost:
-    image: ghcr.io/goauthentik/ldap:2026.2
+    image: ghcr.io/goauthentik/ldap:2026.5.5
     hostname: authentik-ldap-outpost
     environment:
       AUTHENTIK_HOST: "http://authentik-server:9000"

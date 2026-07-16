@@ -11,6 +11,16 @@
 # =============================================================================
 
 http:
+  # serversTransports MÜSSEN im File-Provider definiert werden — der Swarm-
+  # Provider kann sie NICHT aus Labels erzeugen ("servers transport not found
+  # lightrag-st@swarm", Vorfall 2026-07-16). Referenz in Stack-Labels: <name>@file.
+  serversTransports:
+    # Lange LightRAG-hybrid-Queries (Reranker+Synthese) brauchen >100s
+    # (DEPLOY-SPEC Block 1, 2026-07-15): Proxy toleriert >=300s Antwortlatenz.
+    lightrag-st:
+      forwardingTimeouts:
+        responseHeaderTimeout: "300s"
+
   routers:
     # HTTPS Router — dns.hornung-bn.de
     dns-websecure:

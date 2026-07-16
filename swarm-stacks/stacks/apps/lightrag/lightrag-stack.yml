@@ -1,0 +1,203 @@
+version: "3.8"
+
+# =============================================================================
+# LightRAG — Graph-RAG (Graph + Vektor) auf postgres-prod (AGE + pgvector)
+# =============================================================================
+# Testkorpus: IHL Law Core (Genfer Konventionen + Zusatzprotokolle, ICRC
+# Commentaries, Customary IHL — lex lata, Auslegung, Treaty/Customary Law).
+#
+# Inferenz + Embeddings: Mac Studio (192.168.2.236, LM Studio, OpenAI-kompatibel),
+# VLAN4 -> VLAN2 via UDM-Pro (gleicher Pfad wie reisekosten/belegparser).
+#
+# Storage: postgres-prod (DB `lightrag`, KV+Vector+Graph). AGE laeuft per-session
+# (CREATE EXTENSION age CASCADE + SET search_path je Connection) -> KEIN
+# shared_preload, KEIN Postgres-Neustart. pgvector + age sind in `lightrag`
+# bereits via `CREATE EXTENSION` angelegt.
+#
+# Zugriff: https://rag.hornung-bn.de  (Web-UI + REST + MCP, Bearer-Auth)
+# Deploy:  GitOps ssh-deploy (webhooks.conf), Content-Hash fuer den Wrapper.
+# Secrets: lightrag_db_password (postgres-User), lightrag_api_key (Server-Token).
+#
+# ⚠️ MORGEN (User): in LM Studio Embedding- + Chat-Modell laden, dann unten
+#    EMBEDDING_MODEL + EMBEDDING_DIM (und ggf. LLM_MODEL) auf die geladenen
+#    Modelle setzen und neu deployen. Erst danach Ingestion/Query (siehe README).
+# =============================================================================
+
+services:
+  lightrag:
+    image: ghcr.io/hkuds/lightrag@sha256:de09cd75e32b6b45b104625a9fb229f84f3dec4827ecffc825aa4438b196cbe6   # v1.5.4 (verifiziert 2026-06-26)
+    # Wrapper injiziert POSTGRES_PASSWORD + LIGHTRAG_API_KEY aus den Secrets und
+    # exec't dann den Image-Default-Entrypoint (python -m lightrag.api.lightrag_server).
+    entrypoint: ["/bin/sh", "/entrypoint-wrapper.sh"]
+    networks:
+      - traefik_public
+      - postgres-network
+    secrets:
+      # v2-Rotation (2026-06-26): altes lightrag_db_password passte nicht zur Rolle →
+      # asyncpg InvalidPasswordError → Crash-Loop. Neues Secret, target-gemappt auf den
+      # alten Pfad, damit entrypoint-wrapper.sh unverändert /run/secrets/lightrag_db_password liest.
+      - source: lightrag_db_password_v4
+        target: lightrag_db_password
+      - lightrag_api_key
+      # P1 (temporär): OpenAI-Key (gpt-4.1-mini) für die Per-Artikel-Cloud-Extraktion. Der
+      # entrypoint-wrapper exportiert daraus LLM_BINDING_API_KEY. NACH dem Re-Ingest
+      # dieses Mapping + den Cloud-LLM-Block wieder entfernen (Revert auf phi4/Ollama).
+      - lightrag_openai_api_key
+    configs:
+      - source: lightrag_entrypoint_wrapper_${ENTRYPOINT_WRAPPER_HASH:-latest}
+        target: /entrypoint-wrapper.sh
+        mode: 0555
+    environment:
+      # --- Server ---
+      HOST: "0.0.0.0"
+      PORT: "9621"
+      WORKSPACE: ihl_core
+      WORKING_DIR: /app/data/rag_storage
+      INPUT_DIR: /app/data/inputs
+      # --- Storage: postgres-prod (AGE + pgvector) ---
+      LIGHTRAG_KV_STORAGE: PGKVStorage
+      LIGHTRAG_VECTOR_STORAGE: PGVectorStorage
+      LIGHTRAG_GRAPH_STORAGE: PGGraphStorage
+      LIGHTRAG_DOC_STATUS_STORAGE: PGDocStatusStorage
+      POSTGRES_HOST: postgres.hornung-bn.de
+      POSTGRES_PORT: "5432"
+      POSTGRES_DATABASE: lightrag
+      POSTGRES_USER: lightrag
+      # POSTGRES_PASSWORD -> entrypoint-wrapper aus /run/secrets/lightrag_db_password
+      # --- LLM (Extract / Keywords / Query) -> Ollama @ Mac Studio ---
+      # Ollama statt LM Studio, weil LM Studio response_format=json_object ablehnt
+      # (nur json_schema/text) und LightRAG die Query-Keyword-Extraktion hart mit
+      # json_object macht -> local/hybrid liefen leer. Ollama akzeptiert json_object
+      # nativ -> KEIN Patch/Adapter noetig. OLLAMA_KEEP_ALIVE=-1 + MAX_LOADED=2 pinnen
+      # Chat+Embedding gleichzeitig (kein "Model unloaded").
+      LLM_BINDING: openai
+      # === P1 TEMPORÄR: Cloud-Extraktion mit OpenAI gpt-4.1-mini (native OpenAI-API) ===
+      # Einmaliger Per-Artikel-Re-Ingest der ~576 Vertrags-Docs. gpt-4.1-mini statt Haiku:
+      # bessere Format-Treue + natives Endpoint (kein Anthropic-compat-Shim) + unter Budget
+      # (~4-5 €). ENTITY_EXTRACTION_USE_JSON=true härtet die Extraktion modellunabhängig
+      # (JSON statt fragilem <|#|>-Feld-Zählen -> killt found-N/M-fields-Drops). REVERT nach
+      # dem Re-Ingest auf die 3 Zeilen unten + JSON-Toggle + Secret-Mapping entfernen:
+      #   LLM_BINDING_HOST: "http://192.168.2.236:11434/v1"
+      #   LLM_BINDING_API_KEY: ollama
+      #   LLM_MODEL: "phi4"
+      LLM_BINDING_HOST: "https://api.openai.com/v1"
+      LLM_BINDING_API_KEY: ollama                # vom entrypoint-wrapper mit dem OpenAI-Secret überschrieben
+      LLM_MODEL: "gpt-4.1-mini"                   # nur Extraktion; EMBEDDING bleibt bge-m3 (pgvector-Index gelockt)
+      ENTITY_EXTRACTION_USE_JSON: "true"          # JSON- statt <|#|>-Delimiter-Extraktion (robuster; verifiziert in lightrag.py:560)
+      # --- Anti-Bleeding (DEPLOY-SPEC Block 3, 2026-07-16) ---
+      # Qualified-Name-Extraktionsprofil "ihl": erzwingt instrumentqualifizierte
+      # Entitätsnamen ("GC I Article 15", nie "Article 15") gegen Entity-Bleeding.
+      # Profildatei liegt auf CephFS (prompts/entity_type/ihl.yml, Mount unten) UND
+      # versioniert im Repo (./prompts/entity_type/ihl.yml). Wirkt nur auf KÜNFTIGE
+      # Extraktionen. ⚠ ENTITY_TYPES darf in v1.5.4 NICHT gesetzt sein (SystemExit).
+      PROMPT_DIR: /app/prompts
+      ENTITY_TYPE_PROMPT_FILE: ihl.yml            # nur nackter Dateiname (prompt.py:566-595)
+      # Extraktions-Tuning: weniger Rausch-Entitäten; Descriptions bleiben länger
+      # diskret statt provenienzfrei LLM-verschmolzen.
+      MAX_GLEANING: "0"
+      FORCE_LLM_SUMMARY_ON_MERGE: "12"
+      SUMMARY_MAX_TOKENS: "2000"
+      # --- Embeddings -> Ollama @ Mac Studio (bge-m3, dim 1024) ---
+      EMBEDDING_BINDING: openai
+      EMBEDDING_BINDING_HOST: "http://192.168.2.236:11434/v1"
+      EMBEDDING_BINDING_API_KEY: ollama
+      EMBEDDING_MODEL: "bge-m3"                  # ollama pull bge-m3
+      EMBEDDING_DIM: "1024"                      # bge-m3 nativ 1024 — nach Erst-Index fix!
+      # Ollamas bge-m3-Runner (0.12.6) crasht bei Embedding-Batches >~8k Gesamt-Token
+      # (EOF; Messreihe DEPLOY-SPEC Block 4, 2026-07-16). Default 32 × ~1200-Token-
+      # Chunks lag weit darüber — kleine Ingests blieben zufällig unter der Schwelle.
+      EMBEDDING_BATCH_NUM: "4"
+      # --- Concurrency ---
+      # phi4-Baseline war 1x2 wegen EINER lokalen M1-Max-GPU (mehr -> extract-Timeouts).
+      # P1 TEMPORÄR: Extraktion läuft in der CLOUD (gpt-4.1-mini) -> die lokale GPU ist NICHT
+      # mehr der Engpass und OpenAI hat viel Rate-Headroom -> parallelisieren: 4x4 = bis zu 16
+      # gleichzeitige Cloud-Calls (~3-4x schneller). Embedding bleibt bge-m3 lokal (schnell).
+      # REVERT auf phi4/Ollama: MAX_PARALLEL_INSERT zurück auf "1", MAX_ASYNC auf "2" (1 GPU).
+      MAX_PARALLEL_INSERT: "4"
+      MAX_ASYNC: "4"
+      LLM_TIMEOUT: "600"
+      # --- Reranker: bge-reranker-v2-m3 LOKAL am Mac Studio (Cohere-kompatibler FastAPI-Wrapper,
+      # launchd-Dienst com.hornung.reranker @ .2.236:7997). Fixt die Retrieval-Streuung
+      # (Reliability-Research P2): sortiert on-point-Normen vor tangentiale statt umgekehrt.
+      # Verifiziert: Rule 109/GC I Art 15/Rule 110 >> Rule 134/WMA-Ethik. +~1 GB RAM, MPS.
+      RERANK_BINDING: cohere
+      RERANK_MODEL: BAAI/bge-reranker-v2-m3
+      RERANK_BINDING_HOST: "http://192.168.2.236:7997/rerank"
+      RERANK_BINDING_API_KEY: local
+      RERANK_BY_DEFAULT: "True"
+      # --- sonstiges ---
+      PYTHONUNBUFFERED: "1"   # sonst stdout-Banner gepuffert; LightRAG loggt zusätzlich nach /app/lightrag.log
+      TZ: Europe/Berlin
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-lightrag/rag_storage:/app/data/rag_storage
+      - /mnt/cephfs/swarm-state/stack-lightrag/inputs:/app/data/inputs
+      # Entity-Type-Profil (DEPLOY-SPEC Block 3.1): Unterverzeichnis entity_type/
+      # ist hart kodiert (prompt.py:548). Quelle im Repo: ./prompts/entity_type/ihl.yml
+      - /mnt/cephfs/swarm-state/stack-lightrag/prompts:/app/prompts:ro
+    healthcheck:
+      # Image hat KEIN curl/wget — python-Probe (urllib) statt curl.
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9621/health',timeout=5).status==200 else 1)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      labels:
+        - traefik.enable=true
+        - traefik.swarm.network=traefik_public
+        - "traefik.http.routers.lightrag.rule=Host(`rag.hornung-bn.de`)"
+        - traefik.http.routers.lightrag.entrypoints=websecure
+        - traefik.http.routers.lightrag.tls=true
+        - traefik.http.routers.lightrag.tls.certresolver=dns
+        - traefik.http.services.lightrag.loadbalancer.server.port=9621
+        # Lange hybrid-Queries (Reranker+Synthese) brauchen >100s — Proxy-Weg muss
+        # >=300s Antwortlatenz tolerieren (DEPLOY-SPEC Block 1, 2026-07-15).
+        # Transport-DEFINITION liegt im File-Provider (stacks/traefik/dns-external.yml);
+        # der Swarm-Provider kann serversTransports nicht per Label definieren.
+        - traefik.http.services.lightrag.loadbalancer.serverstransport=lightrag-st@file
+        # HTTP -> HTTPS redirect
+        - "traefik.http.routers.lightrag-http.rule=Host(`rag.hornung-bn.de`)"
+        - traefik.http.routers.lightrag-http.entrypoints=web
+        - traefik.http.routers.lightrag-http.middlewares=lightrag-redirect
+        - traefik.http.middlewares.lightrag-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.lightrag-redirect.redirectscheme.permanent=true
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G          # 1G OOM't beim Init (tiktoken/clients); Inferenz selbst laeuft extern (Mac Studio)
+        reservations:
+          cpus: '0.1'
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        order: stop-first     # Single-Writer (File-/Graph-Locks); kein start-first
+        parallelism: 1
+
+networks:
+  traefik_public:
+    external: true
+  postgres-network:
+    external: true
+    name: postgres-ha-stack_postgres-network
+
+secrets:
+  lightrag_db_password_v4:
+    external: true
+  lightrag_api_key:
+    external: true
+  # P1 (temporär, für die gpt-4.1-mini-Cloud-Extraktion; nach Re-Ingest wieder entfernen)
+  lightrag_openai_api_key:
+    external: true
+
+# Content-Hash: deploy-stacks.yml berechnet ENTRYPOINT_WRAPPER_HASH aus
+# entrypoint-wrapper.sh -> neuer Inhalt = neuer Config-Name = sauberes Update.
+configs:
+  lightrag_entrypoint_wrapper_${ENTRYPOINT_WRAPPER_HASH:-latest}:
+    file: ./entrypoint-wrapper.sh
