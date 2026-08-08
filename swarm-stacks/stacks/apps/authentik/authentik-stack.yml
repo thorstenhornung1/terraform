@@ -25,7 +25,7 @@ version: '3.8'
 
 services:
   authentik-server:
-    image: ghcr.io/goauthentik/server:2026.5.5
+    image: ghcr.io/goauthentik/server:2026.5.6
     command: server
     hostname: authentik-server
     environment:
@@ -122,7 +122,7 @@ services:
       start_period: 600s
 
   authentik-worker:
-    image: ghcr.io/goauthentik/server:2026.5.5
+    image: ghcr.io/goauthentik/server:2026.5.6
     command: worker
     hostname: authentik-worker
     environment:
@@ -182,7 +182,7 @@ services:
         failure_action: continue
 
   authentik-ldap-outpost:
-    image: ghcr.io/goauthentik/ldap:2026.5.5
+    image: ghcr.io/goauthentik/ldap:2026.5.6
     hostname: authentik-ldap-outpost
     environment:
       AUTHENTIK_HOST: "http://authentik-server:9000"
