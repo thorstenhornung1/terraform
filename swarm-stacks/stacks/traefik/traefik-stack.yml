@@ -29,7 +29,7 @@ services:
         condition: on-failure
 
   traefik:
-    image: traefik:v3.6
+    image: traefik:v3.6.25
     secrets:
       - traefik_dns_api_token
       - traefik_dashboard_auth
