@@ -214,7 +214,7 @@ services:
   # Provisioned datasource via Docker config.
 
   grafana:
-    image: grafana/grafana:11.4.0
+    image: grafana/grafana:11.6.16
     hostname: grafana
     entrypoint: ["/bin/sh", "/etc/grafana/grafana-entrypoint.sh"]
     environment:
@@ -245,6 +245,8 @@ services:
         target: /var/lib/grafana/dashboards/home-energy-correlation.json
       - source: dashboard_ceph_storage
         target: /var/lib/grafana/dashboards-infra/ceph-storage-cluster.json
+      - source: dashboard_postgres_prod
+        target: /var/lib/grafana/dashboards-infra/postgres-prod.json
       - source: alerting_contact_points
         target: /etc/grafana/provisioning/alerting/contact-points.yml
       - source: alerting_notification_policies
@@ -430,6 +432,10 @@ configs:
   dashboard_ceph_storage:
     name: dashboard_ceph_storage_${CEPH_STORAGE_CLUSTER_HASH:-latest}
     file: ./dashboards/ceph-storage-cluster.json
+
+  dashboard_postgres_prod:
+    name: dashboard_postgres_prod_${POSTGRES_PROD_HASH:-latest}
+    file: ./dashboards/postgres-prod.json
 
   alerting_contact_points:
     name: alerting_contact_points_${CONTACT_POINTS_HASH:-latest}

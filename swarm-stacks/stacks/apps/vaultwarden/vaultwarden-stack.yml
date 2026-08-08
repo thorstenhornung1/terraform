@@ -2,7 +2,8 @@
 # Vaultwarden Stack — Self-Hosted Bitwarden-Compatible Password Manager
 # =============================================================================
 # Central secrets store for infrastructure credentials.
-# PostgreSQL backend via Patroni HA cluster (pg-haproxy:5433).
+# PostgreSQL backend: Single-PG-VM postgres.hornung-bn.de:5432 (seit 2026-06-15;
+# zuvor Patroni pg-haproxy:5433). DB-Host im entrypoint-wrapper.sh.
 # CephFS /data for attachments/icons (auto-included in PBS backup).
 #
 # Access: https://vault.hornung-bn.de (internal only, DNS-01 cert)
@@ -20,7 +21,7 @@ version: '3.8'
 
 services:
   vaultwarden:
-    image: vaultwarden/server:1.35.4
+    image: vaultwarden/server:1.37.1
     hostname: vaultwarden
     networks:
       - traefik_public

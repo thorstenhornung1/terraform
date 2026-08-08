@@ -48,7 +48,15 @@ services:
   # OPEN ARCHIVER — SvelteKit-App (Frontend + Backend + BullMQ-Worker)
   # ===========================================================================
   open-archiver:
-    image: logiclabshq/open-archiver:v0.5.0
+    # Voll-Reindex-Feature (Issue #284): Custom-Build aus dem lokalen PR-Branch
+    # feat/reindex-search-284 (HEAD 9d4f79f, reindex-pr/OpenArchiver). Fügt
+    # POST /v1/search/reindex (+ reindex-failed-extractions) hinzu; Boot führt
+    # eine ADDITIVE Migration aus (email_attachments.extraction_status).
+    # Pre-Migration-Dump: stack-postgres-backup/manual/open_archive_pre-reindex-284_*.dump
+    # Image ist NODE-LOKAL (per docker save/load auf allen 3 Nodes verteilt,
+    # kein Registry-Push — PR-Quellcode ist unveröffentlicht/CLA).
+    # Revert nach erfolgreichem Reindex: zurück auf logiclabshq/open-archiver:v0.5.x.
+    image: openarchiver-reindex:reindex-284-9d4f79f
     hostname: open-archiver
     # Eigener Wrapper lädt Docker-Secrets in ENV (die App kennt keine *_FILE-
     # Konvention), dann exec auf das image-eigene Entrypoint, das pnpm db:migrate
@@ -66,9 +74,9 @@ services:
       PORT_BACKEND: "4000"
       APP_URL: "https://archive.hornung-bn.de"
       ORIGIN: "https://archive.hornung-bn.de"
-      # --- Database (Patroni-HA via HAProxy primary port) ---
-      POSTGRES_HOST: pg-haproxy
-      POSTGRES_PORT: "5433"
+      # --- Database (Single-PG-VM postgres-prod; seit 2026-06-15, zuvor Patroni pg-haproxy:5433) ---
+      POSTGRES_HOST: postgres.hornung-bn.de
+      POSTGRES_PORT: "5432"
       POSTGRES_DB: open_archive
       POSTGRES_USER: openarchiver
       # POSTGRES_PASSWORD + DATABASE_URL werden vom entrypoint-wrapper gesetzt
@@ -126,6 +134,8 @@ services:
       - traefik_public
       - postgres-ha-stack_postgres-network
       - s3-rgw_s3-network
+      # O365-IMAP-Pull über den OAuth-Proxy (per-Person Generic-IMAP-Quellen)
+      - email-oauth2-proxy_imap-network
       - default
     deploy:
       mode: replicated
@@ -202,23 +212,42 @@ services:
     secrets:
       - openarchiver_meili_master_key
     volumes:
-      - /mnt/cephfs/swarm-state/stack-openarchiver/meili:/meili_data
+      # RBD (lokales ext4) statt CephFS (2026-06-08): Meilisearch (LMDB/mmap +
+      # Task-Update-Files) war auf CephFS fragil — unter Bulk-Reindex-Last Task-
+      # Timeouts / "update file vanished" (CephFS-Konsistenz). Das RBD-Device wird
+      # vom Host (systemd rbd-map-meili) auf dem aktiven Node bereitgestellt;
+      # Auto-Failover via meili-rbd-failover Watchdog (Lock-Steal -o exclusive).
+      # Setup: ansible/rbd-mount-meili.yml. Image: swarm-volumes/openarchiver-meili.
+      - /mnt/rbd/openarchiver-meili:/meili_data
     networks:
       - default
     deploy:
       mode: replicated
       replicas: 1
       placement:
+        # max 1 pro Node + 1 Replica: LMDB ist single-writer; das RBD ist
+        # exclusive-lock (nur ein Node mappt). meili folgt dem 'meili-rbd=active'-
+        # Label, das der Watchdog beim Failover auf den überlebenden Node setzt.
+        max_replicas_per_node: 1
         constraints:
-          # app-Node (CephFS ist dort gemountet); single-writer → 1 Replica.
-          - node.labels.app == true
+          - node.labels.meili-rbd == active
       resources:
         limits:
           cpus: '1.5'
-          memory: 2G
+          # 3G (statt 2G) für den Voll-Reindex 2026-07: Bulk-Indexing OOMte
+          # historisch bei 2G. Bewusst NICHT 4G — infra-2 (meili-rbd-Node) hat
+          # seit 2026-07-16 nur noch 8GB maxmem; Kompensation über gedrosselten
+          # Reindex-Trigger (delayBetweenBatchesMs). Nach Abschluss auf 2G zurück.
+          memory: 3G
         reservations:
           cpus: '0.3'
-          memory: 512M
+          # 900M (2026-07-19, vorher 1.5G): Die 1.5G stammten aus der Zeit VOR dem
+          # RBD-Label-Pinning (sollten Swarm von vollen Nodes fernhalten). Seit
+          # meili-rbd==active fest auf infra-2 pinnt, blockiert eine hohe
+          # Reservation nur noch das Scheduling: infra-2 balloont unter pve02-Druck
+          # auf ~3.8G Swarm-Total → meili blieb nach Reboot in Pending
+          # ("insufficient resources"). 900M passt auch auf den gequetschten Node.
+          memory: 900M
       restart_policy:
         condition: any
         delay: 5s
@@ -283,7 +312,7 @@ services:
   # TIKA — Anhang-Textextraktion (stateless)
   # ===========================================================================
   openarchiver-tika:
-    image: apache/tika:3.1.0.0
+    image: apache/tika:3.3.1.0
     hostname: openarchiver-tika
     networks:
       - default
@@ -322,6 +351,8 @@ networks:
   postgres-ha-stack_postgres-network:
     external: true
   s3-rgw_s3-network:
+    external: true
+  email-oauth2-proxy_imap-network:
     external: true
 
 # =============================================================================
