@@ -93,9 +93,11 @@ services:
       PAPERLESS_AI_LLM_EMBEDDING_BACKEND: "ollama"    # gültig: ollama | openai-like | huggingface
       PAPERLESS_AI_LLM_EMBEDDING_ENDPOINT: "http://192.168.2.236:11434"
       PAPERLESS_AI_LLM_EMBEDDING_MODEL: "bge-m3"      # 1024-dim, wie LightRAG
-      # 180s statt 120s Default: bge-m3@MacStudio unter Last langsam
-      # (LightRAG-Erfahrung: EMBEDDING_TIMEOUT=180)
-      PAPERLESS_AI_LLM_REQUEST_TIMEOUT: "180"
+      # 600s (statt 120s Default): Die Mac-Studio-GPU ist von phi4
+      # (LightRAG-Ingest, paperless-ai) belegt; bge-m3-Embedding-Batches
+      # queuen dahinter. 180s riss beim Index-Rebuild 2026-08-08 nach
+      # ~20 min mit httpx.ReadTimeout ab (unbehandelt -> Rebuild-Abbruch).
+      PAPERLESS_AI_LLM_REQUEST_TIMEOUT: "600"
       # User mapping
       USERMAP_UID: "1000"
       USERMAP_GID: "1000"
