@@ -43,15 +43,15 @@ services:
   # IMMICH SERVER (API + Web UI + Background Jobs)
   # ===========================================================================
   immich-server:
-    image: ghcr.io/immich-app/immich-server:v2.7.2
+    image: ghcr.io/immich-app/immich-server:v2.7.5
     hostname: immich-server
     # init:true ersetzt das Image-tini als PID-1 Reaper (wir überschreiben entrypoint)
     init: true
     entrypoint: /entrypoint-wrapper.sh
     environment:
-      # Database — external Patroni HA cluster via HAProxy
-      DB_HOSTNAME: "pg-haproxy.hornung-bn.de"
-      DB_PORT: "5433"
+      # Database — Single-PG-VM postgres-prod (seit 2026-06-15, zuvor Patroni pg-haproxy:5433)
+      DB_HOSTNAME: "postgres.hornung-bn.de"
+      DB_PORT: "5432"
       DB_USERNAME: immich
       # DB_PASSWORD wird vom entrypoint-wrapper.sh aus /run/secrets/immich_db_password exportiert
       DB_DATABASE_NAME: immich
@@ -122,7 +122,7 @@ services:
   # IMMICH MACHINE LEARNING (Face Detection, Smart Search, CLIP)
   # ===========================================================================
   immich-machine-learning:
-    image: ghcr.io/immich-app/immich-machine-learning:v2.7.2
+    image: ghcr.io/immich-app/immich-machine-learning:v2.7.5
     hostname: immich-machine-learning
     environment:
       MACHINE_LEARNING_MODEL_TTL: "300"
@@ -143,10 +143,15 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 4G
+          # 4G->2G: idle ~230MB (MODEL_TTL entlaedt Modelle nach 5min); Peak beim
+          # CLIP+Gesichts-Modell-Laden/Batch ~1.5-2GB mit Standard-Kleinmodellen.
+          # 2G traegt die ML-Funktion sicher; 4G war reiner Puffer. (Analyse 2026-06-28)
+          memory: 2G
         reservations:
           cpus: '0.5'
-          memory: 1G
+          # 1G->512M: Scheduler flexibler bei knappen Nodes; ML ist unkritisch +
+          # bei Speicherdruck/Host-Ausfall idealer Kandidat zum Abwerfen (scale 0).
+          memory: 512M
       restart_policy:
         condition: any
         delay: 10s

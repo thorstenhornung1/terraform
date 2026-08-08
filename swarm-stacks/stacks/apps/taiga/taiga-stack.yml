@@ -52,9 +52,9 @@ services:
         target: /entrypoint-wrapper.sh
         mode: 0755
     environment:
-      # PostgreSQL (via Patroni HAProxy)
-      POSTGRES_HOST: pg-haproxy.hornung-bn.de
-      POSTGRES_PORT: "5433"
+      # PostgreSQL: Single-PG-VM postgres-prod (seit 2026-06-15, zuvor Patroni pg-haproxy:5433)
+      POSTGRES_HOST: postgres.hornung-bn.de
+      POSTGRES_PORT: "5432"
       POSTGRES_DB: taiga
       POSTGRES_USER: taiga
       # Django
@@ -140,9 +140,9 @@ services:
         target: /entrypoint-wrapper.sh
         mode: 0755
     environment:
-      # PostgreSQL (via Patroni HAProxy)
-      POSTGRES_HOST: pg-haproxy.hornung-bn.de
-      POSTGRES_PORT: "5433"
+      # PostgreSQL: Single-PG-VM postgres-prod (seit 2026-06-15, zuvor Patroni pg-haproxy:5433)
+      POSTGRES_HOST: postgres.hornung-bn.de
+      POSTGRES_PORT: "5432"
       POSTGRES_DB: taiga
       POSTGRES_USER: taiga
       # Django
@@ -326,7 +326,7 @@ services:
   # TAIGA GATEWAY (Nginx Reverse Proxy)
   # ===========================================================================
   taiga-gateway:
-    image: nginx:1.27-alpine
+    image: nginx:1.30-alpine
     hostname: taiga-gateway
     networks:
       - taiga-internal

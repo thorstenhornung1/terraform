@@ -18,7 +18,7 @@ version: '3.8'
 
 services:
   n8n:
-    image: docker.n8n.io/n8nio/n8n:latest
+    image: docker.n8n.io/n8nio/n8n:2.33.7
     hostname: n8n
     networks:
       - traefik_public
@@ -41,9 +41,14 @@ services:
       WEBHOOK_URL: "https://n8n.hornung-bn.de/"
       GENERIC_TIMEZONE: "Europe/Berlin"
       # Database (type + host — credentials injected by entrypoint-wrapper.sh)
+      # 2026-06-14: Migriert von Patroni (pg-haproxy:5433) auf die Single-PG-VM
+      # postgres-prod — Pilot der Patroni→Single-VM-HA-Migration.
+      # 2026-06-15: Von nackter IP auf FQDN postgres.hornung-bn.de umgestellt
+      # (Technitium A-Record → 192.168.4.45). FQDN ist best practice; künftige
+      # Failover/IP-Wechsel ohne Stack-Änderung möglich.
       DB_TYPE: "postgresdb"
-      DB_POSTGRESDB_HOST: "pg-haproxy"
-      DB_POSTGRESDB_PORT: "5433"
+      DB_POSTGRESDB_HOST: "postgres.hornung-bn.de"
+      DB_POSTGRESDB_PORT: "5432"
       DB_POSTGRESDB_DATABASE: "n8n"
       DB_POSTGRESDB_USER: "n8n"
       # Execution settings

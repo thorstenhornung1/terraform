@@ -1,0 +1,71 @@
+# =============================================================================
+# S3-RGW HAProxy Stack — HA-Zugang zu Ceph RadosGW (S3)
+# =============================================================================
+# Deploy: GitOps via ssh-deploy (webhooks.conf). Content-hash config naming.
+#
+# HA-Zugang zu den 3 radosgw-Daemons (pve01/02/03, VLAN12:7480) — analog zum
+# pg-haproxy-Muster (HAProxy-Service im Swarm statt keepalived-VIP, weil nicht
+# alle PVE-Nodes ein gemeinsames VLAN-Interface für eine VIP haben).
+#
+# Consumer (Open Archiver) joinen das externe Overlay `s3-rgw_s3-network` und
+# verbinden via:  http://s3-rgw   (S3-Endpoint, path-style)
+#
+# Deployment:
+#   git push → GitOps (ssh-deploy). Stack-Name: s3-rgw.
+# =============================================================================
+
+version: '3.8'
+
+services:
+  haproxy:
+    image: haproxy:3.2-alpine
+    hostname: s3-rgw
+    networks:
+      s3-network:
+        aliases:
+          - s3-rgw
+    configs:
+      - source: s3rgw_haproxy_${HAPROXY_HASH:-latest}
+        target: /usr/local/etc/haproxy/haproxy.cfg
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:80 2>/dev/null | grep -q ListAllMyBucketsResult || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+# =============================================================================
+# NETWORKS — attachable, damit Consumer-Stacks (Open Archiver) joinen können
+# =============================================================================
+networks:
+  s3-network:
+    driver: overlay
+    attachable: true
+
+# =============================================================================
+# CONFIGS (Content-Hash-Naming)
+# =============================================================================
+configs:
+  s3rgw_haproxy_${HAPROXY_HASH:-latest}:
+    file: ./haproxy.cfg
