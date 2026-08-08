@@ -58,7 +58,10 @@ services:
       PAPERLESS_EMAIL_FROM: "homelab@hornung-bn.de"
       # OCR
       PAPERLESS_OCR_LANGUAGE: "deu+eng"
-      PAPERLESS_OCR_MODE: "skip"
+      # 3.0: 'skip' entfernt (W003); 'auto' ist das dokumentierte Äquivalent
+      # (Image mappt skip->auto intern, settings/__init__.py:920). Gültig:
+      # auto | force | redo | off.
+      PAPERLESS_OCR_MODE: "auto"
       # Consumer
       PAPERLESS_CONSUMER_POLLING: "30"
       PAPERLESS_CONSUMER_RECURSIVE: "true"
@@ -75,6 +78,24 @@ services:
       PAPERLESS_SOCIAL_ACCOUNT_DEFAULT_GROUPS: "family"
       PAPERLESS_REDIRECT_LOGIN_TO_SSO: "true"
       PAPERLESS_DISABLE_REGULAR_LOGIN: "false"
+      # --- Natives KI/RAG (Paperless 3.0, aktiviert 2026-08-08) ---
+      # LLM UND Embeddings via Mac-Studio-Ollama (192.168.2.236:11434, v0.32.0).
+      # ⚠️ SPOF: Ollama down = stiller RAG-Ausfall — kein KI-Chat, keine
+      # Indexierung NEUER Dokumente (bekanntes Muster, siehe LightRAG).
+      # Kern-Betrieb (Web/OCR/Consume/Suche) läuft davon unberührt weiter.
+      # Nightly-Index-Update: PAPERLESS_LLM_INDEX_TASK_CRON, Default 02:10.
+      # Settings-Namen/Choices verifiziert aus 3.0.5-Image (settings/__init__.py).
+      PAPERLESS_AI_ENABLED: "true"
+      PAPERLESS_AI_LLM_BACKEND: "ollama"              # gültig: ollama | openai-like
+      PAPERLESS_AI_LLM_ENDPOINT: "http://192.168.2.236:11434"
+      PAPERLESS_AI_LLM_MODEL: "phi4"
+      # Embeddings nativ via Ollama (kein HuggingFace-Download im Container)
+      PAPERLESS_AI_LLM_EMBEDDING_BACKEND: "ollama"    # gültig: ollama | openai-like | huggingface
+      PAPERLESS_AI_LLM_EMBEDDING_ENDPOINT: "http://192.168.2.236:11434"
+      PAPERLESS_AI_LLM_EMBEDDING_MODEL: "bge-m3"      # 1024-dim, wie LightRAG
+      # 180s statt 120s Default: bge-m3@MacStudio unter Last langsam
+      # (LightRAG-Erfahrung: EMBEDDING_TIMEOUT=180)
+      PAPERLESS_AI_LLM_REQUEST_TIMEOUT: "180"
       # User mapping
       USERMAP_UID: "1000"
       USERMAP_GID: "1000"
@@ -114,16 +135,23 @@ services:
       update_config:
         parallelism: 1
         delay: 10s
-        order: start-first
-        failure_action: rollback
+        # stop-first (statt start-first): Bei 1 Replica verdoppelt start-first
+        # den RAM-/Reservation-Bedarf während des Rollouts (2x 512M Reservation
+        # + 2x realer Startbedarf) — genau daran scheiterten am 2026-08-08 zwei
+        # Rollouts (early termination/OOM + Ersatz-Task "no suitable node" ->
+        # Rollback). Kurze Downtime pro Deploy ist der Preis; verhindert zudem
+        # zwei parallel laufende Webserver während DB-Migrationen.
+        order: stop-first
+        # pause (statt rollback): Ein Swarm-Rollback rollt DB-Migrationen NIE
+        # mit zurück — so lief am 2026-08-08 morgens 2.20.15 gegen das schon
+        # migrierte 3.0.5-Schema (InconsistentMigrationHistory, Produktions-
+        # ausfall, Issue #90). pause hält den Zustand für Vorwärts-Reparatur
+        # an, statt alten Code auf neues Schema loszulassen.
+        failure_action: pause
         # monitor > healthcheck.start_period (600s): sonst wertet Swarm den
-        # langsamen (Major-Upgrade-)Start als Fehlschlag und rollt zurück.
-        # 2026-08-08: 330s reichten beim 2.20->3.0-Sprung NICHT — der Rollback
-        # killte den Container mitten im Django-Migrations-Batch und
-        # hinterliess eine InconsistentMigrationHistory (Squash-Migration
-        # registriert, Dependency weg). Ein Swarm-Rollback rollt die DB NIE
-        # mit zurück — failure_action:rollback ist bei Major-Migrationen
-        # heikel. 660s = 60s Marge über start_period.
+        # langsamen (Major-Upgrade-)Start als Fehlschlag. 2026-08-08: 330s
+        # reichten beim 2.20->3.0-Sprung nicht (Image-Pull + Migrationen).
+        # 660s = 60s Marge über start_period.
         monitor: 660s
       labels:
         # --- Traefik Network (required: multi-network service) ---
