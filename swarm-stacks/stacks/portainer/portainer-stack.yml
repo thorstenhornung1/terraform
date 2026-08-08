@@ -25,7 +25,7 @@ services:
     image: portainer/agent:2.39.5
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker/volumes:/var/lib/docker/volumes
+      - /srv/data/docker/volumes:/var/lib/docker/volumes  # data-root=/srv/data/docker (Node-Disk-Layout); Legacy-Pfad fehlt auf infra-3, war auf infra-1/2 leer
     networks:
       - agent_network
     deploy:
