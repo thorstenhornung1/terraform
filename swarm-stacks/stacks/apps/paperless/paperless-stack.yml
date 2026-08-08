@@ -28,14 +28,15 @@ version: '3.8'
 
 services:
   paperless-webserver:
-    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.15
+    image: ghcr.io/paperless-ngx/paperless-ngx:3.0.5
     hostname: paperless-webserver
     entrypoint: ["/bin/bash", "/oidc-init.sh"]
     environment:
       # Database
       PAPERLESS_DBENGINE: postgresql
-      PAPERLESS_DBHOST: pg-haproxy
-      PAPERLESS_DBPORT: "5433"
+      # Single-PG-VM postgres-prod (seit 2026-06-15, zuvor Patroni pg-haproxy:5433)
+      PAPERLESS_DBHOST: postgres.hornung-bn.de
+      PAPERLESS_DBPORT: "5432"
       PAPERLESS_DBNAME: paperless
       PAPERLESS_DBUSER: paperless
       PAPERLESS_DBPASS_FILE: /run/secrets/paperless_db_password
@@ -115,10 +116,15 @@ services:
         delay: 10s
         order: start-first
         failure_action: rollback
-        # monitor > healthcheck.start_period (300s): sonst wertet Swarm den
-        # langsamen (Major-Upgrade-)Start als Fehlschlag und rollt zurück
-        # (so scheiterte die apptier-Migration 2026-06-13). 330s = 30s Marge.
-        monitor: 330s
+        # monitor > healthcheck.start_period (600s): sonst wertet Swarm den
+        # langsamen (Major-Upgrade-)Start als Fehlschlag und rollt zurück.
+        # 2026-08-08: 330s reichten beim 2.20->3.0-Sprung NICHT — der Rollback
+        # killte den Container mitten im Django-Migrations-Batch und
+        # hinterliess eine InconsistentMigrationHistory (Squash-Migration
+        # registriert, Dependency weg). Ein Swarm-Rollback rollt die DB NIE
+        # mit zurück — failure_action:rollback ist bei Major-Migrationen
+        # heikel. 660s = 60s Marge über start_period.
+        monitor: 660s
       labels:
         # --- Traefik Network (required: multi-network service) ---
         - traefik.swarm.network=traefik_public
@@ -140,10 +146,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      # 300s (statt 90s): Major-Version-Upgrades führen beim Erststart DB-Migrationen
-      # aus; 90s reichten beim 2.15→2.20-Sprung nicht → Healthcheck markierte den
-      # Container unhealthy → Rollback. 300s deckt den Migrations-Erststart ab.
-      start_period: 300s
+      # 600s (statt 300s): Major-Version-Upgrades führen beim Erststart DB-Migrationen
+      # aus; 90s reichten beim 2.15→2.20-Sprung nicht, 300s nicht beim 2.20→3.0-Sprung
+      # (Squash-Migrationen + Task-System-Redesign + Tantivy-Index-Neuaufbau bei
+      # ~12k Dokumenten). 600s deckt den Migrations-/Reindex-Erststart ab.
+      start_period: 600s
 
   tika:
     image: apache/tika:3.1.0.0
@@ -208,6 +215,92 @@ services:
       retries: 3
       start_period: 30s
 
+  # ---------------------------------------------------------------------------
+  # paperless-ai — AI-Companion (Titel/Überschrift, Tags, Typ, Korrespondent + RAG-Chat)
+  # Brücke bis Paperless-NGX 3 native AI mitbringt. LLM = phi4 via Ollama @ Mac Studio.
+  # ⚠️ Die phi4-GPU ist parallel vom LightRAG-Ingest belegt (~1 Woche) -> Analyse langsam.
+  # Setup nach Deploy: https://paperlessai.hornung-bn.de -> Wizard ->
+  #   Paperless-API-Token (Paperless: Einstellungen -> API-Token) + Provider/Modell bestätigen.
+  # ---------------------------------------------------------------------------
+  paperless-ai:
+    image: clusterzx/paperless-ai:3.0.9
+    hostname: paperless-ai
+    # Wrapper injiziert PAPERLESS_API_TOKEN aus dem Swarm-Secret, dann Original-Start.
+    entrypoint: ["/bin/sh", "/paperless-ai-entrypoint.sh"]
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      PAPERLESS_AI_PORT: "3000"
+      RAG_SERVICE_URL: "http://localhost:8000"
+      RAG_SERVICE_ENABLED: "true"
+      # Paperless-API (interner Overlay-Service im selben Stack-Netz)
+      PAPERLESS_API_URL: "http://paperless-webserver:8000/api"
+      PAPERLESS_USERNAME: "admin"   # User des API-Tokens -> behebt "Failed to get own user ID" (headless)
+      # Öffentliche Basis-URL: für die RAG-Komponente (Doc-Fetch) UND für anklickbare Dokument-Links
+      # in Chat/UI. Container erreicht sie via Traefik-Hairpin (verifiziert HTTP 302). Ohne dies
+      # Default-Platzhalter https://your-paperless-instance bzw. interne, nicht klickbare Links.
+      PAPERLESS_URL: "https://paperless.hornung-bn.de"
+      # LLM: Ollama (phi4) @ Mac Studio, VLAN4 -> VLAN2 via UDM-Pro (gleicher Pfad wie lightrag)
+      AI_PROVIDER: "ollama"
+      OLLAMA_API_URL: "http://192.168.2.236:11434"
+      OLLAMA_MODEL: "phi4"
+      # --- Funktions-Umfang: vorerst NUR Titel/Überschrift setzen ---
+      # (Tags/Korrespondent/Dokumenttyp/Custom-Fields bewusst AUS, User-Wunsch 2026-06-27)
+      ACTIVATE_TITLE: "yes"
+      ACTIVATE_TAGGING: "no"
+      ACTIVATE_CORRESPONDENTS: "no"
+      ACTIVATE_DOCUMENT_TYPE: "no"
+      ACTIVATE_CUSTOM_FIELDS: "no"
+      # PAPERLESS_API_TOKEN -> vom Wrapper aus /run/secrets/paperless_ai_api_token (Swarm-Secret)
+      TZ: "Europe/Berlin"
+    volumes:
+      - /mnt/cephfs/swarm-state/stack-paperless-ai/data:/app/data
+    configs:
+      - source: paperless_ai_entrypoint_${PAPERLESS_AI_ENTRYPOINT_HASH:-latest}
+        target: /paperless-ai-entrypoint.sh
+        mode: 0555
+    secrets:
+      - paperless_ai_api_token
+    networks:
+      - default
+      - traefik_public
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1536M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        # stop-first PFLICHT: Single-Writer (SQLite documents.db + chromadb auf CephFS).
+        # start-first würde zwei Writer parallel laufen lassen -> Lock-Konflikt/Korruption + 2/1-Stau.
+        order: stop-first
+      labels:
+        - traefik.swarm.network=traefik_public
+        - traefik.enable=true
+        - "traefik.http.routers.paperless-ai.rule=Host(`paperlessai.hornung-bn.de`)"
+        - traefik.http.routers.paperless-ai.entrypoints=websecure
+        - traefik.http.routers.paperless-ai.tls=true
+        - traefik.http.routers.paperless-ai.tls.certresolver=dns
+        - traefik.http.services.paperless-ai.loadbalancer.server.port=3000
+        - "traefik.http.routers.paperless-ai-http.rule=Host(`paperlessai.hornung-bn.de`)"
+        - traefik.http.routers.paperless-ai-http.entrypoints=web
+        - traefik.http.routers.paperless-ai-http.middlewares=paperless-ai-redirect
+        - traefik.http.middlewares.paperless-ai-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.paperless-ai-redirect.redirectscheme.permanent=true
+
 # =============================================================================
 # NETWORKS
 # =============================================================================
@@ -233,3 +326,12 @@ secrets:
     external: true
   paperless_oidc_client_secret:
     external: true
+  paperless_ai_api_token:
+    external: true
+
+# =============================================================================
+# CONFIGS (Content-Hash via deploy-stacks.yml: paperless-ai-entrypoint.sh -> PAPERLESS_AI_ENTRYPOINT_HASH)
+# =============================================================================
+configs:
+  paperless_ai_entrypoint_${PAPERLESS_AI_ENTRYPOINT_HASH:-latest}:
+    file: ./paperless-ai-entrypoint.sh

@@ -44,11 +44,13 @@ jobs:
     # Tailscale steps below are gated to github-hosted only. Falling back
     # to ubuntu-latest still works (Tailscale path re-enabled there).
     runs-on: [self-hosted, linux, x64, homelab]
-    timeout-minutes: 10
+    # 20 statt 10: Das Konvergenz-Gate wartet update_config.monitor ab
+    # (paperless: 660s) — 10min-Job-Timeout würde den Job vorher killen.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 2  # Need parent commit for diff
 
@@ -57,7 +59,7 @@ jobs:
         # VLAN 4. tailscale/github-action spins its own tailscaled which
         # needs /dev/net/tun (absent in the unprivileged LXC) → would fail.
         if: runner.environment == 'github-hosted'
-        uses: tailscale/github-action@v2
+        uses: tailscale/github-action@v4
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
 
@@ -80,13 +82,52 @@ jobs:
           done
           tailscale status
 
-      - name: Setup SSH for Swarm manager
+      - name: Setup SSH + resolve healthy Swarm manager
+        # swarm-stacks#8: SWARM_MANAGER_HOST was a single hardcoded IP
+        # (default .40). If that node is down or has docker-daemon trouble,
+        # every deploy failed until someone manually flipped the GitHub
+        # variable (happened 2026-04-27). We now probe a candidate list and
+        # pick the first HEALTHY manager. `docker node ls` only succeeds on a
+        # manager that still has Raft quorum — a worker, a partitioned node,
+        # or one with a dead daemon all fail it, so SSH-reachable-but-broken
+        # nodes are correctly rejected. The resolved IP is exported to
+        # GITHUB_ENV so all later steps (maintenance gate, deploy) inherit it.
+        # DR override still works: set SWARM_MANAGER_HOST (single IP or
+        # comma-separated list) to constrain the candidate set.
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SWARM_SSH_KEY }}" > ~/.ssh/swarm_key
           chmod 600 ~/.ssh/swarm_key
-          MANAGER="${{ vars.SWARM_MANAGER_HOST || '192.168.4.40' }}"
-          ssh-keyscan -H "$MANAGER" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          RAW="${{ vars.SWARM_MANAGER_HOST }}"
+          if [ -n "$RAW" ]; then
+            CANDIDATES=$(echo "$RAW" | tr ',' ' ')
+          else
+            CANDIDATES="192.168.4.40 192.168.4.41 192.168.4.42"
+          fi
+          echo "Candidate managers: $CANDIDATES"
+
+          for H in $CANDIDATES; do
+            ssh-keyscan -H "$H" >> ~/.ssh/known_hosts 2>/dev/null || true
+          done
+
+          SWARM_MANAGER=""
+          for H in $CANDIDATES; do
+            if ssh -i ~/.ssh/swarm_key -o ConnectTimeout=8 \
+                 -o StrictHostKeyChecking=accept-new \
+                 root@"$H" 'docker node ls' >/dev/null 2>&1; then
+              SWARM_MANAGER="$H"
+              echo "✓ Using healthy manager: $H"
+              break
+            fi
+            echo "✗ $H is not a healthy manager — trying next"
+          done
+
+          if [ -z "$SWARM_MANAGER" ]; then
+            echo "::error::No healthy Swarm manager among: $CANDIDATES"
+            exit 1
+          fi
+          echo "SWARM_MANAGER=$SWARM_MANAGER" >> "$GITHUB_ENV"
 
       # ---------------------------------------------------------------------
       # swarm_os <-> GitOps serialization gate (swarm-stacks#37, point d).
@@ -107,8 +148,8 @@ jobs:
       # maintenance window (deploy is idempotent; no data loss).
       # ---------------------------------------------------------------------
       - name: Wait out active swarm_os maintenance window
-        env:
-          SWARM_MANAGER: ${{ vars.SWARM_MANAGER_HOST || '192.168.4.40' }}
+        # SWARM_MANAGER is resolved (with failover) in the setup step above
+        # and inherited here via $GITHUB_ENV (swarm-stacks#8).
         run: |
           LOCK="/mnt/cephfs/swarm-state/.swarm-maintenance.lock"
           MAX_WAIT=1200      # 20 min total
@@ -159,7 +200,7 @@ jobs:
       - name: Deploy stacks
         env:
           PORTAINER_URL: ${{ vars.PORTAINER_URL || 'https://192.168.4.40:9443' }}
-          SWARM_MANAGER: ${{ vars.SWARM_MANAGER_HOST || '192.168.4.40' }}
+          # SWARM_MANAGER resolved with failover in setup step, via $GITHUB_ENV (#8)
         run: |
           CONF="webhooks.conf"
           if [ ! -f "$CONF" ]; then
@@ -291,9 +332,12 @@ jobs:
                 docker stack config -c resolved-stack.yml > /dev/null
 
                 echo "Deploying stack $stack_name with content-hash configs..."
+                # Timestamp (2s grace) to distinguish THIS deploy's UpdateStatus
+                # from a leftover one on an unchanged service (rollback gate below).
+                DEPLOY_T0=\$(( \$(date +%s) - 2 ))
                 docker stack deploy -c resolved-stack.yml --prune --with-registry-auth "$stack_name"
 
-                echo "Waiting for stack '$stack_name' to converge (timeout 180s)..."
+                echo "Waiting for stack '$stack_name' to converge (timeout 750s)..."
                 # Convergence rule (swarm-stacks#37, hardened 2026-05-17):
                 # A service is converged when running == desired, OR it is a
                 # successfully completed run-once service. Run-once jobs
@@ -312,7 +356,12 @@ jobs:
                 # inside this YAML block scalar (which would break parsing
                 # and lose counters). It prints "TOTAL NOT_READY".
                 CONVERGED=0
-                for _i in \$(seq 1 36); do
+                # 150x5s = 750s: muss das laengste update_config.monitor der
+                # Stacks ueberdauern (paperless 660s) — das UPDATING-Gate unten
+                # wartet das monitor-Fenster ab, bevor es Erfolg meldet. Mit den
+                # frueheren 36x5s=180s war jeder Deploy mit monitor>180s ein
+                # garantiertes false-RED (2026-08-08, paperless 3.0.5).
+                for _i in \$(seq 1 150); do
                   RESULT=\$(
                     docker stack ps "$stack_name" --no-trunc \
                       --format '{{.Name}}|{{.DesiredState}}|{{.CurrentState}}' \
@@ -356,16 +405,54 @@ jobs:
                   NOT_READY=\$(printf '%s' "\$RESULT" | awk '{print \$2}')
                   TOTAL=\${TOTAL:-0}
                   NOT_READY=\${NOT_READY:-1}
-                  if [ "\$TOTAL" -gt 0 ] && [ "\$NOT_READY" -eq 0 ]; then
+                  # --- Rollback gate (swarm-stacks 2026-06-09) ---
+                  # running==desired is ALSO true right after failure_action=
+                  # rollback restored the OLD image (N/N on the previous spec),
+                  # so the replica check alone cannot tell a real success from a
+                  # silently rolled-back deploy — exactly how v2.10.1's
+                  # auto-release "never landed" (Swarm default monitor=5s < the
+                  # 60s healthcheck start_period -> every update judged failed).
+                  # UpdateStatus is authoritative; only evaluate one that STARTED
+                  # at/after this deploy (StartedAt >= DEPLOY_T0) so a leftover
+                  # status on an unchanged service is ignored. We also refuse to
+                  # call it converged while any fresh update is still 'updating'
+                  # (i.e. wait out the monitor window before declaring success).
+                  RB=0; UPDATING=0
+                  for _svc in \$(docker stack services "$stack_name" --format '{{.Name}}'); do
+                    USLINE=\$(docker service inspect "\$_svc" --format \
+                      '{{with .UpdateStatus}}{{.State}} {{if .StartedAt}}{{.StartedAt.Unix}}{{else}}0{{end}}{{end}}' \
+                      2>/dev/null || true)
+                    [ -z "\$USLINE" ] && continue
+                    UST=\$(printf '%s' "\$USLINE" | awk '{print \$1}')
+                    USA=\$(printf '%s' "\$USLINE" | awk '{print \$2+0}')
+                    [ "\${USA:-0}" -lt "\$DEPLOY_T0" ] && continue
+                    case "\$UST" in
+                      rollback_started|rollback_paused|rollback_completed|paused) RB=1 ;;
+                      updating) UPDATING=1 ;;
+                    esac
+                  done
+                  if [ "\$RB" -ne 0 ]; then
+                    echo "ERROR: stack '$stack_name' ROLLED BACK — the new spec did not stick."
+                    echo "  Usual cause: image unhealthy within update_config.monitor,"
+                    echo "  or monitor shorter than the healthcheck start_period."
+                    docker stack services "$stack_name" --format '  SVC {{.Name}} {{.Replicas}} {{.Image}}'
+                    for _svc in \$(docker stack services "$stack_name" --format '{{.Name}}'); do
+                      docker service ps "\$_svc" --no-trunc \
+                        --format '  TASK {{.Name}} {{.CurrentState}} {{.Error}}' | head -3
+                    done
+                    rm -rf /tmp/gitops-deploy
+                    exit 1
+                  fi
+                  if [ "\$TOTAL" -gt 0 ] && [ "\$NOT_READY" -eq 0 ] && [ "\$UPDATING" -eq 0 ]; then
                     CONVERGED=1
-                    echo "Stack '$stack_name' converged (\$TOTAL services healthy)."
+                    echo "Stack '$stack_name' converged (\$TOTAL services healthy, no rollback)."
                     break
                   fi
                   sleep 5
                 done
 
                 if [ "\$CONVERGED" -ne 1 ]; then
-                  echo "ERROR: stack '$stack_name' did NOT converge within 180s"
+                  echo "ERROR: stack '$stack_name' did NOT converge within 750s"
                   docker stack services "$stack_name" \
                     --format 'SVC {{.Name}} {{.Replicas}} {{.Image}}'
                   # Surface the most recent failed task reasons (no secrets).
