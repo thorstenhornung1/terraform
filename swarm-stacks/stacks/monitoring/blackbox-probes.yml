@@ -39,11 +39,32 @@ modules:
     http:
       preferred_ip_protocol: ip4
       valid_http_versions: [HTTP/1.1, HTTP/2.0]
-      valid_status_codes: [200, 301, 302, 401, 403]
+      # 2026-06-30: 307/308 ergänzt — archive.hornung-bn.de antwortet mit 307
+      # (Temporary Redirect); ohne diese feuerte tls-probe-failed dauerhaft, obwohl
+      # die App gesund ist (im blackbox-apps-Job mit follow_redirects ist sie success).
+      valid_status_codes: [200, 301, 302, 307, 308, 401, 403]
       follow_redirects: false
       fail_if_not_ssl: true
       tls_config:
         insecure_skip_verify: false
+
+  # ---------------------------------------------------------------------------
+  # Internes HTTP (kein TLS) — Probe ohne TLS-Zwang, valid 200.
+  # Genutzt von blackbox-tika (Overlay) UND blackbox-ollama (Mac Studio
+  # 192.168.2.236:11434/api/version, VLAN-Routing via UDM-Pro).
+  # Urspruenglich fuer den blackbox-tika Job: probet openarchiver-tika:9998/version
+  # (liefert bei Erfolg HTTP 200 "Apache Tika 3.1.0"). Erkennt v.a. den Fall
+  # "Service-Discovery verwaist nach Reschedule" (DNS ENOTFOUND → probe_success=0),
+  # der am 2026-06-07 Tika 2h still unerreichbar machte → Mails ohne Anhang-Volltext.
+  # ---------------------------------------------------------------------------
+  http_internal:
+    prober: http
+    timeout: 8s
+    http:
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+      valid_status_codes: [200]
+      fail_if_not_ssl: false
 
   # ---------------------------------------------------------------------------
   # Pure TCP reachability (no HTTP)
@@ -51,3 +72,17 @@ modules:
   tcp_connect:
     prober: tcp
     timeout: 5s
+
+  # ---------------------------------------------------------------------------
+  # DNS-Auflösung — prüft, ob ein Technitium-Knoten einen bekannten Record
+  # korrekt auflöst (Prio-1-Infra). 2026-06-15: DNS war vorher nur indirekt
+  # (node-down) überwacht; dieser Probe erkennt einen echten Resolver-Ausfall.
+  # ---------------------------------------------------------------------------
+  dns_resolve:
+    prober: dns
+    timeout: 5s
+    dns:
+      query_name: "dns1.hornung-bn.de"
+      query_type: "A"
+      valid_rcodes: ["NOERROR"]
+      preferred_ip_protocol: ip4

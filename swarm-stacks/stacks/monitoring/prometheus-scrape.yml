@@ -51,6 +51,7 @@ scrape_configs:
           - 192.168.4.40:9100
           - 192.168.4.41:9100
           - 192.168.4.42:9100
+          - 192.168.4.45:9100
     relabel_configs:
       - source_labels: [__address__]
         regex: '192\.168\.4\.40:.*'
@@ -64,18 +65,22 @@ scrape_configs:
         regex: '192\.168\.4\.42:.*'
         target_label: instance
         replacement: docker-infra-3
+      - source_labels: [__address__]
+        regex: '192\.168\.4\.45:.*'
+        target_label: instance
+        replacement: postgres-prod
 
   # ---------------------------------------------------------------------------
-  # PostgreSQL Exporter — Database metrics
+  # PostgreSQL Exporter — Database metrics (Single-PG-VM postgres-prod)
   # ---------------------------------------------------------------------------
-  # postgres-exporter publishes port 9187 via Swarm ingress routing mesh.
-  # Any Swarm node IP:9187 works. Using docker-infra-1 as stable target.
+  # 2026-06-15: Patroni-Cluster durch Single-VM postgres-prod (192.168.4.45)
+  # ersetzt. prometheus-postgres-exporter läuft als systemd-Service auf der VM.
   - job_name: postgres-exporter
     static_configs:
       - targets:
-          - 192.168.4.40:9187
+          - 192.168.4.45:9187
         labels:
-          instance: patroni-ha
+          instance: postgres-prod
 
   # ---------------------------------------------------------------------------
   # Ceph Cluster — Storage health, OSD, pool, PG metrics
@@ -94,37 +99,10 @@ scrape_configs:
     honor_labels: true
 
   # ---------------------------------------------------------------------------
-  # etcd Cluster — Distributed consensus health
+  # etcd Cluster — ENTFERNT 2026-06-15 (Patroni→Single-VM-Migration).
+  # etcd-1/2/3 (postgres-ha-stack) + etcd-4/5 (LXC) gestoppt. Bei Reaktivierung
+  # aus git wiederherstellen. Single-VM postgres-prod braucht kein etcd.
   # ---------------------------------------------------------------------------
-  - job_name: etcd
-    static_configs:
-      - targets:
-          - 192.168.12.40:2379
-          - 192.168.12.41:2379
-          - 192.168.12.42:2379
-          - 192.168.12.53:2379
-          - 192.168.12.54:2379
-    relabel_configs:
-      - source_labels: [__address__]
-        regex: '192\.168\.12\.40:.*'
-        target_label: instance
-        replacement: etcd-1
-      - source_labels: [__address__]
-        regex: '192\.168\.12\.41:.*'
-        target_label: instance
-        replacement: etcd-2
-      - source_labels: [__address__]
-        regex: '192\.168\.12\.42:.*'
-        target_label: instance
-        replacement: etcd-3
-      - source_labels: [__address__]
-        regex: '192\.168\.12\.53:.*'
-        target_label: instance
-        replacement: etcd-4
-      - source_labels: [__address__]
-        regex: '192\.168\.12\.54:.*'
-        target_label: instance
-        replacement: etcd-5
 
   # ---------------------------------------------------------------------------
   # PBS Exporter — Backup job status, snapshots, verify, datastore usage
@@ -143,31 +121,11 @@ scrape_configs:
           instance: pbs
 
   # ---------------------------------------------------------------------------
-  # Patroni REST API — Cluster role, state, timeline, lag
+  # Patroni REST API — ENTFERNT 2026-06-15 (Patroni→Single-VM-Migration).
+  # postgres-1/2/3 (postgres-ha-stack) gestoppt; DB-Metriken kommen jetzt vom
+  # postgres-exporter auf postgres-prod (job postgres-exporter oben).
+  # Bei Reaktivierung aus git wiederherstellen.
   # ---------------------------------------------------------------------------
-  # Each Patroni node exposes /metrics on port 8008 (Prometheus format)
-  # and JSON status on / (role, state, timeline).
-  # Port 8008 is published in host mode on each infra node.
-  - job_name: patroni
-    metrics_path: /metrics
-    static_configs:
-      - targets:
-          - 192.168.4.40:8008
-          - 192.168.4.41:8008
-          - 192.168.4.42:8008
-    relabel_configs:
-      - source_labels: [__address__]
-        regex: '192\.168\.4\.40:.*'
-        target_label: instance
-        replacement: postgres-1
-      - source_labels: [__address__]
-        regex: '192\.168\.4\.41:.*'
-        target_label: instance
-        replacement: postgres-2
-      - source_labels: [__address__]
-        regex: '192\.168\.4\.42:.*'
-        target_label: instance
-        replacement: postgres-3
 
   # ---------------------------------------------------------------------------
   # Home Assistant — Entity states via built-in Prometheus integration
@@ -248,7 +206,8 @@ scrape_configs:
           - https://n8n.hornung-bn.de
           - https://grafana.hornung-bn.de
           - https://traefik.hornung-bn.de
-          - https://uptime.hornung-bn.de
+          # 2026-06-30: uptime.hornung-bn.de (Uptime Kuma) deprecated/abgerüstet —
+          # lieferte 404 -> tls-probe-failed feuerte dauerhaft. Target entfernt.
           - https://frigate.hornung-bn.de
           - https://admin.frigate.hornung-bn.de
     relabel_configs:
@@ -311,5 +270,66 @@ scrape_configs:
         target_label: __param_target
       - source_labels: [__param_target]
         target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # ---------------------------------------------------------------------------
+  # DNS-Resolver-Probe — Technitium dns1/2/3 (Prio-1-Infra, 2026-06-15)
+  # blackbox dns_resolve fragt dns1.hornung-bn.de(A) gegen jeden Knoten;
+  # probe_success=0 = Resolver-Ausfall (echter DNS-Down, nicht nur node-down).
+  # ---------------------------------------------------------------------------
+  - job_name: blackbox-dns
+    scrape_interval: 30s
+    metrics_path: /probe
+    params:
+      module: [dns_resolve]
+    static_configs:
+      - targets:
+          - 192.168.4.2
+          - 192.168.4.3
+          - 192.168.4.4
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - source_labels: [__param_target]
+        regex: '192\.168\.4\.2'
+        target_label: dns_node
+        replacement: dns1
+      - source_labels: [__param_target]
+        regex: '192\.168\.4\.3'
+        target_label: dns_node
+        replacement: dns2
+      - source_labels: [__param_target]
+        regex: '192\.168\.4\.4'
+        target_label: dns_node
+        replacement: dns3
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # ---------------------------------------------------------------------------
+  # Blackbox Ollama-Probe — Inferenz-Host Mac Studio (LightRAG + paperless-ai)
+  # ---------------------------------------------------------------------------
+  # Probet http://192.168.2.236:11434/api/version (Ollama, LaunchAgent auf dem
+  # Mac Studio). Ollama-down = STILLER RAG-Ausfall: LightRAG-Queries und
+  # paperless-ai-Analysen schlagen fehl, ohne dass ein Swarm-Service unhealthy
+  # wird (gleiches Muster wie Tika 2026-06-07). Modul http_internal (plain
+  # HTTP, valid 200); Pfad VLAN4->VLAN2 via UDM-Pro (gleicher Pfad, den
+  # paperless-ai/lightrag zur Laufzeit nutzen — die Probe testet ihn mit).
+  - job_name: blackbox-ollama
+    scrape_interval: 60s
+    scrape_timeout: 15s
+    metrics_path: /probe
+    params:
+      module: [http_internal]
+    static_configs:
+      - targets:
+          - http://192.168.2.236:11434/api/version
+        labels:
+          instance: ollama-mac-studio
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
       - target_label: __address__
         replacement: blackbox-exporter:9115

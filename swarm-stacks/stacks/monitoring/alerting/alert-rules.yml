@@ -323,6 +323,50 @@ groups:
     interval: 60s
     rules:
 
+      # --- i915-GPU-Livelock-Frühwarnung (PVE-Hosts) ---
+      # Vorfälle pve03 27.06. + pve01 17.07.2026: Der GEM-Shrinker gerät unter
+      # Memory-Druck (vzdump-Fenster) in einen Livelock — "Purging GPU memory"-
+      # Sturm im Kernel-Log, Minuten später friert der HOST ein (Hard-Stop aller
+      # Guests). Quelle: /usr/local/sbin/i915-guard.sh (systemd-Timer 60s auf
+      # pve01-03) pusht die Zeilenzahl der letzten ~70s als i915_purge_lines
+      # an den InfluxDB-Ingest. Schwelle 100: normale Shrinker-Aktivität sind
+      # einzelne Zeilen; die Vorfall-Stürme lagen bei >1000/min. for: 0s —
+      # das Warnfenster vor dem Freeze beträgt nur Minuten, jede Minute zählt.
+      - uid: pve-i915-livelock-warning
+        title: i915 GPU livelock warning (PVE host)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: max_over_time(i915_purge_lines_value[3m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [100]
+              refId: C
+        for: 0s
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "PVE-Host {{ $labels.host }}: i915-Livelock kündigt sich an ({{ $values.A.Value }} Purging-Meldungen/min)"
+          description: "GEM-Shrinker-Sturm auf {{ $labels.host }} — Host droht binnen Minuten einzufrieren (Muster 27.06./17.07.). SOFORT: Memory-Druck senken (laufenden vzdump abbrechen: qm/vzdump-Prozess prüfen), Guests notfalls migrieren. RCA-Logs: /root/rca-*-i915-*.log. Kernel-Fix-Status: proxmox-kernel 7.0.14 via daily-maintenance."
+
       # --- Ceph health not OK ---
       # ceph_health_status: 0=OK, 1=WARN, 2=ERR
       - uid: ceph-health-error
@@ -1516,6 +1560,51 @@ groups:
         annotations:
           summary: "Open Archiver Tika nicht erreichbar — Anhänge werden ohne Volltext indexiert"
           description: "probe_success=0 für 10+ min (blackbox-tika gegen openarchiver-tika:9998/version). Open Archiver indexiert Mails dann STILL ohne Anhang-Volltext (PDF/Office/Bilder nicht durchsuchbar), ohne zu crashen — die App bleibt extern erreichbar. Häufigste Ursache: verwaiste Swarm-Service-Discovery nach Tika-Reschedule (DNS ENOTFOUND). Fix: docker service update --force openarchiver_openarchiver-tika; danach von open-archiver aus 'getent hosts openarchiver-tika' + node-fetch verifizieren. Siehe Fall 2026-06-07."
+
+      # --- Ollama (Mac Studio) unreachable — stiller RAG-Ausfall ---
+      # Ollama laeuft als LaunchAgent auf dem Mac Studio (192.168.2.236:11434) und
+      # ist Inferenz-Backend fuer LightRAG UND paperless-ai. Faellt es aus, schlagen
+      # RAG-Queries/AI-Analysen STILL fehl — kein Swarm-Service wird unhealthy
+      # (gleiches Blind-Spot-Muster wie Tika 2026-06-07). Semantik "down > 5min":
+      # max_over_time[5m] == 0 heisst ALLE Samples im Fenster down (ein einzelner
+      # Scrape-Miss, z.B. macOS-Update-Reboot, feuert NICHT); for 1m entprellt ->
+      # Alert nach ~6min. severity critical BEWUSST: warning landet im Digest
+      # (Zustellung nur 08:00/18:00) und wuerde einen stillen Tages-Ausfall
+      # verschleppen. Wird der Mac Studio planbar gewartet: Silence in Grafana.
+      - uid: ollama-down
+        title: Ollama (Mac Studio) unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: max_over_time(probe_success{job="blackbox-ollama"}[5m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ollama auf dem Mac Studio (192.168.2.236:11434) ist nicht erreichbar — LightRAG + paperless-ai ohne Inferenz"
+          description: "probe_success=0 für 5+ min (blackbox-ollama gegen http://192.168.2.236:11434/api/version). LightRAG-Queries und paperless-ai laufen STILL ins Leere (stiller RAG-Ausfall). Check: Mac Studio an/wach? LaunchAgent: ssh studio 'launchctl list | grep ollama'; curl http://192.168.2.236:11434/api/version. Reranker (:7997) ggf. mitpruefen. Bei geplanter Wartung: Alert-Silence setzen."
 
   # ===========================================================================
   # TLS / SSL Certificate Expiry — all public-facing HTTPS endpoints
