@@ -65,8 +65,12 @@ services:
       # Consumer
       PAPERLESS_CONSUMER_POLLING: "30"
       PAPERLESS_CONSUMER_RECURSIVE: "true"
-      # File naming
-      PAPERLESS_FILENAME_FORMAT: "{{ created_year }}/{{ correspondent }}/{{ title }}"
+      # File naming — BEWUSST old-style Syntax: Docker Swarm expandiert
+      # {{ ... }} in Env-Werten als Go-Template und lehnt den Service-Update ab
+      # ("function created_year not defined", verifiziert 2026-08-09). Die
+      # Paperless-Deprecation-Warnung ist der kleinere Preis; Migration erst,
+      # wenn Paperless old-style droppt (dann via Escaping oder Config-File).
+      PAPERLESS_FILENAME_FORMAT: "{created_year}/{correspondent}/{title}"
       # Performance
       PAPERLESS_TASK_WORKERS: "2"
       PAPERLESS_THREADS_PER_WORKER: "2"
