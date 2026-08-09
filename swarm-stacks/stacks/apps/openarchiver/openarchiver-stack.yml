@@ -86,6 +86,13 @@ services:
       MEILI_HOST: "http://openarchiver-meili:7700"
       # MEILI_MASTER_KEY wird vom entrypoint-wrapper gesetzt
       MEILI_INDEXING_BATCH: "500"
+      # Meili braucht auf diesem Setup 8-18 min pro Doc-Batch (data.ms 18G >>
+      # 3G-Cgroup-Cache, LMDB-Random-Reads via RBD/Ceph 1GbE). Der Default-
+      # waitForTask-Timeout (5 min) ist KUERZER als jede Batchdauer -> kein
+      # Batch wird je bestaetigt, BullMQ-Endlos-Retry, is_indexed bleibt false
+      # (beobachtet beim v0.5.2-Voll-Reindex 2026-08-09). 45 min deckt die
+      # beobachteten Meili-Zyklen (bis ~26 min) mit Headroom ab.
+      MEILI_WAIT_FOR_TASK_TIMEOUT: "2700000"
       # --- Job Queue (stack-interne Valkey, keine Auth im internen Overlay) ---
       REDIS_HOST: openarchiver-valkey
       REDIS_PORT: "6379"
