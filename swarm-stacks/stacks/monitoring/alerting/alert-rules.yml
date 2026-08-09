@@ -528,6 +528,131 @@ groups:
         annotations:
           summary: "Ceph pool {{ $labels.pool_id }} > 85% full"
           description: "Ceph enters read-only at ~95%. Clean up or expand storage."
+
+  # ===========================================================================
+  # PVE HOSTS — Memory-Pressure- & Freeze-Frühwarnung
+  # ===========================================================================
+  # Source: PVE-Status-Push (/etc/pve/status.cfg → InfluxDB-Proto an
+  # VictoriaMetrics :8428, ~10s-Takt via pvestatd). Serien object="nodes",
+  # host=pve01/02/03 — u.a. memory_memavailable (= echtes MemAvailable der
+  # HOSTS; kein node-exporter auf den PVE-Hosts nötig).
+  # Ergänzt pve-i915-livelock-warning (Ceph-Storage-Gruppe). Vorfälle
+  # 2026-08-08 (2× an EINEM Tag):
+  #   - pve01 13:35 CEST: vzdump 13:30 lief 22min (üblich 2-3min) →
+  #     MemAvailable 2.5→0.8 GiB → Purge-Sturm 2628-5371 Zeilen/min →
+  #     11min Metrik-Lücke, Host erholte sich.
+  #   - pve03 06:07 CEST: KEIN Purge-Sturm im Journal, MemAvailable ~3 GiB,
+  #     nur i915-guard-Timer-Drift ab 06:02 — Host fror still ein und blieb
+  #     ~6h unbemerkt tot (Hard-Reset erst 12:23). Der i915-Zähler allein
+  #     deckt diesen Fall NICHT ab.
+
+  - orgId: 1
+    name: PVE Hosts
+    folder: Infrastructure
+    interval: 60s
+    rules:
+
+      # --- MemAvailable kritisch niedrig (Livelock-Vorstufe) ---
+      # Schwellwert-Herleitung (7d-Daten, ~10s-Samples, Stand 2026-08-09):
+      #   Normalbetrieb-Baseline: pve01 ~3.0 / pve02 ~4.8 / pve03 ~2.5 GiB.
+      #   Routine-vzdump-Dip: ~2min auf ~1.1 GiB → avg[5m] bleibt >2 GiB.
+      #   Samples <1.25 GiB in 7d: ≤2 je Host (nur die Vorfälle selbst).
+      #   Rückwärts-Query Vorfall pve01 08.08. 11:35Z: avg[5m]=0.99 GiB → feuert;
+      #   Routine-Backups feuern NICHT (verifiziert 08-07 05:31Z Dip).
+      # avg_over_time[5m] statt `for: 5m` BEWUSST: im Livelock reißt der
+      # Metrik-Push ab (pve01: 11min Lücke) — eine for:-Pending-Phase würde
+      # durch noData resetten; das Query-Fenster hält die letzten Low-Samples
+      # und feuert auch noch in der Stille direkt nach Livelock-Beginn.
+      # for: 0s + severity critical: das Warnfenster vor dem Freeze beträgt
+      # Minuten — warning läge im Digest (Zustellung nur 08:00/18:00) und
+      # käme zu spät (gleiches Verschleppungs-Argument wie ollama-down).
+      - uid: pve-host-memory-pressure
+        title: PVE host memory pressure (MemAvailable low)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: avg_over_time(memory_memavailable{object="nodes"}[5m]) / 2^30
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1.25]
+              refId: C
+        for: 0s
+        # Entprellung: eine Druck-Welle = EIN Alert-Fenster (wie swarm-node-oom-kill).
+        keep_firing_for: 15m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "PVE-Host {{ $labels.host }}: MemAvailable {{ $values.A.Value }} GiB (5m-Mittel < 1.25) — i915-Livelock-Gefahr"
+          description: "Memory-Druck auf {{ $labels.host }} im Bereich der Livelock-Vorfälle (27.06./17.07./08.08.). SOFORT: laufenden vzdump prüfen und ggf. abbrechen (ps aux | grep vzdump), Page-Cache freigeben (sync; echo 1 > /proc/sys/vm/drop_caches), Gäste notfalls migrieren. Siehe auch pve-i915-livelock-warning (Purge-Sturm-Zähler) und pve-host-metrics-stale (Freeze-Detektor)."
+
+      # --- Metrik-Push abgerissen (Host-Freeze-Detektor) ---
+      # pvestatd pusht ~alle 10s an VictoriaMetrics. >240s Stille = Host
+      # eingefroren oder pvestatd tot. Muster pve03 08.08.: Freeze 06:07,
+      # entdeckt erst ~12:20 (≈6h blind, Hard-Reset 12:23). Rückwärts-Query
+      # 08.08. 04:15Z: pve03=459s, pve01/pve02=8-9s → hätte ~4min nach dem
+      # Freeze alarmiert. tlast_over_time = MetricsQL (Datasource ist
+      # VictoriaMetrics, kein Standard-PromQL). [1h]-Fenster: nach 60min ohne
+      # Sample fällt die Serie aus dem Ergebnis (noData→OK) — der Alert trägt
+      # Minute ~4 bis ~60; den Dauerzustand decken die Folge-Alerts
+      # (swarm-node-down, frigate-down, postgres-prod-node-down) ab.
+      # Ein geplanter PVE-Reboot (>4min Stille) feuert einmal → bei Wartung
+      # Silence setzen (wie ollama-down). VictoriaMetrics-Eigenausfall >4min
+      # würde nach Rückkehr kurz für alle 3 Hosts feuern (1 Telegram durch
+      # group_by grafana_folder, klärt sich selbst).
+      - uid: pve-host-metrics-stale
+        title: PVE host metrics stale (Host-Freeze-Verdacht)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: time() - tlast_over_time(memory_memavailable{object="nodes"}[1h])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [240]
+              refId: C
+        for: 0s
+        keep_firing_for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "PVE-Host {{ $labels.host }}: keine Status-Metriken seit {{ $values.A.Value }}s — Host-Freeze-Verdacht"
+          description: "pvestatd auf {{ $labels.host }} pusht seit >4min keine Werte (Normaltakt ~10s). Muster pve03 08.08.2026: i915-Freeze 06:07, bemerkt erst ~12:20. Prüfen: ping + SSH auf den Host; eingefroren → Hard-Reset, danach RCA via journalctl -b -1 (i915-Livelock-Muster). Bei geplantem Reboot feuert die Regel einmal — Silence setzen."
+
   # ===========================================================================
   # POSTGRESQL — Single-VM postgres-prod (192.168.4.45)
   # ===========================================================================
@@ -1831,3 +1956,4 @@ groups:
     rules: []
 # Trigger redeploy 2026-06-15: DNS-Probe + DNS-Alerts (Prio-1-Infra) hinzugefügt.
 # Trigger redeploy 2026-07-06: EEMUA-Nuisance-Fix (absent/noDataState) + GitOps-Orphan-Prune (etcd/Patroni-Altgruppen).
+# Trigger redeploy 2026-08-09: PVE-Hosts-Gruppe (pve-host-memory-pressure + pve-host-metrics-stale) — Fruehwarnung nach den i915-Vorfaellen vom 08.08.
