@@ -43,7 +43,10 @@ services:
   # IMMICH SERVER (API + Web UI + Background Jobs)
   # ===========================================================================
   immich-server:
-    image: ghcr.io/immich-app/immich-server:v2.7.5
+    # v3.1.0 (Major, 2026-07-29): API-Breaking-Changes (duration=ms, /search/random weg,
+    # deviceId/deviceAssetId weg) -> Home Assistant MUSS >= 2026.6.4 (besser 2026.8) sein,
+    # BEVOR dieser Stack deployt wird. DB: pgvector bleibt in v3 supported (pgvecto.rs entfernt).
+    image: ghcr.io/immich-app/immich-server:v3.1.0
     hostname: immich-server
     # init:true ersetzt das Image-tini als PID-1 Reaper (wir überschreiben entrypoint)
     init: true
@@ -55,6 +58,8 @@ services:
       DB_USERNAME: immich
       # DB_PASSWORD wird vom entrypoint-wrapper.sh aus /run/secrets/immich_db_password exportiert
       DB_DATABASE_NAME: immich
+      # v3: pgvector weiterhin supported (>=0.7; postgres-prod hat 0.8.5). NICHT entfernen:
+      # explizit gesetzt sperrt die Auto-Detection auf pgvector (kein VectorChord auf postgres-prod).
       DB_VECTOR_EXTENSION: pgvector
       # Redis — stack-internal Valkey (dedicated)
       REDIS_HOSTNAME: immich-redis
@@ -94,7 +99,12 @@ services:
         parallelism: 1
         delay: 10s
         order: stop-first
-        failure_action: continue
+        # Major-Upgrade v2->v3 (Paperless-Lektion): monitor MUSS >= start_period sein,
+        # sonst wertet Swarm den noch migrierenden Task als Fehlschlag (stiller Rollback/
+        # Config-Drift). pause statt continue: bei Migrationsfehler bleibt der Zustand
+        # sichtbar stehen statt still weiterzulaufen.
+        failure_action: pause
+        monitor: 330s
       labels:
         # --- Traefik Network ---
         - traefik.swarm.network=traefik_public
@@ -116,13 +126,16 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 90s
+      # 90s->300s fuer das v3-Major-Upgrade: DB-Migrationen (u.a. Album-Owner->album_user)
+      # + clip_index/face_index-Reindex laufen beim ersten Start. DB ist klein (420 MB),
+      # aber Paperless-Lektion: start_period muss die Migration abdecken.
+      start_period: 300s
 
   # ===========================================================================
   # IMMICH MACHINE LEARNING (Face Detection, Smart Search, CLIP)
   # ===========================================================================
   immich-machine-learning:
-    image: ghcr.io/immich-app/immich-machine-learning:v2.7.5
+    image: ghcr.io/immich-app/immich-machine-learning:v3.1.0
     hostname: immich-machine-learning
     environment:
       MACHINE_LEARNING_MODEL_TTL: "300"
