@@ -214,7 +214,13 @@ services:
   # Provisioned datasource via Docker config.
 
   grafana:
-    image: grafana/grafana:11.6.16
+    # 12.4.8 (Major 11.6->12.4, 2026-08-07): Alerting-File-Provisioning (apiVersion 1)
+    # ist unveraendert kompatibel. Angular-Support ist in 12.x KOMPLETT entfernt
+    # (alle 3 provisionierten Dashboards nutzen nur timeseries/stat/table/gauge — ok;
+    # UI-Dashboards in grafana.db vorher pruefen, siehe prep/job7-grafana/TESTPLAN).
+    # VOR Deploy: grafana.db-Backup bei gestopptem Container (RBD /mnt/rbd/grafana),
+    # Downgrade 12->11 ist NUR via Backup-Restore moeglich (irreversible Schema-Migration).
+    image: grafana/grafana:12.4.8
     hostname: grafana
     entrypoint: ["/bin/sh", "/etc/grafana/grafana-entrypoint.sh"]
     environment:
@@ -223,9 +229,9 @@ services:
       - GF_SERVER_ROOT_URL=https://grafana.hornung-bn.de
       - GF_ANALYTICS_REPORTING_ENABLED=false
       - GF_ANALYTICS_CHECK_FOR_UPDATES=false
-      # Unified alerting (Grafana 11.x default, explicit for clarity)
+      # Unified alerting (einziges Alerting seit G11; explicit for clarity).
+      # GF_ALERTING_ENABLED (Legacy-Alerting) entfernt: Option existiert in 12.x nicht mehr.
       - GF_UNIFIED_ALERTING_ENABLED=true
-      - GF_ALERTING_ENABLED=false
       # SMTP via Homelab-Mail-Relay (Variante C) — keine Auth, From=homelab@ (Pflicht). Siehe docs/MAIL-RELAY.md.
       - GF_SMTP_ENABLED=true
       - GF_SMTP_HOST=192.168.4.71:587
