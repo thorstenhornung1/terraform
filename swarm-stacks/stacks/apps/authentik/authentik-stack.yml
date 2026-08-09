@@ -87,7 +87,16 @@ services:
         parallelism: 1
         delay: 10s
         order: stop-first
-        failure_action: continue
+        # pause statt continue (swarm-stacks#90-Sweep): authentik migriert die
+        # DB beim Boot (lifecycle migrate, PG-Advisory-Lock). continue liess
+        # einen fehlgeschlagenen Update-Task kommentarlos weiterlaufen; pause
+        # friert den Rollout sichtbar ein und das Workflow-Gate wird rot.
+        failure_action: pause
+        # monitor > start_period (600s, Puffer fuer Major-Migrationen). Preis:
+        # jeder Server-Deploy haelt das UPDATING-Fenster ~630s — passt ins
+        # Workflow-Soft-Budget (750s netto; Pull-/Start-Phasen pausieren die
+        # Budget-Uhr, siehe deploy-stacks.yml).
+        monitor: 630s
       labels:
         # --- Traefik Network (required: multi-network service) ---
         - traefik.swarm.network=traefik_public
@@ -179,7 +188,12 @@ services:
         parallelism: 1
         delay: 10s
         order: stop-first
-        failure_action: continue
+        # pause statt continue: der Worker durchlaeuft denselben Migrations-
+        # Bootstrap wie der Server (Advisory-Lock). Kein Healthcheck, daher
+        # wirkt monitor als reines Boot-Crash-Fenster: 120s deckt Python-/
+        # Django-Init + fruehe Migrationsfehler ab und haelt Updates kurz.
+        failure_action: pause
+        monitor: 120s
 
   authentik-ldap-outpost:
     image: ghcr.io/goauthentik/ldap:2026.5.6

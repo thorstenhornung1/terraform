@@ -69,8 +69,18 @@ services:
       update_config:
         parallelism: 1
         delay: 10s
+        # start-first bleibt bewusst: 256M-Footprint (Verdopplung harmlos),
+        # Passwort-Manager bleibt waehrend Deploys erreichbar; schlaegt der
+        # neue Task fehl, laeuft der alte weiter.
         order: start-first
-        failure_action: rollback
+        # pause statt rollback (swarm-stacks#90): Vaultwarden fuehrt beim Boot
+        # Diesel-DB-Migrationen aus; rollback stellt nur das alte Binary
+        # wieder her, nie das alte Schema — beim Credential-Store das
+        # gefaehrlichste Silent-Mismatch. pause + rotes Gate statt Auto-Revert.
+        failure_action: pause
+        # monitor > healthcheck.start_period (30s); Default 5s waere die
+        # reisekosten-v2.10.1-Falle.
+        monitor: 60s
       labels:
         # --- Traefik Network (required: multi-network service) ---
         - traefik.swarm.network=traefik_public

@@ -172,7 +172,15 @@ services:
         # healthy wurde (BODY_SIZE-Update rollte zurück). pause behält die neue
         # Config; monitor gibt dem Start genug Zeit (innerhalb Workflow-Converge).
         failure_action: pause
-        monitor: 150s
+        # 630s statt 150s (Invariante: monitor > healthcheck.start_period
+        # 600s): das monitor-Fenster laeuft ab Task-Start — mit 150s war ein
+        # Crash zwischen Minute 2,5 und 10 (mitten in pnpm install/db:migrate)
+        # AUSSERHALB des Fensters: Update galt als "completed", der neue Task
+        # crashloopte unsichtbar weiter, waehrend der alte (start-first) die
+        # ALTE Config servierte — das Workflow-Gate blieb gruen. Mit 630s
+        # wird daraus pause → rotes Gate. Passt ins Workflow-Soft-Budget
+        # (750s netto; Pull-/Start-Phasen pausieren die Budget-Uhr).
+        monitor: 630s
       labels:
         # --- Traefik Network (required: multi-network service) ---
         - traefik.swarm.network=traefik_public

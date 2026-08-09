@@ -44,9 +44,14 @@ jobs:
     # Tailscale steps below are gated to github-hosted only. Falling back
     # to ubuntu-latest still works (Tailscale path re-enabled there).
     runs-on: [self-hosted, linux, x64, homelab]
-    # 20 statt 10: Das Konvergenz-Gate wartet update_config.monitor ab
-    # (paperless: 660s) — 10min-Job-Timeout würde den Job vorher killen.
-    timeout-minutes: 20
+    # 35 statt 20 (2026-08-09): Der Job muss Maintenance-Lock-Wait (bis 20min
+    # aktives Warten; Stale-Grenze des Markers 45min) UND das Konvergenz-Gate
+    # (Soft-Budget 750s + Hard-Cap 1200s, siehe Deploy-Step) ZUSAMMEN abdecken.
+    # Am 2026-08-08 fraß ein Lock-Wait das komplette 20min-Budget auf und der
+    # Runner killte den Job mitten im Wait. Extremfall (voller Lock-Wait plus
+    # mehrere Long-Monitor-Stacks in EINEM Push) kann weiterhin reißen: Job
+    # wird rot, Re-Run ist idempotent — bewusster Trade-off statt Endlos-Timeout.
+    timeout-minutes: 35
 
     steps:
       - name: Checkout repository
@@ -337,7 +342,7 @@ jobs:
                 DEPLOY_T0=\$(( \$(date +%s) - 2 ))
                 docker stack deploy -c resolved-stack.yml --prune --with-registry-auth "$stack_name"
 
-                echo "Waiting for stack '$stack_name' to converge (timeout 750s)..."
+                echo "Waiting for stack '$stack_name' to converge (Budget 750s netto, Hard-Cap 1200s)..."
                 # Convergence rule (swarm-stacks#37, hardened 2026-05-17):
                 # A service is converged when running == desired, OR it is a
                 # successfully completed run-once service. Run-once jobs
@@ -354,14 +359,25 @@ jobs:
                 # the task list (FNR==NR pass) and the service list (2nd
                 # pass) so there are NO nested shell heredocs/subshells
                 # inside this YAML block scalar (which would break parsing
-                # and lose counters). It prints "TOTAL NOT_READY".
+                # and lose counters). It prints "TOTAL NOT_READY PREP".
                 CONVERGED=0
-                # 150x5s = 750s: muss das laengste update_config.monitor der
-                # Stacks ueberdauern (paperless 660s) — das UPDATING-Gate unten
-                # wartet das monitor-Fenster ab, bevor es Erfolg meldet. Mit den
-                # frueheren 36x5s=180s war jeder Deploy mit monitor>180s ein
-                # garantiertes false-RED (2026-08-08, paperless 3.0.5).
-                for _i in \$(seq 1 150); do
+                # Konvergenz-Budget (2026-08-09; ersetzt fixe 150x5s=750s ab
+                # Deploy-Beginn): Das alte Fenster ignorierte die Image-Pull-
+                # Zeit — ein ~2GB-Pull fraß ~3,5min, BEVOR das monitor-Fenster
+                # ueberhaupt startete → zwei False-RED bei real erfolgreichen
+                # Rollouts (2026-08-08/09). Neu: BUDGET (750s Soft-Budget)
+                # zaehlt NUR in Ticks, in denen KEINE Task mehr in einer
+                # Pull-/Start-Phase haengt (New/Pending/Assigned/Accepted/
+                # Preparing/Ready/Starting) — Image-Pull und Healthcheck-
+                # start_period pausieren also die Budget-Uhr; gezaehlt wird
+                # effektiv nur das monitor-Fenster (Maximum: paperless 660s
+                # < 750s) plus Crashloop-Zeit. ELAPSED ist der absolute
+                # Wanduhr-Deckel (1200s) gegen ewig haengende Pulls/Starts
+                # (Registry down, wedged Preparing) — non-converge bleibt
+                # LOUD, nur eben spaeter.
+                BUDGET=0
+                ELAPSED=0
+                while :; do
                   RESULT=\$(
                     docker stack ps "$stack_name" --no-trunc \
                       --format '{{.Name}}|{{.DesiredState}}|{{.CurrentState}}' \
@@ -379,6 +395,10 @@ jobs:
                             tcnt[tn]++;
                             if (cs == "Failed" || cs == "Rejected") tfail[tn]++;
                             if (td == "Shutdown" && cs == "Complete") tok[tn]++;
+                            if (td == "Running" && (cs == "New" || cs == "Pending" \
+                                || cs == "Assigned" || cs == "Accepted" \
+                                || cs == "Preparing" || cs == "Ready" \
+                                || cs == "Starting")) prep++;
                           }
                           close(PS);
                         }
@@ -398,13 +418,15 @@ jobs:
                           }
                           bad++;
                         }
-                        END { print total " " (bad + 0) }'
+                        END { print total " " (bad + 0) " " (prep + 0) }'
                     rm -f /tmp/_gate_ps.\$\$
                   )
                   TOTAL=\$(printf '%s' "\$RESULT" | awk '{print \$1}')
                   NOT_READY=\$(printf '%s' "\$RESULT" | awk '{print \$2}')
+                  PREP=\$(printf '%s' "\$RESULT" | awk '{print \$3}')
                   TOTAL=\${TOTAL:-0}
                   NOT_READY=\${NOT_READY:-1}
+                  PREP=\${PREP:-0}
                   # --- Rollback gate (swarm-stacks 2026-06-09) ---
                   # running==desired is ALSO true right after failure_action=
                   # rollback restored the OLD image (N/N on the previous spec),
@@ -432,7 +454,9 @@ jobs:
                     esac
                   done
                   if [ "\$RB" -ne 0 ]; then
-                    echo "ERROR: stack '$stack_name' ROLLED BACK — the new spec did not stick."
+                    echo "ERROR: stack '$stack_name' update ROLLED BACK or PAUSED — the new spec did not converge."
+                    echo "  rollback_*: Swarm hat das alte Image wiederhergestellt."
+                    echo "  paused:     failure_action=pause hat den Rollout angehalten (neue Spec bleibt stehen)."
                     echo "  Usual cause: image unhealthy within update_config.monitor,"
                     echo "  or monitor shorter than the healthcheck start_period."
                     docker stack services "$stack_name" --format '  SVC {{.Name}} {{.Replicas}} {{.Image}}'
@@ -445,14 +469,29 @@ jobs:
                   fi
                   if [ "\$TOTAL" -gt 0 ] && [ "\$NOT_READY" -eq 0 ] && [ "\$UPDATING" -eq 0 ]; then
                     CONVERGED=1
-                    echo "Stack '$stack_name' converged (\$TOTAL services healthy, no rollback)."
+                    echo "Stack '$stack_name' converged (\$TOTAL services healthy, no rollback; Budget \${BUDGET}s, Wanduhr \${ELAPSED}s)."
                     break
                   fi
+                  if [ "\$ELAPSED" -ge 1200 ]; then
+                    break
+                  fi
+                  if [ "\$PREP" -gt 0 ]; then
+                    # Pull-/Start-Phase: Budget-Uhr anhalten (Log gedrosselt, alle 30s)
+                    if [ \$(( ELAPSED % 30 )) -eq 0 ]; then
+                      echo "  \$PREP task(s) in Pull-/Start-Phase — Budget pausiert (Budget \${BUDGET}s/750s, Wanduhr \${ELAPSED}s/1200s)"
+                    fi
+                  else
+                    BUDGET=\$(( BUDGET + 5 ))
+                    if [ "\$BUDGET" -ge 750 ]; then
+                      break
+                    fi
+                  fi
                   sleep 5
+                  ELAPSED=\$(( ELAPSED + 5 ))
                 done
 
                 if [ "\$CONVERGED" -ne 1 ]; then
-                  echo "ERROR: stack '$stack_name' did NOT converge within 750s"
+                  echo "ERROR: stack '$stack_name' did NOT converge (Budget \${BUDGET}s/750s netto, Wanduhr \${ELAPSED}s/1200s)"
                   docker stack services "$stack_name" \
                     --format 'SVC {{.Name}} {{.Replicas}} {{.Image}}'
                   # Surface the most recent failed task reasons (no secrets).

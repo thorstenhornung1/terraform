@@ -109,7 +109,14 @@ services:
         parallelism: 1
         delay: 10s
         order: stop-first
-        failure_action: continue
+        # pause statt continue (swarm-stacks#90-Sweep): der Image-Entrypoint
+        # fuehrt beim Boot Django-Migrationen aus (manage.py migrate).
+        # Schlaegt der neue Task fehl, soll der Rollout sichtbar stehen
+        # bleiben (Workflow-Gate rot) statt kommentarlos weiterzulaufen.
+        failure_action: pause
+        # monitor > healthcheck.start_period (120s); Default 5s = stille
+        # Fehl-Verdikte (reisekosten-v2.10.1-Klasse).
+        monitor: 150s
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/api/v1/\")' || exit 1"]
       interval: 30s
@@ -384,7 +391,7 @@ services:
   # RABBITMQ (Internal Message Broker)
   # ===========================================================================
   rabbitmq:
-    image: rabbitmq:3.13-alpine
+    image: rabbitmq:4.3.4-alpine
     hostname: taiga-rabbitmq
     networks:
       taiga-internal:
@@ -392,6 +399,12 @@ services:
           - taiga-rabbitmq
     volumes:
       - /mnt/cephfs/swarm-state/stack-taiga/rabbitmq:/var/lib/rabbitmq
+    configs:
+      # Ab 4.3 noetig: Celery/kombu nutzt transiente non-exclusive Queues
+      # (celeryev, pidbox) -> Deprecated Feature muss explizit erlaubt sein,
+      # sonst BOOT FAILED (failed_to_deny_deprecated_features).
+      - source: taiga_rabbitmq_conf_${RABBITMQ_HASH:-latest}
+        target: /etc/rabbitmq/conf.d/30-taiga.conf
     environment:
       RABBITMQ_DEFAULT_USER: "taiga"
       RABBITMQ_DEFAULT_PASS: "taiga"
@@ -445,6 +458,8 @@ configs:
     file: ./taiga-gateway.conf
   taiga_entrypoint_${ENTRYPOINT_WRAPPER_HASH:-latest}:
     file: ./entrypoint-wrapper.sh
+  taiga_rabbitmq_conf_${RABBITMQ_HASH:-latest}:
+    file: ./rabbitmq.conf
 
 # =============================================================================
 # SECRETS

@@ -24,7 +24,7 @@
 #                        with access to both the local SQLite file and the
 #                        cluster Postgres (over Tailscale or SSH tunnel).
 #
-# Custom image: ghcr.io/thorstenhornung1/reisekosten:v2.8.2 — built by GHA
+# Custom image: ghcr.io/thorstenhornung1/reisekosten:v2.11.0 — built by GHA
 # release-build.yml on tag push from the Reisekostenabrechnung repo
 # (release-please-driven). Pinned to a specific SemVer tag for reproducible
 # deploys; bump on each release.
@@ -34,7 +34,7 @@ version: "3.8"
 
 services:
   reisekosten:
-    image: ghcr.io/thorstenhornung1/reisekosten:v2.8.2
+    image: ghcr.io/thorstenhornung1/reisekosten:v2.11.0
     hostname: reisekosten
     # Wrapper assembles DATABASE_URL from the db-password secret, then execs
     # the image's default CMD (gunicorn).
@@ -59,8 +59,9 @@ services:
         mode: 0555
     environment:
       # Postgres routing — see entrypoint-wrapper.sh for assembly
-      POSTGRES_HOST: pg-haproxy
-      POSTGRES_PORT: "5433"
+      # Single-PG-VM postgres-prod (seit 2026-06-15, zuvor Patroni pg-haproxy:5433)
+      POSTGRES_HOST: postgres.hornung-bn.de
+      POSTGRES_PORT: "5432"
       POSTGRES_DB: reisekosten
       POSTGRES_USER: reisekosten
       # Authentik OIDC discovery — authlib pulls all endpoints from here.
@@ -131,7 +132,23 @@ services:
       update_config:
         parallelism: 1
         order: stop-first
-        failure_action: rollback
+        # pause statt rollback (swarm-stacks#90): die App migriert die DB beim
+        # Boot (gunicorn -> DB migrate) — Swarm-Rollback stellt nur das alte
+        # Image wieder her, NIE die bereits applizierte Migration. rollback ==
+        # altes Binary auf neuem Schema. pause laesst den fehlgeschlagenen
+        # Zustand sichtbar stehen; das Workflow-Gate (UpdateStatus 'paused')
+        # macht den Deploy rot.
+        failure_action: pause
+        # monitor MUST exceed the Dockerfile healthcheck start_period (60s):
+        # the app boots gunicorn -> DB migrate -> OIDC discovery, and is only
+        # "healthy" after ~60s. The Swarm default monitor is 5s, so every
+        # legitimate update was judged "failed" within 5s and silently rolled
+        # back to the previous image — while `docker stack deploy` still
+        # returned 0 and the pipeline reported green (the v2.10.0/v2.10.1
+        # "auto-release never landed" incident, 2026-06-09). 90s gives the
+        # healthcheck time to pass before Swarm declares the update successful.
+        monitor: 90s
+        delay: 5s
       labels:
         # Traefik routing
         - "traefik.enable=true"

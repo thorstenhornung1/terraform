@@ -74,8 +74,19 @@ services:
       update_config:
         parallelism: 1
         delay: 10s
-        order: start-first
-        failure_action: rollback
+        # stop-first (statt start-first): n8n fuehrt beim Boot automatisch
+        # TypeORM-DB-Migrationen aus — start-first liesse die alte Instanz
+        # parallel auf dem frisch migrierten Schema laufen und verdoppelt bei
+        # 1 Replica den RAM-Bedarf (1G-Limit; Manager infra-2 hat nur 3.6GiB).
+        order: stop-first
+        # pause statt rollback (swarm-stacks#90): Swarm rollt NUR das Image
+        # zurueck, nie die beim Boot bereits applizierten DB-Migrationen —
+        # rollback == altes Binary auf neuem Schema. pause laesst den Zustand
+        # sichtbar stehen; das Workflow-Gate meldet den Deploy LOUD als rot.
+        failure_action: pause
+        # monitor > healthcheck.start_period (60s), sonst gilt der Default 5s
+        # = Fehl-Verdikt vor healthy (reisekosten-v2.10.1-Klasse).
+        monitor: 90s
       labels:
         # --- Traefik Network (required: multi-network service) ---
         - traefik.swarm.network=traefik_public
