@@ -89,6 +89,9 @@ services:
       PAPERLESS_AI_LLM_BACKEND: "ollama"              # gültig: ollama | openai-like
       PAPERLESS_AI_LLM_ENDPOINT: "http://192.168.2.236:11434"
       PAPERLESS_AI_LLM_MODEL: "phi4"
+      # Klartext statt ISO-Code: Chat injiziert den Wert roh ("Respond in German."),
+      # der Klassifizierer lässt unbekannte Codes unverändert durchfallen.
+      PAPERLESS_AI_LLM_OUTPUT_LANGUAGE: "German"
       # Embeddings nativ via Ollama (kein HuggingFace-Download im Container)
       PAPERLESS_AI_LLM_EMBEDDING_BACKEND: "ollama"    # gültig: ollama | openai-like | huggingface
       PAPERLESS_AI_LLM_EMBEDDING_ENDPOINT: "http://192.168.2.236:11434"
