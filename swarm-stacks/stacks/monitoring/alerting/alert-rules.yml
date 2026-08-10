@@ -1731,6 +1731,48 @@ groups:
           summary: "Ollama auf dem Mac Studio (192.168.2.236:11434) ist nicht erreichbar — LightRAG + paperless-ai ohne Inferenz"
           description: "probe_success=0 für 5+ min (blackbox-ollama gegen http://192.168.2.236:11434/api/version). LightRAG-Queries und paperless-ai laufen STILL ins Leere (stiller RAG-Ausfall). Check: Mac Studio an/wach? LaunchAgent: ssh studio 'launchctl list | grep ollama'; curl http://192.168.2.236:11434/api/version. Reranker (:7997) ggf. mitpruefen. Bei geplanter Wartung: Alert-Silence setzen."
 
+      # --- Loki-Ingestion tot (Lehre: lief 2023-2026 MONATELANG still kaputt) ---
+      # increase[15m] < 1: die Flotte (13+ Hosts) produziert praktisch immer
+      # mindestens eine Syslog-Zeile in 15 min (cron/logrotate/sshd); 0 Zeilen
+      # heisst Abriss im Pfad rsyslog -> Alloy:1514 -> Loki. noDataState=Alerting
+      # deckt Loki/Alloy-komplett-down ab (Metrik absent). severity critical:
+      # gleiches Digest-Verschleppungs-Argument wie ollama-down — ein stiller
+      # Ingestion-Abriss soll in Minuten auffallen, nicht in Monaten.
+      - uid: loki-ingestion-dead
+        title: Loki ingestion dead (keine Syslog-Zeilen mehr)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: sum(increase(loki_distributor_lines_received_total[15m]))
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "Loki-Ingestion tot — seit 15+ min keine einzige Syslog-Zeile von der Flotte"
+          description: "sum(increase(loki_distributor_lines_received_total[15m])) < 1. Pfad pruefen: rsyslog (LXCs/VMs) -> Alloy :1514 (monitoring_alloy) -> Loki :3100 (monitoring_loki). Checks: docker service ls | grep -E 'loki|alloy'; curl http://<node>:3100/ready; logger -n 192.168.4.40 -P 1514 --tcp --rfc3164 test && in Loki suchen. DNS: loki.hornung-bn.de muss auf 192.168.4.40/41/42 zeigen. Historie: Ingestion war 2023-2026 monatelang still tot (RFC-Mismatch am NAS-Receiver) — genau das soll nie wieder unbemerkt passieren."
+
   # ===========================================================================
   # TLS / SSL Certificate Expiry — all public-facing HTTPS endpoints
   # ===========================================================================
