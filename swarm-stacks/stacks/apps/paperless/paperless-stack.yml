@@ -74,6 +74,16 @@ services:
       # Performance
       PAPERLESS_TASK_WORKERS: "2"
       PAPERLESS_THREADS_PER_WORKER: "2"
+      # Klassifikator-Training: taeglich 04:05 statt stuendlich (Default
+      # "5 */1 * * *"). Grund: Das Volltraining ueber 12.348 Dokumente x 648
+      # AUTO-Klassen belegt ~2 GB anon-rss und kollidierte stuendlich mit dem
+      # LLM-Index (02:10) im selben 2-GB-Container -> cgroup-OOM. Der Killer
+      # traf dabei nicht nur Celery, sondern am 2026-08-10 07:05 auch granian
+      # (ASGI) -> WebSocket-Abbruch im Web-UI. 04:05 haelt Abstand zu
+      # index_optimize (00:00), empty_trash (01:00) und llm_index (02:10).
+      # Neue Dokumente kommen ohnehin schubweise (letzter Zuwachs 2026-06-16),
+      # stuendliches Training hat hier keinen Nutzen.
+      PAPERLESS_TRAIN_TASK_CRON: "5 4 * * *"
       # SSO via Authentik (OIDC)
       PAPERLESS_APPS: "allauth.socialaccount.providers.openid_connect"
       PAPERLESS_SOCIAL_AUTO_SIGNUP: "true"
@@ -132,11 +142,24 @@ services:
           - node.labels.app == true
       resources:
         limits:
+          # 4G statt 2G: Baseline ~1,2 GB (granian + 2 Celery-Worker + beat)
+          # plus ~2,0 GB Peak fuer train_classifier = ~3,2 GB realer Bedarf.
+          # Unter 2G lief der cgroup-OOM-Killer ab 2026-08-09 stuendlich
+          # (oom_kill 11, memory.peak 2.149.236.736 B).
           cpus: '2.0'
-          memory: 2G
+          memory: 4G
         reservations:
+          # 2560M statt 512M: Die Reservation ist die EINZIGE Groesse, die der
+          # Swarm-Scheduler kennt — Limits und Ist-Verbrauch sieht er nicht.
+          # Mit 512M galt der Container als 512-MB-Winzling und wurde auf
+          # docker-infra-1 gelegt, das dadurch systematisch ueberbucht wurde
+          # (97 % Swap-Auslastung). 2560M bildet den echten Bedarf ab und
+          # schliesst zu volle Nodes rechnerisch aus, ohne node.hostname zu
+          # pinnen: frei-reservierbar am 2026-08-10 war infra-1 1,85 GB,
+          # infra-2 0,41 GB, infra-3 4,76 GB. Gewinnt ein Node spaeter
+          # Kapazitaet, wird er automatisch wieder Kandidat.
           cpus: '0.5'
-          memory: 512M
+          memory: 2560M
       restart_policy:
         condition: any
         delay: 10s
