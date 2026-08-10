@@ -23,14 +23,21 @@
 # Deploy: docker compose up -d (from /opt/frigate/compose/)
 # GitOps: GitHub Actions -> lxc-deploy mode -> SCP + docker compose up -d
 #
-# Access: https://frigate.hornung-bn.de
-# RTSP:   rtsp://192.168.4.70:8554/<camera>
+# Access (3 Traefik-Router, alle auf denselben Backend-Port 8971):
+#   https://frigate.hornung-bn.de              -> viewer  (LAN, IP-Allowlist, read-only)
+#   https://frigate.hornung-bn.de von .2.5     -> admin   (Home Assistant, ClientIP-Router)
+#   https://admin.frigate.hornung-bn.de        -> admin   (Mensch, Authentik ForwardAuth)
+# Welcher Router bedient hat, zeigt der Response-Header X-Frigate-Route.
+# RTSP:   rtsp://192.168.4.70:8554/<camera>   (go2rtc, ohne Auth — nur LAN)
 # WebRTC: port 8555 TCP+UDP on 192.168.4.70
 # =============================================================================
 
 services:
   traefik:
-    image: traefik:v3.6
+    # v3.6.25-Pin (2026-08-02) statt floating v3.6: reproduzierbare Deploys;
+    # der lxc-deploy macht ohnehin --force-recreate, ein floating Tag zieht
+    # sonst unkontrolliert neue Patch-Releases beim naechsten Recreate.
+    image: traefik:v3.6.25
     container_name: traefik
     restart: unless-stopped
     env_file:
@@ -57,7 +64,13 @@ services:
     entrypoint: /config/entrypoint.sh
     devices:
       - /dev/dri:/dev/dri
-    shm_size: 512m
+    # Frigate braucht je Kamera w*h*1.5*20 Bytes Frame-Puffer im shm.
+    # Seit detect auf den Hauptstreams laeuft (2026-07-27, fuer die
+    # Gesichtserkennung): doorbird 1280x720 = 27 MB, garage 2560x1440 = 106 MB,
+    # garten 3840x2160 = 238 MB -> 371 MB Puffer + ~145 MB sonstiges = ~515 MB.
+    # 512m war damit exakt eine Handbreit zu wenig; zu kleines shm aeussert sich
+    # in stillen Frame-Verlusten, nicht in einer klaren Fehlermeldung.
+    shm_size: 1g
     volumes:
       # CephFS (3x replicated) — config, clips, exports
       - /mnt/cephfs/swarm-state/stack-frigate/config:/config
@@ -73,9 +86,18 @@ services:
         tmpfs:
           size: 268435456  # 256 MB
     ports:
-      - "8971:8971"             # Authenticated UI (nginx -> Traefik backend)
-      - "5001:5001"             # FastAPI API — HA Frigate Integration connects here
-      - "8554:8554"             # RTSP restream
+      # 8971 wird ABSICHTLICH NICHT publiziert (2026-07-25):
+      #   Traefik erreicht Frigate über das Compose-Netz (172.18.0.x:8971) — ein
+      #   publizierter Port umgeht IP-Allowlist + Authentik komplett und ist per
+      #   "Remote-Groups: admin"-Header trivial auf Admin eskalierbar:
+      #     curl -k -H 'Remote-Groups: admin' https://192.168.4.70:8971/api/profile
+      #     -> {"username":"angreifer","role":"admin",...}
+      #   Verifiziert: kein einziger externer Direktzugriff in 4000 Log-Zeilen,
+      #   Prometheus scrapt frigate.hornung-bn.de:443 (über Traefik), nicht 8971.
+      # 5001 war als "HA Frigate Integration connects here" kommentiert — FALSCH:
+      #   5001 ist die INTERNE FastAPI hinter nginx (kein Auth-Layer, kein /api/version).
+      #   nginx lauscht auf 5000 (plain, unauthenticated) und 8971 (ssl, authenticated).
+      - "8554:8554"             # RTSP restream (go2rtc) — HA Live-View
       - "8555:8555/tcp"         # WebRTC TCP
       - "8555:8555/udp"         # WebRTC UDP
     labels:
@@ -88,6 +110,22 @@ services:
       - traefik.http.routers.frigate-viewer.tls.certresolver=dns
       - traefik.http.routers.frigate-viewer.middlewares=viewer-ipwhitelist,viewer-headers
       - traefik.http.routers.frigate-viewer.service=frigate-backend
+
+      # --- Router: Home Assistant (frigate.hornung-bn.de von 192.168.2.5) — Admin-Rolle ---
+      # Die frigate-hass-integration braucht Schreibzugriff für WebRTC-Offers,
+      # export_recording, create_event/end_event, Event-retain und reviews/viewed.
+      # Sie authentifiziert sich NICHT per Login (Frigate: auth.enabled=false, kein
+      # User-Store -> POST /api/login gibt 401), sondern über die Proxy-Header unten.
+      # ClientIP matcht die echte TCP-Peer-IP (RemoteAddrStrategy), nicht X-Forwarded-For.
+      # Failure-Mode ist gutartig: greift die Regel nicht, fällt HA auf frigate-viewer
+      # zurück (= viewer, read-only) — kein Loch. priority sichert gegen Regel-Umbau ab.
+      - "traefik.http.routers.frigate-ha.rule=Host(`frigate.hornung-bn.de`) && ClientIP(`192.168.2.5`)"
+      - traefik.http.routers.frigate-ha.priority=200
+      - traefik.http.routers.frigate-ha.entrypoints=websecure
+      - traefik.http.routers.frigate-ha.tls=true
+      - traefik.http.routers.frigate-ha.tls.certresolver=dns
+      - traefik.http.routers.frigate-ha.middlewares=ha-headers
+      - traefik.http.routers.frigate-ha.service=frigate-backend
 
       # --- Router: Admin (admin.frigate.hornung-bn.de) — Authentik ForwardAuth + Admin-Rolle ---
       - "traefik.http.routers.frigate-admin.rule=Host(`admin.frigate.hornung-bn.de`)"
@@ -106,6 +144,23 @@ services:
 
       # --- Middleware: Viewer-Headers (X-authentik-username für Proxy-Auth) ---
       - traefik.http.middlewares.viewer-headers.headers.customrequestheaders.X-authentik-username=homeassistant
+      # ⚠️ SICHERHEIT (Fix 2026-07-25): Remote-Groups MUSS explizit gesetzt werden.
+      # customrequestheaders überschreibt nur Header, die es selbst setzt — ein vom
+      # Client mitgeschickter Remote-Groups-Header wurde sonst durchgereicht, und
+      # proxy.header_map.role liest genau den. Jedes Gerät in 192.168.0.0/16 konnte
+      # sich damit zum Frigate-Admin machen:
+      #   curl -H 'Remote-Groups: admin' https://frigate.hornung-bn.de/api/profile
+      #   -> {"role":"admin"}   (verifiziert vor dem Fix)
+      # default_role: viewer greift NUR, wenn der Header fehlt — nicht, wenn er lügt.
+      - traefik.http.middlewares.viewer-headers.headers.customrequestheaders.Remote-Groups=viewer
+      # Route-Marker: Traefik hat weder api noch accessLog aktiviert — dieser
+      # Response-Header ist die einzige Möglichkeit zu sehen, welcher Router bediente.
+      - traefik.http.middlewares.viewer-headers.headers.customresponseheaders.X-Frigate-Route=viewer
+
+      # --- Middleware: HA-Headers (Identität + Admin-Rolle für den HA-Host) ---
+      - traefik.http.middlewares.ha-headers.headers.customrequestheaders.X-authentik-username=homeassistant
+      - traefik.http.middlewares.ha-headers.headers.customrequestheaders.Remote-Groups=admin
+      - traefik.http.middlewares.ha-headers.headers.customresponseheaders.X-Frigate-Route=ha
 
       # --- Middleware: ForwardAuth via Authentik ---
       - "traefik.http.middlewares.admin-forwardauth.forwardAuth.address=https://auth.hornung-bn.de/outpost.goauthentik.io/auth/traefik"
@@ -113,13 +168,19 @@ services:
       - "traefik.http.middlewares.admin-forwardauth.forwardAuth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
 
       # --- Middleware: Admin-Rolle statisch injizieren (Frigate erwartet "admin" in Remote-Groups) ---
+      # TODO: durch proxy.role_map ersetzen — aktuell wird JEDER, der Authentiks
+      # ForwardAuth passiert, zum Frigate-Admin. Die Autorisierung hängt damit
+      # vollständig am Authentik-Application-Binding, nicht an Gruppen.
       - traefik.http.middlewares.admin-role-header.headers.customrequestheaders.Remote-Groups=admin
+      - traefik.http.middlewares.admin-role-header.headers.customresponseheaders.X-Frigate-Route=admin
     env_file:
       - /etc/frigate/secrets.env
     environment:
       TZ: Europe/Berlin
     healthcheck:
-      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:5001/"]
+      # nginx-Port 5000 statt FastAPI-Port 5001: prüft den kompletten Request-Pfad
+      # (nginx -> FastAPI), nicht nur die App. Containerintern, unabhängig von ports:.
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:5000/api/version"]
       interval: 30s
       timeout: 10s
       retries: 3
