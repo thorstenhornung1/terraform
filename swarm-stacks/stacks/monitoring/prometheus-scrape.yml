@@ -41,6 +41,25 @@ scrape_configs:
           instance: vmagent
 
   # ---------------------------------------------------------------------------
+  # Loki + Alloy self-monitoring (Log-Pipeline seit 2026-08-09)
+  # ---------------------------------------------------------------------------
+  # Basis fuer kuenftige Alerts auf tote Log-Ingestion
+  # (z.B. rate(loki_distributor_lines_received_total) == 0).
+  - job_name: loki
+    static_configs:
+      - targets:
+          - loki:3100
+        labels:
+          instance: loki
+
+  - job_name: alloy
+    static_configs:
+      - targets:
+          - alloy:12345
+        labels:
+          instance: alloy
+
+  # ---------------------------------------------------------------------------
   # Node Exporter — Host metrics (CPU, RAM, disk, network)
   # ---------------------------------------------------------------------------
   # node_exporter runs in global mode with host-mode port 9100.

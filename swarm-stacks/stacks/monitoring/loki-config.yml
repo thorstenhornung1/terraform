@@ -1,0 +1,77 @@
+# =============================================================================
+# Loki 3.x — Single-Binary, Filesystem-Storage auf CephFS
+# =============================================================================
+# Zentrale Log-Senke fuer die rsyslog-Forwards aller LXCs/VMs
+# (Standard-Provisioning: *.* @@loki.hornung-bn.de:1514 → Alloy-Gateway → Loki).
+#
+# Storage: /mnt/cephfs/swarm-state/stack-monitoring/loki-data (Bind-Mount /loki)
+#   Besitzer 10001:10001 (Loki-Image laeuft als User 10001, distroless).
+# Retention: 30 Tage via Compactor (homelab-Scale, CephFS hat >300G frei).
+# Single-Writer: replicas=1 + stop-first im Stack (TSDB-Index/WAL nicht
+#   multi-writer-faehig — gleiche Klasse wie vmagent/grafana).
+# =============================================================================
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: info
+
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+# Multi-NIC-Fix (2026-08-09): Der Container haengt an ingress (published 3100)
+# UND monitoring-network. Ohne Pin advertised der Query-Frontend seine gRPC-
+# Adresse auf dem Ingress-Interface (10.0.0.x:9096) — dorthin routet kein
+# Inter-Container-gRPC → Queries hingen ewig (leere HTTP-Antworten).
+# Single-Binary: alles in-process → 127.0.0.1 ist korrekt.
+frontend:
+  address: 127.0.0.1
+
+schema_config:
+  configs:
+    - from: "2026-08-01"
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-index
+    cache_location: /loki/tsdb-cache
+
+compactor:
+  # EPHEMER im Container, NICHT auf CephFS (2026-08-09): Die BoltDB-Arbeits-
+  # kopie des Compactors wurde auf CephFS durch Kill-mitten-im-Write korrupt
+  # ("init compactor: invalid database"-Crashloop) — gleiche Fragilitaets-
+  # klasse wie Grafana-SQLite auf CephFS. Inhalt ist rein ableitbarer Zustand
+  # (Delete-Requests nutzen wir nicht, Retention-Marker werden neu aufgebaut)
+  # → Verlust bei Task-Neustart unkritisch. Durable Delete-Requests liegen
+  # weiterhin im filesystem-Object-Store (/loki/chunks, CephFS).
+  working_directory: /tmp/loki-compactor
+  retention_enabled: true
+  retention_delete_delay: 2h
+  delete_request_store: filesystem
+
+limits_config:
+  # 30 Tage Retention (Entscheidung 2026-08-09: Mitte des 14-30d-Korridors ok,
+  # CephFS-Platz unkritisch; bei Platzdruck zuerst hier drehen)
+  retention_period: 720h
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+
+analytics:
+  reporting_enabled: false

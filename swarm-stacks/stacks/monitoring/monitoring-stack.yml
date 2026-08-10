@@ -415,6 +415,132 @@ services:
       retries: 3
       start_period: 10s
 
+  # ===========================================================================
+  # LOKI — Log-Aggregation (Senke fuer rsyslog-Forwards aller LXCs/VMs)
+  # ===========================================================================
+  # Single-Binary, Filesystem-Storage auf CephFS, Retention 30d (Compactor).
+  # Port 3100 published (ingress): haelt loki.hornung-bn.de:3100 nach dem
+  # DNS-Umzug auf die Swarm-Nodes funktionsfaehig (externe Debug-Queries);
+  # Grafana spricht intern http://loki:3100 (kein DNS noetig).
+  # RAM-Placement: infra-2 hat nur 3,6 GiB → infra_node != 2.
+
+  loki:
+    image: grafana/loki:3.7.6
+    hostname: loki
+    command:
+      - -config.file=/etc/loki/loki-config.yml
+    configs:
+      - source: loki_config
+        target: /etc/loki/loki-config.yml
+    volumes:
+      # Besitzer 10001:10001 (Loki-Image laeuft als User 10001)
+      - /mnt/cephfs/swarm-state/stack-monitoring/loki-data:/loki
+    ports:
+      - target: 3100
+        published: 3100
+        protocol: tcp
+        mode: ingress
+    networks:
+      - monitoring-network
+    # 60s statt Default 10s (2026-08-09): Beim ersten stop-first-Update wurde
+    # Loki nach 10s SIGKILLed, mitten im Shutdown → BoltDB des Compactors
+    # korrupt → "init compactor: invalid database"-Crashloop. Zusaetzlich
+    # liegt das Compactor-Arbeitsverzeichnis inzwischen EPHEMER im Container
+    # (/tmp/loki-compactor, siehe loki-config.yml) — BoltDB auf CephFS ist
+    # dieselbe Fragilitaetsklasse wie Grafana-SQLite auf CephFS.
+    stop_grace_period: 60s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+          # infra-2 hat nur 3,6 GiB RAM — Loki dort nicht platzieren
+          - node.labels.infra_node != 2
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        # stop-first: Loki ist Single-Writer auf dem Filesystem-Store
+        # (TSDB-Index/WAL) — gleiche Klasse wie vmagent/grafana.
+        order: stop-first
+    healthcheck:
+      # Distroless-Image: kein Shell/wget im Container (wie pbs-exporter).
+      # Ueberwachung via vmagent-Scrape (loki:3100/metrics) + Alloy-Write-Pfad.
+      disable: true
+
+  # ===========================================================================
+  # ALLOY — Syslog-Gateway (TCP+UDP :1514 → Loki)
+  # ===========================================================================
+  # Nimmt die rsyslog-Forwards der LXCs/VMs an (RFC3164! — der alte Promtail
+  # auf der Diskstation parste nur RFC5424 und verwarf alles; Root Cause der
+  # toten Log-Ingestion). Ingress-Publish: jede Node-IP:1514 erreicht Alloy.
+  # DNS-Wunsch (nur durch Menschen): loki.hornung-bn.de → 192.168.4.40/41/42.
+
+  alloy:
+    image: grafana/alloy:v1.18.1
+    hostname: alloy
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+      - --server.http.listen-addr=0.0.0.0:12345
+    configs:
+      - source: alloy_config
+        target: /etc/alloy/config.alloy
+    ports:
+      - target: 1514
+        published: 1514
+        protocol: tcp
+        mode: ingress
+      - target: 1514
+        published: 1514
+        protocol: udp
+        mode: ingress
+    networks:
+      - monitoring-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+          - node.labels.infra_node != 2
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        # start-first ok: Alloy ist zustandslos (kein Lock/WAL-Konflikt),
+        # Ingress-VIP verteilt waehrend des Updates auf beide Tasks.
+        order: start-first
+    healthcheck:
+      # Kein wget/curl im Image — bash /dev/tcp prueft den Syslog-Listener.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/1514 && exec 3>&-"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
 # =============================================================================
 # CONFIGS (Docker Configs — immutable, content-hash naming)
 # =============================================================================
@@ -466,6 +592,14 @@ configs:
   blackbox_probes:
     name: blackbox_probes_${BLACKBOX_PROBES_HASH:-latest}
     file: ./blackbox-probes.yml
+
+  loki_config:
+    name: loki_config_${LOKI_CONFIG_HASH:-latest}
+    file: ./loki-config.yml
+
+  alloy_config:
+    name: alloy_config_${ALLOY_CONFIG_HASH:-latest}
+    file: ./alloy-config.conf
 
 # =============================================================================
 # NETWORKS

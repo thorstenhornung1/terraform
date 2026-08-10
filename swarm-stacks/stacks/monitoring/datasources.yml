@@ -18,7 +18,10 @@ datasources:
     uid: loki
     type: loki
     access: proxy
-    url: http://loki.hornung-bn.de:3100
+    # Intern via Overlay-Service-Name (2026-08-09): vorher zeigte die URL auf
+    # loki.hornung-bn.de:3100 (= unverwaltetes Loki 2.9.2 auf der Diskstation).
+    # Loki laeuft jetzt im monitoring-Stack selbst — kein DNS/NAS-Dependency.
+    url: http://loki:3100
     editable: false
     jsonData:
       maxLines: 1000
