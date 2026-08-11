@@ -84,6 +84,29 @@ services:
       # Neue Dokumente kommen ohnehin schubweise (letzter Zuwachs 2026-06-16),
       # stuendliches Training hat hier keinen Nutzen.
       PAPERLESS_TRAIN_TASK_CRON: "5 4 * * *"
+      # Celery-Hardtimeout (CELERY_TASK_TIME_LIMIT, settings/__init__.py:700).
+      # Default 1800 s war die WAHRE Ursache der llm_index-"failure"-Serie: Der
+      # Lueckenschluss ueber 3.742 Dokumente brauchte gemessene 69 min bei
+      # 55 Dok/min — gegen ein 30-min-Limit. Weil der Cron inkrementell ist und
+      # vor dem Hard-Kill commitet, wuchs der Index ~1.650 Dok/Nacht und das
+      # Symptom sah aus wie "Rebuild schlaegt fehl" statt "zu langsam"; in der
+      # Task-Liste ist beides identisch (failure nach 1800,004 s).
+      # Verifiziert 2026-08-11 mit temporaer 16200 s: Celery uebernahm den Wert
+      # (CELERY_TASK_TIME_LIMIT = 16200) und llm_index lief als Celery-Task in
+      # 18,3 s durch — ebenso der naechtliche Cron (19,0 s). Danach auf den
+      # Dauerwert 5400 gesenkt, gemessen begruendet:
+      #   groesster realer Task   train_classifier  1122 s (18,7 min)
+      #   llm_index-Delta                             19 s
+      #   5400 s = 90 min                      = 4,8x der groesste reale Task
+      # Ein VOLLER Rebuild (12.348 Dok / 55 Dok-min = 224 min) passt hier
+      # bewusst NICHT hinein: Er ist ein seltener Sonderfall (Modellwechsel)
+      # und laeuft ohnehin besser als Management-Command, der kein Celery-Limit
+      # kennt:  docker exec -w /usr/src/paperless/src <cid> /command/with-contenv \
+      #           s6-setuidgid paperless python3 manage.py document_llmindex update
+      # (`rebuild` statt `update` ist DESTRUKTIV — indexing.py:458 store.drop_table().)
+      # Das Limit gilt fuer ALLE Celery-Tasks; hoeher heisst, ein haengender
+      # Task blockiert laenger einen der nur 2 Worker.
+      PAPERLESS_WORKER_TIMEOUT: "5400"
       # SSO via Authentik (OIDC)
       PAPERLESS_APPS: "allauth.socialaccount.providers.openid_connect"
       PAPERLESS_SOCIAL_AUTO_SIGNUP: "true"
