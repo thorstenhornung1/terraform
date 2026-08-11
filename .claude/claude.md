@@ -108,604 +108,72 @@ variable "storage_backend" {
 
 ## Project Context
 
-This is an infrastructure automation project managing a production Kubernetes (K3s) cluster with:
-- Proxmox VE cluster (3 nodes)
-- K3s cluster (3 masters, 3 workers)
-- **Bootstrap Host** for Infisical secrets management (NEW - 2025-12-14)
-- Secrets management via External Secrets Operator
-- Application deployments (PostgreSQL, Pi-hole, Gitea, etc.)
-
-## 🆕 Bootstrap Host Architecture (NEW - 2025-12-14)
-
-### Critical Design Change
-
-**Previous Approach (Deprecated):**
-- Infisical running INSIDE K3s cluster with PostgreSQL
-- ❌ Circular dependency: K3s needs secrets → Infisical needs PostgreSQL → PostgreSQL needs secrets
-- ❌ Complex disaster recovery
-- ❌ Cannot rebuild cluster without manual intervention
-
-**New Approach (Active):**
-- **Bootstrap Host**: Standalone Docker host running Infisical OUTSIDE K3s cluster
-- ✅ No circular dependencies
-- ✅ K3s cluster can reference Infisical from day 1
-- ✅ Simple disaster recovery (single SQLite file)
-- ✅ Fully automated cluster rebuilds
-
-### Bootstrap Host Specifications
-
-**VM Details:**
-- **Hostname:** infisical-bootstrap.hornung-bn.de
-- **IP Address:** 192.168.4.20 (static, VLAN 4)
-- **VM ID:** 4000
-- **Resources:** 2 vCPU, 4GB RAM, 20GB disk
-- **Node:** pve01
-
-**Services Stack:**
-- **Docker + Docker Compose** (automated installation via cloud-init)
-- **Traefik v3.0** (reverse proxy with Let's Encrypt)
-- **Infisical** (latest, SQLite backend)
-- **Automated Backups** (daily at 2 AM, 30-day retention)
-
-**Network Access:**
-- **External:** https://infisical.hornung-bn.de (Let's Encrypt TLS)
-- **Internal:** http://192.168.4.20:8080 (direct Infisical access)
-- **Traefik Dashboard:** https://traefik.hornung-bn.de
-
-### Why Bootstrap Host?
-
-1. **Eliminates Circular Dependencies**
-   - Infisical available before K3s deployment
-   - No PostgreSQL required (SQLite)
-   - K3s ESO can connect on first boot
-
-2. **Disaster Recovery**
-   - Single SQLite file backup
-   - Bootstrap host survives K3s failures
-   - Complete cluster rebuild from Infisical secrets
-
-3. **Simplified Architecture**
-   - 2 containers vs. complex in-cluster deployment
-   - 4GB RAM vs. 16GB+ (with PostgreSQL cluster)
-   - Independent upgrade cycles
-
-4. **Production Ready**
-   - HTTPS with Let's Encrypt (automatic renewal)
-   - Daily automated backups
-   - Simple monitoring and maintenance
-
-### Deployment Files
-
-- **Terraform:** `bootstrap-host.tf` (VM definition)
-- **Variables:** `variables.tf` (bootstrap_host_* variables)
-- **Cloud-Init:** `terraform/bootstrap-host/cloud-init-docker-infisical.yml`
-- **Documentation:** `docs/BOOTSTRAP_HOST_ARCHITECTURE.md` (comprehensive guide)
-- **Deployment Order:** `README-CLUSTER-DEPLOYMENT-ORDER.md` (updated for bootstrap-first)
-
-### ⚠️ IMPORTANT: New Deployment Order
-
-```
-1. Deploy Bootstrap Host (terraform apply -target=bootstrap_host)
-2. Configure Infisical secrets (Web UI)
-3. Deploy K3s cluster (can reference all secrets from Infisical)
-4. Deploy External Secrets Operator
-5. Deploy applications (secrets auto-synced)
-```
-
-See: `docs/BOOTSTRAP_HOST_ARCHITECTURE.md` for complete instructions.
-
-### ⚠️ Bootstrap Host Cloud-Init Issues (FIXED - 2025-12-26)
-
-**Critical bugs discovered in cloud-init template prevented automated deployment:**
-
-#### Bug 1: Wrong Docker Repository (Debian instead of Ubuntu)
-**Status:** ✅ FIXED
-**GitHub Issue:** [#29](https://github.com/thorstenhornung1/k3s-proxmox-ansible/issues/29)
-**File:** `terraform/bootstrap-host/cloud-init-docker-infisical.yml` lines 532-534
-
-**Problem:**
-- Cloud-init used Debian Docker repository URLs on Ubuntu 24.04 system
-- Docker installation failed silently with no error messages
-- Infisical systemd service failed (exit code 203/EXEC)
-- Cloud-init reported "done" but services were non-functional
-
-**Fix Applied:**
-Changed repository URLs from `/linux/debian` to `/linux/ubuntu`:
-```yaml
-# BEFORE (BROKEN):
-- curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
-- echo "deb ... https://download.docker.com/linux/debian ..."
-
-# AFTER (FIXED):
-- curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-- echo "deb ... https://download.docker.com/linux/ubuntu ..."
-```
-
-#### Bug 2: APT Proxy DNS Resolution Failure
-**Status:** ✅ FIXED
-**GitHub Issue:** [#29](https://github.com/thorstenhornung1/k3s-proxmox-ansible/issues/29)
-**Files:**
-- `terraform/bootstrap-host/cloud-init-docker-infisical.yml` lines 34-41
-- `variables.tf` lines 115-119
-
-**Problem:**
-- APT proxy configured to `apt-cacher.hornung-bn.de:3142`
-- DNS resolution failed from bootstrap host during cloud-init
-- Only single DNS server configured (192.168.2.4)
-- Local DNS entries not accessible from VLAN 4
-
-**Root Cause:**
-- Insufficient DNS server redundancy
-- Missing Pi-hole cluster DNS servers from VLAN 4
-
-**Fix Applied:**
-Added Technitium DNS servers to variables.tf for proper local DNS resolution:
-```hcl
-variable "dns_servers" {
-  description = "DNS servers (Technitium DNS cluster)"
-  type        = list(string)
-  default     = ["192.168.4.2", "192.168.2.3", "192.168.2.4", "192.168.2.5"]
-}
-```
-
-APT proxy re-enabled in cloud-init with updated documentation:
-```yaml
-# APT Proxy Configuration
-# Uses apt-cacher.hornung-bn.de (requires local DNS resolution via Technitium DNS)
-# DNS servers configured via Terraform: 192.168.4.2, 192.168.2.3, 192.168.2.4, 192.168.2.5
-- path: /etc/apt/apt.conf.d/01proxy
-  content: |
-    Acquire::http::Proxy "http://apt-cacher.hornung-bn.de:3142";
-```
-
-**Result:** APT cacher now works with proper DNS resolution from Technitium DNS cluster
-
-#### Production Workaround (Already Applied - No Longer Needed)
-
-Bootstrap host (192.168.4.20) was manually recovered during debugging:
-1. SSH to bootstrap host: `ssh -i ~/.ssh/id_rsa ansible@192.168.4.20`
-2. Remove broken APT proxy: `sudo rm -f /etc/apt/apt.conf.d/01proxy`
-3. Install Docker from correct Ubuntu repository
-4. Run secret generation: `/usr/local/bin/generate-infisical-secrets.sh`
-5. Verify services running: `docker ps`
-
-**Result:** All services operational (Traefik, Infisical, Promtail)
-
-**Note:** This manual workaround is no longer needed - automated deployment now works with fixed cloud-init
-
-#### CI/CD Impact & Compliance
-
-**Before Fix:**
-- ❌ Automated deployment broken
-- ❌ Manual intervention required
-- ❌ Non-obvious failure (cloud-init reports success)
-- ❌ APT operations slow (direct internet downloads)
-
-**After Fix:**
-- ✅ Fully automated deployment works
-- ✅ No manual intervention needed
-- ✅ CI/CD compliance restored
-- ✅ APT cacher operational (faster package installation)
-- ✅ Local DNS resolution via Technitium DNS cluster (192.168.4.2, 192.168.2.3, 192.168.2.4, 192.168.2.5)
-- ✅ Docker installed from correct Ubuntu repositories
-
-#### Testing Checklist
-
-Before declaring bootstrap host deployment production-ready:
-- [ ] Destroy current bootstrap host VM (ID 4000)
-- [ ] Re-deploy via Terraform with fixed cloud-init
-- [ ] Verify Docker installs automatically from Ubuntu repo
-- [ ] Verify Infisical stack starts without intervention
-- [ ] Verify HTTPS certificates obtained via Let's Encrypt
-- [ ] Verify no manual steps required
-
-## ⚠️ STRICT CI/CD RULES (Updated: 2025-11-29)
-
-### Mandatory Requirements
-
-**🔴 CRITICAL: ALL deployments MUST follow these rules:**
-
-1. **No Manual Deployments**
-   - ❌ NEVER deploy services manually with kubectl apply
-   - ✅ ALWAYS use Ansible playbooks or deploy-stack.sh
-   - ✅ ALL deployments must include complete resource definitions (Deployment, Service, IngressRoute)
-
-2. **Playbook Structure**
-   - ❌ NEVER use `import_playbook` within `tasks:` block
-   - ✅ Use shell scripts to orchestrate multiple playbooks
-   - ✅ Each playbook must be self-contained and idempotent
-
-3. **Pre-Deployment Validation**
-   ```bash
-   # ALWAYS run before ANY deployment:
-   make ci-validate           # Lint + syntax check
-   make check-broken-playbooks  # Check for deprecated files
-   ```
-
-4. **Deployment Order (STRICT)**
-   ```
-   1. External Secrets Operator
-   2. PostgreSQL Backup Configuration
-   3. Longhorn Storage
-   4. Applications (Gitea, Uptime Kuma, etc.)
-   ```
-
-5. **IngressRoute Requirements**
-   - ✅ EVERY web service MUST have HTTP → HTTPS redirect
-   - ✅ EVERY web service MUST have TLS configuration
-   - ✅ IngressRoutes MUST be deployed with the service, not separately
-   - ⚠️ **CRITICAL:** Use backticks for Host match: ``Host(`domain.com`)`` NOT `Host('domain.com')`
-
-6. **Let's Encrypt Certificate Requirements (NEW - 2025-12-13)**
-   - ✅ EVERY web service MUST have a Certificate resource (cert-manager)
-   - ✅ Certificate MUST be created BEFORE IngressRoute
-   - ✅ IngressRoute MUST reference certificate secret: `tls.secretName: service-tls-secret`
-   - ❌ NEVER use empty TLS config `tls: {}` - this uses Traefik default self-signed cert
-   - ✅ Use ClusterIssuer `letsencrypt-prod` for production
-   - ✅ Use ClusterIssuer `letsencrypt-staging` for testing
-   - ✅ Wait for certificate to be Ready before proceeding
-
-7. **Linting is MANDATORY**
-   ```bash
-   make lint-yaml      # Before committing YAML
-   make lint-ansible   # Before committing playbooks
-   make lint-shell     # Before committing scripts
-   make test-syntax    # Before running playbooks
-   ```
-
-8. **File Naming Convention**
-   - ❌ Broken playbooks: `*.yml.broken` (DO NOT USE)
-   - ❌ Deprecated playbooks: `*.yml.deprecated` (DO NOT USE)
-   - ✅ Active playbooks: `deploy-*.yml`, `*.yml`
-
-### Traefik IngressRoute Patterns (CRITICAL - 2025-12-13)
-
-**Mandatory Pattern for All Web Services:**
-```yaml
-# Phase N: Let's Encrypt Certificate
-- name: Create Let's Encrypt Certificate
-  kubernetes.core.k8s:
-    definition:
-      apiVersion: cert-manager.io/v1
-      kind: Certificate
-      metadata:
-        name: service-tls
-        namespace: namespace
-      spec:
-        commonName: service.domain.com
-        dnsNames:
-          - service.domain.com
-        issuerRef:
-          kind: ClusterIssuer
-          name: letsencrypt-prod
-        secretName: service-tls-secret
-
-# Phase N+1: Wait for Certificate
-- name: Wait for certificate readiness
-  kubernetes.core.k8s_info:
-    api_version: cert-manager.io/v1
-    kind: Certificate
-    name: service-tls
-    namespace: namespace
-  register: cert_status
-  until: (cert_status.resources[0].status.conditions | selectattr('type', 'equalto', 'Ready') | map(attribute='status') | first) == 'True'
-  retries: 60
-  delay: 5
-
-# Phase N+2: Traefik Middlewares
-- name: Create redirect-https Middleware
-  kubernetes.core.k8s:
-    definition:
-      apiVersion: traefik.io/v1alpha1
-      kind: Middleware
-      metadata:
-        name: redirect-https
-        namespace: namespace
-      spec:
-        redirectScheme:
-          scheme: https
-          permanent: true
-
-# Phase N+3: HTTP IngressRoute (Redirect)
-- name: Create HTTP IngressRoute
-  kubernetes.core.k8s:
-    definition:
-      apiVersion: traefik.io/v1alpha1
-      kind: IngressRoute
-      metadata:
-        name: service-http
-        namespace: namespace
-      spec:
-        entryPoints:
-          - web
-        routes:
-          - match: "Host(`service.domain.com`)"  # ⚠️ BACKTICKS REQUIRED
-            kind: Rule
-            middlewares:
-              - name: redirect-https
-            services:
-              - name: service
-                port: 8000
-
-# Phase N+4: HTTPS IngressRoute (TLS)
-- name: Create HTTPS IngressRoute
-  kubernetes.core.k8s:
-    definition:
-      apiVersion: traefik.io/v1alpha1
-      kind: IngressRoute
-      metadata:
-        name: service-https
-        namespace: namespace
-      spec:
-        entryPoints:
-          - websecure
-        routes:
-          - match: "Host(`service.domain.com`)"  # ⚠️ BACKTICKS REQUIRED
-            kind: Rule
-            services:
-              - name: service
-                port: 8000
-        tls:
-          secretName: service-tls-secret  # ⚠️ MUST REFERENCE CERTIFICATE SECRET
-```
-
-**Common Mistakes to Avoid:**
-1. ❌ `Host('domain.com')` - Wrong! Use backticks `` ` `` not single quotes `'`
-2. ❌ `tls: {}` - Wrong! Always specify `secretName`
-3. ❌ Creating IngressRoute before Certificate - Wrong! Certificate must be Ready first
-4. ❌ Using `traefik.containo.us` API - Use `traefik.io/v1alpha1`
-
-### Deployment Script Usage
-
-**Correct way to deploy complete stack:**
-```bash
-./deploy-stack.sh
-```
-
-**NOT via deploy-complete-stack.yml** (broken - uses import_playbook in tasks)
-
-### Common Anti-Patterns (DO NOT DO)
-
-❌ **Anti-Pattern 1: Manual kubectl apply**
-```bash
-kubectl apply -f some-manifest.yaml  # WRONG
-```
-
-❌ **Anti-Pattern 2: Incomplete deployments**
-```bash
-# Only deploying Deployment+Service, forgetting IngressRoute
-# This causes "Service Unavailable" errors
-```
-
-❌ **Anti-Pattern 3: Using broken playbooks**
-```bash
-ansible-playbook deploy-complete-stack.yml  # BROKEN - will fail
-```
-
-### Correct Patterns (DO THIS)
-
-✅ **Pattern 1: Use orchestration script**
-```bash
-./deploy-stack.sh  # Handles all dependencies
-```
-
-✅ **Pattern 2: Individual playbook with full validation**
-```bash
-make ci-validate
-ansible-playbook -i inventory-local.ini deploy-uptime-kuma.yml
-```
-
-✅ **Pattern 3: Verify deployment includes all resources**
-```yaml
-# Playbook must include:
-- Deployment/StatefulSet
-- Service
-- IngressRoute (HTTP + HTTPS)
-- Middleware (redirect-https)
-```
-
-### Agent Instructions for Claude
-
-When asked to deploy or modify infrastructure:
-
-1. **ALWAYS check for existing playbooks first**
-2. **NEVER create kubectl apply commands**
-3. **ALWAYS validate with `make ci-validate` before suggesting deployment**
-4. **ALWAYS include IngressRoutes with web services**
-5. **ALWAYS check deployment logs for errors**
-6. **NEVER suggest using `*.broken` or `*.deprecated` files**
-
-## Current State (Last Updated: 2025-11-29)
-
-### Infrastructure
-- **K3s Cluster:** Running in production, 6 nodes (3 masters, 3 workers)
-- **Infisical:** Deployed with HTTPS/TLS (https://infisical.hornung-bn.de)
-- **PostgreSQL:** Production deployment with PgBouncer + automated backups
-- **PostgreSQL Backup System:** ✅ Multi-tier automated backups on NFS (Daily, Weekly, Hourly)
-- **cert-manager:** Installed, managing Let's Encrypt certificates
-- **External Secrets Operator:** Syncing secrets from Infisical
-- **Traefik:** Ingress controller with TLS termination
-- **NFS Subdir External Provisioner:** ✅ Deployed for dynamic NFS volume provisioning (v4.0.18)
-- **Synology CSI Driver:** Partially operational (iSCSI only, NFS replaced by NFS Subdir Provisioner)
-- **KubeView:** ✅ Cluster visualization deployed (https://k3s-status.hornung-bn.de) - v2.1.1
-
-### Secrets Management (Updated: 2025-11-12)
-- **Universal Auth Identity:** `06394ac4-c015-4468-87a6-235a3cb6c59a`
-- **Access Token TTL:** 30 days (2592000 seconds)
-- **Infisical Projects:**
-  - `k3s-production` - Application secrets
-  - `k3s-storage` - Storage secrets (Longhorn, Synology)
-  - `k3s-storage-u-m-hd` - Additional storage secrets
-  - `traefik-certificates-bq-pt` - Networking secrets
-- **Secret Paths Configured:**
-  - ✅ `/gitea/database` - Gitea PostgreSQL credentials (k3s-production)
-  - ✅ `/gitea/admin` - Gitea admin account (k3s-production)
-  - ✅ `/gitea/config` - Gitea application secrets (k3s-production)
-  - ✅ `/gitea/smtp` - Gitea email configuration (k3s-production)
-  - ✅ `/uptimekuma/config` - Uptime Kuma settings (k3s-production)
-  - ✅ `/uptimekuma/notifications` - Notification credentials (k3s-production)
-  - ✅ `/storage/longhorn-s3` - Longhorn S3 backup (k3s-storage or k3s-storage-u-m-hd)
-  - ✅ `/storage/synology-csi` - Synology CSI credentials (k3s-storage or k3s-storage-u-m-hd)
-  - ⏳ `/networking/cloudflare` - Cloudflare DNS API (traefik-certificates-bq-pt)
-  - ⏳ `/networking/traefik-dashboard` - Traefik dashboard auth (traefik-certificates-bq-pt)
-
-### Recent Deployments
-
-#### KubeView Cluster Visualization (2025-12-13)
-**Objective:** Deploy web-based Kubernetes cluster visualization and monitoring tool
-
-**Problem Solved:**
-- Need for visual cluster topology and resource relationships
-- Quick access to pod logs without kubectl
-- Real-time cluster monitoring for operations team
-- Intuitive interface for troubleshooting
-
-**Completed:**
-1. ✅ Deployed KubeView v2.1.1 via Helm Chart v2.0.5
-2. ✅ Configured BasicAuth via Traefik middleware (admin user)
-3. ✅ Set up HTTPS access via Traefik IngressRoute
-4. ✅ Implemented HTTP → HTTPS redirect (308 Permanent)
-5. ✅ Created read-only RBAC (ClusterRole with get/list/watch only)
-6. ✅ Secured container (non-root, ReadOnlyRootFS, dropped capabilities)
-7. ✅ Configured MetalLB LoadBalancer (192.168.4.102)
-8. ✅ Created comprehensive documentation
-
-**Result:** Production-ready cluster visualization at https://k3s-status.hornung-bn.de with secure read-only access
-
-**Deployment Files:**
-- `deploy-kubeview.yml` - Ansible playbook (7-phase deployment)
-- `vault/secrets.yml` - Admin password (kubeview_config section)
-- `docs/KUBEVIEW_DEPLOYMENT.md` - Comprehensive deployment guide
-- `KUBEVIEW_QUICK_REFERENCE.md` - Day-to-day operations reference
-
-**Security Notes:**
-- ⚠️ Pod logs enabled (may contain sensitive data) - protected by BasicAuth
-- ✅ Read-only RBAC (no create/update/delete permissions)
-- ✅ Secret names visible (values hidden)
-- ✅ All namespaces visible (including system namespaces)
-
-#### NFS Subdir External Provisioner (2025-11-16)
-**Objective:** Deploy dynamic NFS volume provisioning as alternative to Synology CSI Driver
-
-**Problem Solved:**
-- Synology CSI Driver creates NFS shares but doesn't automatically export them
-- Manual share configuration required for each new volume
-- Not suitable for automated backup workflows
-
-**Completed:**
-1. ✅ Deployed nfs-subdir-external-provisioner (v4.0.18) via Helm
-2. ✅ Configured to use existing Synology NFS share: `192.168.2.3:/volume1/k8s-storage`
-3. ✅ Created `nfs-storage` StorageClass with NFSv4.1 and optimized mount options
-4. ✅ Migrated PostgreSQL backup PVCs from Synology CSI to nfs-storage
-5. ✅ Verified successful backup to NFS (154K compressed dump with checksums)
-6. ✅ Validated file ownership and permissions (UID 1024 via "Map all users to admin")
-
-**Result:** Fully automated NFS volume provisioning working for PostgreSQL backups without manual Synology configuration
-
-**Deployment Files:**
-- `manifests/storage/nfs-provisioner-values.yaml` - Helm values
-- `deploy-nfs-provisioner.yml` - Ansible playbook (optional)
-
-#### PostgreSQL Backup System (2025-11-14, Updated 2025-11-16)
-**Objective:** Automated multi-tier backup system for PostgreSQL databases
-
-**Completed:**
-1. ✅ Created 3-tier backup strategy (Daily, Weekly, Hourly)
-2. ✅ Migrated to Synology NFS storage via nfs-subdir-provisioner
-3. ✅ Fixed volume permissions with initContainers
-4. ✅ Implemented pg_dump with custom format + gzip compression
-5. ✅ Added automatic cleanup based on retention policies
-6. ✅ Verified successful backup with checksum validation
-7. ✅ Documented complete backup and restore procedures
-
-**Result:** Production-ready automated backup system with 14-day daily, 90-day weekly, and 48-hour hourly retention on NFS.
-
-#### Synology CSI Driver (2025-11-01)
-**Objective:** Deploy Tier 2 (iSCSI) and Tier 3 (NFS) storage from Synology NAS
-
-**Completed:**
-1. ✅ Fixed host mismatch between StorageClass parameters and Secret
-2. ✅ Deployed Synology CSI Controller and Node components
-3. ✅ Created StorageClasses: `synology-iscsi` (Tier 2), `synology-nfs` (Tier 3)
-4. ✅ Integrated with Infisical for credentials management
-5. ✅ Verified volume provisioning (iSCSI: 17s, NFS: 13s)
-6. ✅ Documented deployment in `docs/SYNOLOGY_CSI_DEPLOYMENT_SUCCESS.md`
-
-**Result:** Storage Tiers 2 & 3 operational for bulk/shared storage
-
-#### TLS/HTTPS for Infisical (2025-10-22)
-**Objective:** Implement TLS/HTTPS security for Infisical as a CI/CD operation
-
-**Completed:**
-1. ✅ Configured Let's Encrypt ClusterIssuers (prod + staging)
-2. ✅ Issued TLS certificate for infisical.hornung-bn.de
-3. ✅ Configured Traefik IngressRoutes with HTTPS
-4. ✅ Set up HTTP → HTTPS redirect (308 Permanent)
-5. ✅ Integrated External Secrets Operator with Infisical
-6. ✅ Synced Cloudflare API token from Infisical to Kubernetes
-7. ✅ Documented entire deployment process
-
-**Result:** Infisical now running with production-grade HTTPS/TLS
-
-### Active Configuration
-
-**Infisical:**
-- URL: https://infisical.hornung-bn.de ⭐ HTTPS with self-signed cert
-- Traefik IP: 192.168.4.100 (MetalLB LoadBalancer)
-- TLS: Self-signed certificate (1 year, renewable)
-- IngressRoutes:
-  - HTTP (port 80) → HTTPS redirect (308)
-  - HTTPS (port 443) → TLS termination
-- Project Slugs:
-  - `k3s-production` - Application secrets (Gitea, Uptime Kuma)
-  - `k3s-storage` - Storage secrets (Longhorn, Synology)
-  - `k3s-storage-u-m-hd` - Additional storage secrets
-  - `traefik-certificates-bq-pt` - Networking/Traefik secrets
-- Environment Slug: `prod` (⚠️ not `production`)
-- Machine Identity: Universal Auth
-  - Client ID: `06394ac4-c015-4468-87a6-235a3cb6c59a`
-  - Client Secret: `0b266166252b6110dbb1f2a667b315e95935b4fb42fdeede3a646aed410fc8d3`
-  - Token TTL: 30 days
-  - Trusted IPs: `0.0.0.0/0, ::/0` (all IPs - consider restricting in production)
-
-**cert-manager:**
-- ClusterIssuers: `letsencrypt-prod`, `letsencrypt-staging`
-- DNS01 Challenge: Cloudflare
-- Auto-renewal: Enabled (30 days before expiration)
-
-**External Secrets Operator:**
-- ClusterSecretStore: `infisical-secret-store` (READY)
-- Sync interval: 1 hour
-- Syncing from: `http://infisical.infisical.svc.cluster.local:8080`
+> ⚠️ **Korrigiert 2026-08-11:** Dieser Abschnitt beschrieb bis heute einen
+> K3s-Cluster. **Den gibt es nicht mehr** — weder VMs (`qm list` auf pve01-03)
+> noch Kubeconfig existieren. Die Plattform ist seit der Swarm-Migration
+> **Docker Swarm**. Alle `kubectl`-Kommandos unten wurden entfernt.
+
+Infrastruktur-Automatisierung für einen **Docker-Swarm-Cluster auf Proxmox VE**:
+
+- **Proxmox VE Cluster (3 Nodes):** pve01 (15 GB RAM), pve02 (32 GB), pve03 (16 GB)
+  mit Ceph (Pools `swarm-volumes` für RBD, CephFS `swarm-shared`)
+- **Docker Swarm (3 Nodes, alle Manager):**
+  - docker-infra-1 = 192.168.4.40 (VM 4200 auf pve01) — Leader
+  - docker-infra-2 = 192.168.4.41 (VM 4201 auf pve02)
+  - docker-infra-3 = 192.168.4.42 (VM 4202 auf pve03)
+- **Datenbank:** `postgres-prod` (VM 4600 auf pve02, 192.168.4.45) — eine
+  einzelne PG-VM, KEIN Patroni-Cluster mehr (Patroni gestoppt, reversibel)
+- **Ingress:** Traefik v3 (`traefik.swarm.*`-Labels), **SSO:** Authentik (OIDC)
+- **Secrets:** Docker Secrets (Anlage über die Portainer-UI, NICHT per CLI) +
+  Ansible Vault für Playbooks
+- **GitOps:** `swarm-stacks/.github/workflows/deploy-stacks.yml`, ausgeführt vom
+  self-hosted GitHub-Runner (LXC 4303 auf pve03). Steht der LXC, hängt **jeder**
+  Deploy still in `queued`.
+
+**Storage-Wahl pro Workload — die wichtigste Entscheidung:**
+
+| Datenart | Ziel | Grund |
+|---|---|---|
+| Große Dateien, sequenziell (Medien, Backups) | **CephFS** `/mnt/cephfs` | genau dafür gebaut |
+| **SQLite / LMDB / mmap-Datenbanken** | **Ceph RBD** `/mnt/rbd/*` (ext4) | SQLite-WAL mmap()t die `-shm`-Datei; upstream: *"WAL does not work over a network filesystem"*. Auf CephFS drohen Timeouts und Korruption. |
+
+Bestehende RBD-Volumes: `frigate-config`, `grafana-data`, `openarchiver-meili`,
+`paperless-data`. Jedes hat ein Auto-Failover-Setup (`ansible/rbd-mount-*.yml`):
+systemd-Map/Mount + Watchdog-Timer auf allen Nodes, der bei Ausfall den
+exclusive-lock stiehlt und das Swarm-Label verschiebt.
 
 ## Important Secrets
 
 ### Location of Credentials
 
 1. **Ansible Vault Password:** `.vault_pass.txt` (gitignored)
-2. **Infisical Machine Identity:**
-   - Kubernetes Secret: `universal-auth-credentials` (external-secrets-system namespace)
-   - Fields: `clientId`, `clientSecret`
-3. **Kubeconfig:** `/tmp/k3s-kubeconfig-production.yaml`
+2. **Docker Secrets:** im Swarm hinterlegt, **Anlage ausschließlich über die
+   Portainer-UI** — nie per `docker secret create` (führt zu Trailing-Newlines
+   und Manager-Lesbarkeitsproblemen)
+3. **`*.tfvars`** sind gitignored (enthalten u. a. das GHCR-PAT)
+
+> 🔴 **Secrets NIEMALS auslesen oder anzeigen.** Kein `cat` auf
+> `/run/secrets/*`, `*.pw`, `*.key`, Keyrings, `docker config.json`
+> (base64 = Klartext) oder `/proc/PID/environ` (enthält `DATABASE_URL`
+> samt Passwort — falls unvermeidbar, im **selben** Befehl maskieren).
+> Braucht ein Kommando Credentials, führt der Nutzer es aus.
 
 ### Critical Configuration Values
 
-**Infisical Environment Slug:** `prod` (not `production`)
-- This is a common gotcha - the UI shows "Production" but the slug is "prod"
+**Ceph-Client für Swarm:** `client.docker-swarm`
+(`/etc/ceph/ceph.client.docker-swarm.keyring` auf den Infra-Nodes)
 
-**ClusterSecretStore API URL:** `http://infisical.infisical.svc.cluster.local:8080`
-- Internal cluster communication uses HTTP
-- External access uses HTTPS via Traefik
+**Swarm-Manager-Endpunkt:** `192.168.4.40`; Docker-CLI lokal nicht verfügbar —
+der Mac nutzt Podman, Docker-Kommandos laufen per SSH auf den Infra-Nodes.
 
-**ExternalSecret Mapping:**
-- ⚠️ Do NOT use `property: value` field with Infisical
-- Infisical stores values directly, not as nested JSON
+**Node-Labels steuern Placement:** `app=true` (alle), `apptier`,
+`<service>-rbd=active` (folgt dem RBD-Volume, wird vom Watchdog verschoben).
 
-**Synology CSI Configuration:**
-- StorageClass `dsm` parameter MUST match Secret `host` value exactly
-- Currently using: `diskstation.hornung-bn.de`
-- Credentials synced from Infisical via `synology-csi-credentials-default` ExternalSecret
-- ClusterSecretStore: `infisical-storage-store`
+**Swarm-Scheduler kennt NUR `reservations`** — weder `limits` noch den
+Ist-Verbrauch, und die Node-Kapazität friert beim Join ein. Eine zu niedrige
+Reservation führt daher zu systematischer Überbuchung. Kapazität immer gegen
+`free -m` auf dem Node prüfen, nie allein gegen `docker node inspect`
+(virtio-Ballooning verschiebt VM-RAM zur Laufzeit).
 
 ## Common Operations
 
@@ -714,131 +182,59 @@ When asked to deploy or modify infrastructure:
 ansible-vault view vault/secrets.yml --vault-password-file .vault_pass.txt
 ```
 
-### Deploy/Update Infisical
+### Swarm-Zustand prüfen
 ```bash
-ANSIBLE_CONFIG=.ansible.cfg ansible-playbook \
-  -i inventory-local.ini \
-  deploy-infisical-simple.yml
+ssh root@192.168.4.40 "docker node ls"
+ssh root@192.168.4.40 "docker service ls"
+ssh root@192.168.4.40 "docker service ps <stack>_<service> --no-trunc"
 ```
 
-### Force Secret Sync from Infisical
+### Stack deployen
+Deploy erfolgt über **GitOps**: Commit auf `main` im Repo `swarm-stacks` unter
+`stacks/**` → GitHub-Actions-Workflow `deploy-stacks.yml` → SSH-Deploy.
+Manuelles `docker stack deploy` umgeht die Pipeline und erzeugt Drift.
+
 ```bash
-kubectl annotate externalsecret -n NAMESPACE SECRET_NAME \
-  force-sync=$(date +%s) --overwrite
+gh run list -R thorstenhornung1/swarm-stacks --workflow=deploy-stacks.yml --limit 3
 ```
 
-### Check TLS Certificate Status
+> Das Repo `terraform` enthält `swarm-stacks/` als **eigenständiges** Git-Repo
+> (eigener `origin`). Änderungen müssen in **beiden** committet werden.
+
+### In einen Container schauen
 ```bash
-export KUBECONFIG=/tmp/k3s-kubeconfig-production.yaml
-kubectl get certificate -n infisical
-kubectl describe certificate -n infisical infisical-tls
+# s6-basierte Images (paperless, …): docker exec erbt die Env NICHT
+ssh root@<node> "docker exec <cid> /command/with-contenv <befehl>"
 ```
 
-### PostgreSQL Backup Operations
+> ⚠️ **Rechte immer als Dienstnutzer testen**, nicht als root — `docker exec`
+> läuft als root und ignoriert Verzeichnisrechte, meldet also fälschlich Erfolg:
+> `docker exec <cid> /command/with-contenv s6-setuidgid <user> touch <pfad>`
 
-**Trigger Manual Backup:**
+### RBD-Volume: Zustand und Failover
 ```bash
-export KUBECONFIG=/tmp/k3s-kubeconfig-production.yaml
-kubectl create job backup-manual --from=cronjob/postgresql-backup-daily -n databases
-kubectl logs -n databases -l job-name=backup-manual -f
+ssh root@<node> "rbd showmapped"
+ssh root@<node> "systemctl list-timers '*-rbd-failover.timer'"
+# Entscheidung des Watchdogs ansehen, ohne etwas zu ändern:
+ssh root@<node> "<SERVICE>_FAILOVER_DRYRUN=1 /usr/local/bin/<service>-rbd-failover.sh"
 ```
 
-**Check Backup Status:**
+### PostgreSQL (postgres-prod, VM 4600)
 ```bash
-kubectl get cronjobs -n databases
-kubectl get jobs -n databases | grep backup
-kubectl get pvc -n databases | grep backup
+ssh root@pve02 "qm guest exec 4600 -- <befehl>"     # ohne SSH in die VM
 ```
-
-**Verify Backup Files:**
-```bash
-# List backups
-kubectl exec -n databases <backup-pod> -- ls -lh /backup/
-
-# Check checksum
-kubectl exec -n databases <backup-pod> -- cat /backup/postgresql_daily_*.sha256
-```
-
-**Restore from Backup:**
-```bash
-# Get backup file
-kubectl exec -n databases <backup-pod> -- ls -lh /backup/
-
-# Restore database
-kubectl exec -n databases <backup-pod> -- bash -c "
-  gunzip -c /backup/postgresql_daily_YYYYMMDD_HHMMSS.dump.gz | \
-  pg_restore -h infisical-pg-primary.databases.svc.cluster.local \
-    -U infisical -d infisical --clean --if-exists
-"
-```
-
-## Documentation Map
-
-- **Main Knowledge Base:** `.claude/project_knowledge.md`
-- **PostgreSQL HA Security:** `docs/POSTGRES_HA_SECURITY.md` ⭐ NEW (2026-01-30)
-- **KubeView Deployment:** `docs/KUBEVIEW_DEPLOYMENT.md` (2025-12-13)
-- **KubeView Quick Reference:** `KUBEVIEW_QUICK_REFERENCE.md` (2025-12-13)
-- **Infisical TLS Deployment:** `docs/INFISICAL_TLS_DEPLOYMENT.md` (2025-12-05)
-- **Infisical Recovery Guide:** `docs/INFISICAL_RESTORE_GUIDE.md` (2025-12-05)
-- **PostgreSQL Backup System:** `docs/POSTGRESQL_BACKUP_SYSTEM.md` (2025-11-14)
-- **Database Deployment Checklist:** `docs/DATABASE_DEPLOYMENT_CHECKLIST.md` (2025-11-14)
-- **Infisical Secrets Reference:** `docs/INFISICAL_SECRETS_REFERENCE.md`
-- **Synology CSI Deployment:** `docs/SYNOLOGY_CSI_DEPLOYMENT_SUCCESS.md`
-- **Storage Tiers:** `docs/STORAGE_TIERS.md`
-- **Progress Tracking:** `.claude/progress.md`
-- **Architecture Decisions:** `.claude/decisions.md`
-- **Known Issues:** `.claude/bugs.md`
-- **Secrets Workflow:** `SECRETS_WORKFLOW.md`
-- **Deployment Guides:** Various `*_DEPLOYMENT*.md` files in root
-
-## Database Deployment Policy
-
-**⚠️ IMPORTANT:** All PostgreSQL deployments MUST include backup configuration. Never deploy a database without backups.
-
-### Mandatory Requirements
-
-1. **Backup System:** Configure automated backups immediately after database deployment
-2. **Storage:** Use Synology iSCSI (Tier 2) for long-term backup retention
-3. **Retention:** Minimum 14 days for daily backups, 90 days for weekly
-4. **Verification:** Test backup and restore before declaring production-ready
-5. **Documentation:** Document database-specific restore procedures
-
-### Checklist for New Database Deployments
-
-See `docs/DATABASE_DEPLOYMENT_CHECKLIST.md` for complete checklist.
-
-Quick checklist:
-- [ ] PostgreSQL database deployed with Crunchy Operator
-- [ ] Database user added to PostgresCluster CR with CREATEDB rights
-- [ ] Backup CronJobs configured (Daily, Weekly, Hourly)
-- [ ] PVCs created on Synology iSCSI storage
-- [ ] Manual backup test successful
-- [ ] Restore procedure tested
-- [ ] Backup monitoring/alerting configured
-- [ ] Documentation updated
-
-### Adding a New Database to PostgresCluster
-
-```yaml
-# Edit PostgresCluster CR
-kubectl edit postgrescluster infisical-pg -n databases
-
-# Add new user under spec.users:
-users:
-  - name: myapp
-    databases: ["myapp"]
-    options: "CREATEDB"
-```
-
-The Crunchy Operator will automatically:
-- Create the database
-- Create the user with specified permissions
-- Generate Kubernetes secret: `<cluster>-pguser-<username>`
-- Include database in existing backup jobs (no changes needed)
+Backups laufen über den `pg-backup`-Stack
+(`stacks/infrastructure/pg-backup/`), nicht mehr über K8s-CronJobs.
 
 ## Key Learnings
 
-### Cluster Rebuild & CI/CD (2025-12-06)
+> 📦 **Historisch (K3s-Ära, bis zur Swarm-Migration).** Die folgenden vier
+> Abschnitte — Cluster Rebuild, Infisical, cert-manager, Synology CSI —
+> beziehen sich auf den **abgebauten** K3s-Cluster und sind für die heutige
+> Swarm-Plattform nicht mehr anwendbar. Aufbewahrt als Kontext für alte
+> Commits; nicht als Handlungsanweisung lesen.
+
+### Cluster Rebuild & CI/CD (2025-12-06) — historisch
 1. Always update playbooks for idempotency - use `failed_when: false` for operations that may already exist
 2. ESO → Infisical requires HTTP internal endpoint to avoid self-signed cert issues
 3. ClusterSecretStore shows "Ready" but doesn't create secrets if source paths are empty in Infisical
@@ -963,44 +359,6 @@ resource "null_resource" "setup" {
 | swarm-control | Privileged (Ubuntu 24.04) | 4300 | pve01 | tank | `swarmpit.tf` |
 | etcd-4/5 | Unprivileged (Ubuntu 24.04) | 4301-4302 | pve02/03 | tank/local-lvm | `etcd-cluster.tf` |
 
-## Storage Architecture
-
-### Storage Tiers (docs/STORAGE_TIERS.md)
-- **Tier 0 (local-ssd):** Node-local SSD for apps with own replication
-- **Tier 1 (longhorn-replicated):** Default replicated storage for most workloads
-- **Tier 2 (synology-iscsi):** ✅ Bulk storage for large files (>500GB)
-- **Tier 3 (synology-nfs):** ✅ Shared storage with ReadWriteMany access
-- **Tier 4-6:** Backup tiers (Longhorn → Synology → Offline)
-
-### Available StorageClasses
-```bash
-local-path (default)   # K3s local-path-provisioner
-synology-iscsi        # Tier 2: iSCSI for bulk data
-synology-nfs          # Tier 3: NFS for shared access
-```
-
-## Next Tasks
-
-### High Priority
-- [ ] Create Gitea secrets in Infisical (`/gitea/database`, `/gitea/admin`, `/gitea/config`) ⭐ NEW
-- [ ] Deploy Gitea with Infisical secrets (playbook ready: deploy-gitea.yml) ⭐ NEW
-- [ ] Deploy Uptime Kuma with Infisical secrets ⭐ NEW
-- [ ] Upgrade Infisical TLS from self-signed to Let's Encrypt (Cloudflare DNS-01) ⭐ NEW
-- [ ] Deploy Synology CSI Driver with correct Helm chart (playbook updated) ⭐ NEW
-- [ ] Set up monitoring for certificate expiration
-- [ ] Configure alerts for ExternalSecret sync failures
-
-### Medium Priority
-- [ ] Deploy production workload using Synology storage (e.g., Frigate NVR)
-- [ ] Configure Longhorn backup target to Synology NFS (Tier 4)
-- [ ] Document complete cluster rebuild procedure
-- [ ] Create automated cluster rebuild script combining all phases
-
-### Long Term (CI/CD Roadmap)
-- [ ] Testing Framework (Phase 1 - see CICD_STATUS_AND_ROADMAP.md)
-- [ ] Continuous Deployment Pipeline (Phase 2)
-- [ ] GitOps Integration with ArgoCD (Phase 3)
-
 ## Contact/Escalation
 
 For issues:
@@ -1014,34 +372,3 @@ For issues:
 **Last Updated:** 2026-01-30
 **Updated By:** Infrastructure Team (PostgreSQL HA Security Hardening)
 
-## Recent Achievements
-- ✅ **PostgreSQL HA security hardening** - 3-layer access control (2026-01-30) ⭐ NEW
-  - pg_hba.conf restricted from 0.0.0.0/0 to specific VLAN 12 + overlay CIDRs
-  - HAProxy stats port 7000 removed from external access
-  - Proxmox VM firewall enabled on all 6 nodes (DROP policy, explicit ACCEPT rules)
-  - Only Home Assistant (192.168.2.5) and internal VLANs can reach PostgreSQL
-  - Docs: `docs/POSTGRES_HA_SECURITY.md`
-- ✅ **Infisical Operator recursive fix** - Resolved secret sync limitation (2025-12-28)
-  - Created migration script: `helpers/migrate-infisical-secrets.py` (main branch)
-  - Fixed `recursive: true` not syncing subdirectory secrets
-  - Flattened 15 secrets to root path with path prefixes
-  - All 16 secrets now sync successfully via InfisicalSecret CRD
-  - GitHub Issues: #41 (resolved), #42 (documented)
-  - Docs: `docs/INFISICAL_OPERATOR_RECURSIVE_FIX.md`
-- ✅ KubeView cluster visualization deployed (2025-12-13)
-- ✅ Read-only RBAC with BasicAuth + HTTPS security (2025-12-13)
-- ✅ Comprehensive KubeView documentation created (2025-12-13)
-- ✅ Infisical with TLS via Traefik deployed (2025-12-05)
-- ✅ Self-signed certificates via cert-manager (2025-12-05)
-- ✅ HTTP → HTTPS redirect configured (2025-12-05)
-- ✅ Infisical database restored from backup (2025-12-05)
-- ✅ K3s cluster smoke test completed (2025-12-05)
-- ✅ PostgreSQL Backup System deployed and verified (2025-11-14)
-- ✅ Multi-tier backup strategy (Daily/Weekly/Hourly) operational (2025-11-14)
-- ✅ Infisical secrets structure documented (2025-11-12)
-- ✅ Universal Auth configured for K8s ESO (2025-11-12)
-- ✅ Gitea & Uptime Kuma secret paths created (2025-11-12)
-- ✅ Synology CSI Driver deployed and verified (2025-11-01)
-- ✅ Storage Tiers 2 & 3 operational
-- ✅ Infisical integration for Synology credentials
-- ✅ External Secrets Operator working
