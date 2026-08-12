@@ -166,7 +166,8 @@ variable "infra_nodes" {
       data_disk_size = 50 # Limited by tank space on pve01
       # 2026-06-15: Ballooning aktiviert (war 0/aus) als RAM-Puffer für kritische
       # HA-Dienste (Resilienz-Strategie DNS>HA>Frigate>Swarm).
-      balloon = 4096
+      # 2026-08-10: 4096 -> 6144, Drift-Abgleich gegen den Ist-Zustand.
+      balloon = 6144
     }
     "2" = {
       node           = "pve02"
@@ -175,8 +176,11 @@ variable "infra_nodes" {
       ip_vlan12      = "192.168.12.41"
       data_disk_size = 100         # Medium size on pve02
       storage_pool   = "local-lvm" # ZFS tank on pve02 is full
-      memory         = 12000       # pve02 = Workhorse (31GB), mehr RAM für infra-2
-      balloon        = 6144        # RAM-Puffer (greift nur bei Host-Druck)
+      # 2026-08-10: memory 12000 -> 8192 und balloon 6144 -> 4096, Drift-Abgleich
+      # gegen den Ist-Zustand. Die 12000 waren nie appliziert; pve02 traegt seit der
+      # Single-VM-Migration zusaetzlich postgres-prod (6144) und Frigate (6144).
+      memory  = 8192
+      balloon = 4096
     }
     "3" = {
       node           = "pve03"
@@ -185,7 +189,13 @@ variable "infra_nodes" {
       ip_vlan12      = "192.168.12.42"
       data_disk_size = 200 # Full size on pve03 (1.2TB available)
       # pve03 eng (Frigate-LXC) → aggressiver Puffer, damit Frigate (Prio 3) bei Druck Vorrang hat.
-      balloon = 3072
+      # 2026-08-10: 3072 -> 5120. WARNUNG: 3072 ist der Wert, der am 2026-08-08 den
+      # OOM in docker-infra-3 ausgeloest hat. pvestatd blaeht den Balloon ab 80 %
+      # Host-Auslastung bis auf diesen Floor auf; gemessen blieben dem Gast dann
+      # 2821 MB (3072 minus ~251 MB virtio-Overhead) — zu wenig fuer die Container
+      # darin. Der Floor ist KEINE Reserve, sondern das RAM, das die VM unter
+      # Host-Druck tatsaechlich hat. Nicht wieder senken ohne Lastabwurf-Konzept.
+      balloon = 5120
     }
   }
 }

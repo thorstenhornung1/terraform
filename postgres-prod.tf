@@ -13,7 +13,13 @@
 
 resource "proxmox_virtual_environment_file" "cloud_init_postgres_prod" {
   content_type = "snippets"
-  datastore_id = "local"
+  # Diskstation-NFS (SHARED) statt local (per-node): Das Snippet MUSS auf ALLEN
+  # Nodes sichtbar sein, sonst scheitert der PVE-HA-Failover-Start auf einem
+  # anderen Node mit "volume 'local:snippets/cloud-init-postgres-prod.yml' does
+  # not exist" (realer Ausfall im Node-Kill-Test 2026-06-28: postgres-prod kam
+  # auf pve03 nicht hoch -> DB ~16 min down). CLAUDE.md erlaubt Diskstation-NFS
+  # AUSDRUECKLICH nur fuer Cloud-Init-Snippets (shared, alle Nodes mounten es).
+  datastore_id = "Diskstation-NFS"
   node_name    = var.postgres_prod.node
 
   source_raw {
@@ -111,5 +117,36 @@ resource "proxmox_virtual_environment_vm" "postgres_prod" {
 
   provisioner "local-exec" {
     command = "ssh-keygen -R ${var.postgres_prod.ip_vlan4} 2>/dev/null || true"
+  }
+
+  # ==========================================================================
+  # 2026-08-12: SCHUTZ GEGEN UNGEWOLLTES REPLACE — HIER BESONDERS KRITISCH
+  # ==========================================================================
+  # Diese VM traegt NEUN produktive App-Datenbanken. `terraform plan` meldete
+  # am 2026-08-12 "proxmox_virtual_environment_vm.postgres_prod must be
+  # replaced" — destroy+create, also Totalverlust.
+  #
+  # Scharf geworden ist die Ladung durch eine voellig harmlose Aenderung: die
+  # AGE-Ergaenzung an terraform/postgres-prod/cloud-init-postgres.yml fuer
+  # LightRAG (Commits f2da0b5 und 9868ecd). Die Kaskade:
+  #
+  #   cloud-init-postgres.yml bearbeitet
+  #     -> proxmox_virtual_environment_file...data aendert sich
+  #       -> Datei-Ressource wird ersetzt -> NEUE Datei-ID
+  #         -> initialization.user_data_file_id aendert sich
+  #           -> ForceNew -> die Datenbank-VM wird zerstoert und neu gebaut
+  #
+  # Cloud-Init laeuft nur beim ERSTEN Boot; jede spaetere Aenderung ist fuer die
+  # laufende VM folgenlos. user_account ist write-only (Proxmox gibt es nie
+  # zurueck), erzeugt also bei JEDEM Plan erneut Replace-Druck.
+  #
+  # KONSEQUENZ: Terraform verwaltet diese beiden Attribute nicht mehr. Eine
+  # bewusste Neuerstellung geht weiterhin ueber `-replace=` — aber NUR mit
+  # vorherigem Proxmox-Snapshot UND geprueftem Datenbank-Dump.
+  lifecycle {
+    ignore_changes = [
+      initialization[0].user_data_file_id,
+      initialization[0].user_account,
+    ]
   }
 }

@@ -133,4 +133,42 @@ resource "proxmox_virtual_environment_vm" "infra_nodes" {
   provisioner "local-exec" {
     command = "ssh-keygen -R ${each.value.ip_vlan4} 2>/dev/null || true"
   }
+
+  # ==========================================================================
+  # 2026-08-12: SCHUTZ GEGEN UNGEWOLLTES REPLACE
+  # ==========================================================================
+  # Ohne diesen Block meldete `terraform plan` am 2026-08-12:
+  #   proxmox_virtual_environment_vm.infra_nodes["1"|"2"|"3"] must be replaced
+  # also destroy+create aller drei Swarm-Nodes — ausgeloest durch eine voellig
+  # harmlose Bearbeitung der Cloud-Init-Vorlage. Die Kaskade:
+  #
+  #   cloud-init-*.yml bearbeitet
+  #     -> proxmox_virtual_environment_file...data aendert sich
+  #       -> Datei-Ressource wird ersetzt -> NEUE Datei-ID
+  #         -> initialization.user_data_file_id aendert sich
+  #           -> und das ist ForceNew -> die VM wird zerstoert und neu gebaut
+  #
+  # Cloud-Init laeuft ausschliesslich beim ERSTEN Boot. Eine spaetere Aenderung
+  # ist fuer die laufende VM folgenlos und darf sie niemals ersetzen.
+  #
+  # user_account ist zusaetzlich write-only: Proxmox liefert Keys und Passwort
+  # nie zurueck, Terraform liest sie deshalb bei JEDEM Plan als "fehlt" und
+  # erzwingt Replace — ein Dauerzustand, kein einmaliger Drift.
+  #
+  # KONSEQUENZ: Terraform verwaltet diese beiden Attribute nicht mehr. Soll die
+  # Cloud-Init einer BESTEHENDEN VM wirklich neu angewandt werden, muss die VM
+  # bewusst per `terraform taint` bzw. `-replace=` ersetzt werden — mit Snapshot
+  # vorher (siehe Disaster-Recovery-Regel in .claude/CLAUDE.md).
+  # `clone` beschreibt ausschliesslich, WIE die VM einst erzeugt wurde, und ist
+  # fuer die laufende Instanz bedeutungslos. Im State fehlt der Block bei
+  # infra_nodes["2"] und ["3"] (anders als bei ["1"]) — Terraform wollte ihn
+  # deshalb nachtragen, und weil jedes clone-Attribut ForceNew ist, haette das
+  # beide Nodes zerstoert.
+  lifecycle {
+    ignore_changes = [
+      initialization[0].user_data_file_id,
+      initialization[0].user_account,
+      clone,
+    ]
+  }
 }
