@@ -1,5 +1,5 @@
 # =============================================================================
-# Frigate 0.17.1 Configuration — Production LXC with OpenVINO iGPU 
+# Frigate 0.17.2 Configuration — Production LXC with OpenVINO iGPU
 # =============================================================================
 #
 # ┌─ HOW ENVIRONMENT VARIABLE SUBSTITUTION WORKS ────────────────────────────┐
@@ -38,6 +38,11 @@
 #   Frigate+:
 #     FRIGATE_PLUS_API_KEY  — API token (format: id:secret)
 #     FRIGATE_PLUS_MODELID  — hex ID of the active custom model (see model.path below)
+#   Traefik TLS (REQUIRED — else cert renewal fails silently, see 2026-05-31):
+#     CF_DNS_API_TOKEN      — Cloudflare DNS-01 token for Let's Encrypt renewal,
+#                             same value as the Swarm secret traefik_dns_api_token.
+#                             Without it the Traefik sidecar can't renew the cert
+#                             (DNS-01 fails), frigate.hornung-bn.de expires → 503.
 #
 # Model-ID rotation workflow (when deploying a new Frigate+ model):
 #   1. Train/download new model from https://plus.frigate.video, copy its ID.
@@ -66,6 +71,74 @@ proxy:
     user: X-authentik-username
     role: Remote-Groups
   default_role: viewer
+
+# Diagnose-Logging fuer die Gesichtserkennung (2026-07-27).
+# Ohne das ist die Pipeline eine Blackbox — face.py loggt seine Abbruchgruende
+# ausschliesslich auf DEBUG ("Detected no faces for person object", "Detected face
+# that is smaller than the min_area", "No attributes to parse").
+# Wenn die Erkennung stabil laeuft: diesen Block wieder entfernen (er ist gespraechig).
+logger:
+  default: info
+  logs:
+    frigate.data_processing.real_time.face: debug
+
+# =============================================================================
+# go2rtc — Restream-Pattern (RTSP 8554 / WebRTC 8555)
+# =============================================================================
+# WARUM RESTREAM UND NICHT NUR ZUSAETZLICHE STREAMS:
+# go2rtc-Producer laufen PERMANENT, nicht on-demand (verifiziert 2026-07-25:
+# producers=1 bei consumers=0 direkt nach Restart). Ein go2rtc-Block, dessen
+# Streams parallel zu cameras.*.ffmpeg.inputs auf die Kamera zugreifen, erzeugt
+# also eine DRITTE Dauerverbindung pro Kamera. Deshalb greift hier NUR go2rtc auf
+# die Kameras zu, und Frigate bezieht detect+record von 127.0.0.1:8554.
+# Ergebnis: 2 Verbindungen pro Reolink (main+sub), 1 zur DoorBird — konstant,
+# unabhaengig davon wieviele Leute zuschauen.
+#
+# NAMENSKONVENTION — WICHTIG:
+# Der Stream, der EXAKT wie die Kamera heisst, ist immer der HA-taugliche.
+# Die frigate-hass-integration baut ihre URL als rtsp://<host>:8554/<kamera>,
+# wenn rtsp_url_template leer ist. Deshalb:
+#   garten   -> _sub  (der Main ist HEVC 4K -> Browser koennen das in WebRTC nicht)
+#   garage   -> _main (h264 1440p, browser-tauglich)
+#   doorbird -> der einzige Stream (h264 720p)
+# Der jeweils andere Stream bekommt ein Suffix und wird nur von Frigate genutzt.
+#
+# Gemessene Stream-Eigenschaften (2026-07-26):
+#   garten   _main: hevc 3840x2160 +aac | _sub: h264 640x360 +aac
+#   garage   _main: h264 2560x1440 +aac | _sub: h264 640x360 +aac
+#   doorbird /mpeg/media.amp: h264 1280x720, KEIN Audio
+# =============================================================================
+go2rtc:
+  streams:
+    # --- garten (Reolink CX810) ---
+    # HA + detect bekommen _sub; _main ist HEVC 4K und nur fuer die Aufnahme.
+    # "garten" = Substream, ausschliesslich fuer HA-Live-View. Der Hauptstream ist
+    # HEVC 4K -- das kann kein Browser in WebRTC, deshalb bleibt der Sub hier.
+    garten:
+      - "rtsp://{FRIGATE_GARTEN_USER}:{FRIGATE_GARTEN_PASSWORD}@{FRIGATE_GARTEN_IP}/h264Preview_01_sub"
+    # "garten_main" traegt seit 2026-07-27 detect UND record (vorher nur record,
+    # daher der alte Name garten_record).
+    garten_main:
+      - "rtsp://{FRIGATE_GARTEN_USER}:{FRIGATE_GARTEN_PASSWORD}@{FRIGATE_GARTEN_IP}/h264Preview_01_main"
+
+    # --- garage (Reolink E1 Pro) ---
+    # _main ist h264 -> direkt HA-tauglich; _sub nur fuer detect.
+    # garage nutzt NUR noch den Hauptstream: detect + record + HA ziehen alle
+    # daraus. Der Substream ist raus (2026-07-27), weil detect fuer die
+    # Gesichtserkennung auf 2560x1440 laeuft -- ein zusaetzlicher _sub-Producer
+    # waere eine dritte Dauerverbindung zur Kamera ohne Abnehmer.
+    garage:
+      - "rtsp://{FRIGATE_GARAGE_USER}:{FRIGATE_GARAGE_PASSWORD}@{FRIGATE_GARAGE_IP}/h264Preview_01_main"
+
+    # --- doorbird (D2101V) ---
+    # Liefert natives H.264 ueber RTSP (2026-07-26 verifiziert). Das ersetzt den
+    # bisherigen MJPEG-Weg samt libx264-Transcode in output_args -> spart CPU.
+    doorbird:
+      - "rtsp://{FRIGATE_DOORBIRD_USER}:{FRIGATE_DOORBIRD_PASSWORD}@{FRIGATE_DOORBIRD_URL}/mpeg/media.amp"
+  webrtc:
+    candidates:
+      - 192.168.4.70:8555   # LAN-Direktkandidat — ohne diesen haengt WebRTC am STUN-Umweg
+      - stun:8555
 
 mqtt:
   enabled: true
@@ -96,6 +169,29 @@ ffmpeg:
 
 record:
   enabled: true
+  # 2026-08-15: Abgleich Datenbank <-> Dateisystem, beide Richtungen.
+  # Anlass: 32 Tage Recordings (28.05.-28.06., ~520 GB) lagen als Waisen auf
+  # /volume1/frigate — Dateien vorhanden, DB-Eintrag weg. Signatur eines am
+  # 28.06. abgebrochenen Retention-Laufs (-233 GB an einem Tag). Frigates
+  # regulaerer Cleanup iteriert ueber die DB; was dort fehlt, wird nie
+  # betrachtet und bleibt liegen, bis das Volume voll ist.
+  #
+  # sync_recordings raeumt beide Richtungen (frigate/record/util.py):
+  #   delete_db_entries_without_file() -> DB-Eintrag ohne Datei
+  #   delete_files_without_db_entry()  -> Datei ohne DB-Eintrag  <- unser Fall
+  #
+  # Drei Eigenschaften, die den Betrieb bestimmen:
+  #  1. Der VOLLE Abgleich laeuft nur beim Start (sync_recordings(limited=False)).
+  #     Periodisch laeuft limited=True und sieht nur die letzten 36 Stunden.
+  #     Alte Waisen erfasst also ausschliesslich ein Container-Neustart.
+  #  2. Beide Richtungen brechen bei >50% Abweichung ab, und der DB-Schritt
+  #     gatet den Datei-Schritt. Deshalb wurden die 520 GB vorher manuell
+  #     entfernt: mit 32 von 63 Tagen waere der Sync in die Bremse gelaufen.
+  #  3. Der Datei-Abort loggt nur mit logger.debug — bei Log-Level info also
+  #     unsichtbar. Ein fehlgeschlagener Sync sieht aus wie ein erfolgreicher.
+  #     Absicherung dagegen: Alert frigate-recordings-disk-* auf
+  #     frigate_storage_free_bytes (siehe monitoring/alerting/alert-rules.yml).
+  sync_recordings: true
   # Continuous recording retention (all frames, 24/7)
   retain:
     days: 5
@@ -132,7 +228,23 @@ objects:
   track:
     # People
     - person
-    - face
+    # ⚠️ "face" gehoert hier NICHT rein — das schaltet die Gesichtserkennung ab.
+    # Frigate entscheidet per
+    #   requires_face_detection = "face" not in objects.all_objects
+    # (data_processing/real_time/face.py:56) welchen Detektor es nutzt:
+    #   face IN track  -> NUR der Objektdetektor liefert Gesichter (CV2 aus)
+    #   face NICHT drin -> CV2 YuNet laeuft auf dem Person-Crop
+    # Mit face in track war die Erkennung faktisch tot: 2123 person-Events in
+    # 30 Tagen, KEIN einziges mit face-Attribut (verifiziert 2026-07-27).
+    # Grund: der Frigate+-Detektor laeuft mit 320x320 Input (640x640 ist nicht
+    # drin — der Detektor ist bei 320px schon zu 57% ausgelastet, 640px braeuchte
+    # ~200%). Bei 320px ist ein Gesicht zu klein fuer den harten min_score 0.7,
+    # den Frigate fuer ALLE Attribut-Labels erzwingt (config.py:434-439, bumpt
+    # sogar explizit gesetzte 0.5 auf 0.7 hoch).
+    # YuNet arbeitet dagegen auf dem Person-Crop in voller detect-Aufloesung
+    # (1280x720) und ist ein spezialisierter Gesichtsdetektor. Nebeneffekt: die
+    # doorbird-Objektmaske (linke 46%, Glas-Spiegelung) greift dann nicht mehr
+    # fuer Gesichter — sie hatte auch den face-Filter mitmaskiert.
 
     # Vehicles
     - car
@@ -242,8 +354,24 @@ semantic_search:
 
 face_recognition:
   enabled: true
-  model_size: large
-  min_area: 80
+  model_size: large          # ArcFace, laeuft auf der iGPU (small = FaceNet/CPU)
+  # Mindestflaeche in px^2, bevor die Erkennung laeuft. Gilt fuer ALLE Kameras --
+  # keine Per-Kamera-Overrides noetig, seit alle drei auf ausreichend aufloesenden
+  # detect-Streams laufen. Gemessen am 2026-07-27 (YuNet auf echten Aufnahmen,
+  # Werte bereits auf Originalgroesse zurueckskaliert wie Frigate es tut):
+  #   garage  2560x1440 -> 17490 px^2 (106x165)  bester gemessener Fall
+  #   doorbird 1280x720 ->  5280 px^2 (60x88)    funktioniert im Alltag
+  #   garten  3840x2160 ->  1800-4640 px^2       je nach Distanz
+  #   garten   640x360  ->    52 px^2            der alte Substream, chancenlos
+  # 1500 (~39x39) laesst gute garten-Frames durch und filtert dessen schlechteste
+  # (450-775 px^2) sowie den Substream-Matsch. Der Frigate-Default waere 500.
+  # ArcFace rechnet intern auf 112x112 (= 12544 px^2) hoch -- alles darunter wird
+  # interpoliert, und ein Fehltreffer ist schaedlicher als kein Treffer.
+  min_area: 1500
+  # Schwelle des CV2-YuNet-Detektors (greift nur, wenn face NICHT in objects.track
+  # steht — siehe Kommentar dort). Default 0.7; auf 0.6 gesenkt, weil die DoorBird
+  # laengs der Fassade schaut und Gesichter oft im Profil statt frontal zeigt.
+  detection_threshold: 0.6
   recognition_threshold: 0.7
 
 lpr:
@@ -269,15 +397,16 @@ classification:
 cameras:
   doorbird:
     ffmpeg:
-      # DoorBird delivers MJPEG — disable VAAPI hwaccel (incompatible with MJPEG input)
-      hwaccel_args: []
+      # Quelle ist jetzt der go2rtc-Restream (natives H.264 via rtsp /mpeg/media.amp).
+      # Vorher: MJPEG ueber http + libx264-Transcode fuer die Aufnahme — beides
+      # entfaellt, weil die DoorBird H.264 direkt liefert. Spart einen Dauer-Encode.
       inputs:
-        - path: "http://{FRIGATE_DOORBIRD_USER}:{FRIGATE_DOORBIRD_PASSWORD}@{FRIGATE_DOORBIRD_URL}/bha-api/video.cgi"
-          input_args: -f mpjpeg
+        - path: rtsp://127.0.0.1:8554/doorbird
+          input_args: preset-rtsp-restream
           roles: [detect, record]
-      # Transcode MJPEG → H.264 for playable recordings (pix_fmt fix for yuvj422p)
+      # -c copy -an: Quelle ist bereits H.264 und fuehrt keinen Audio-Stream.
       output_args:
-        record: -f segment -segment_time 10 -segment_format mp4 -reset_timestamps 1 -strftime 1 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -an
+        record: preset-record-generic
     detect:
       width: 1280
       height: 720
@@ -298,11 +427,41 @@ cameras:
 #Secret updated
   garten:
     ffmpeg:
+      # detect auf dem 640x360-Substream, record auf dem 4K-Hauptstream.
+      #
+      # HOEHERE detect-AUFLOESUNG GETESTET UND VERWORFEN (2026-07-27):
+      #   3840x2160 @5fps -> 1,9 von 5 fps verworfen
+      #   3840x2160 @3fps -> 1,9 von 3 verworfen (nur noch 1,1 verarbeitet!)
+      #   2560x1440 @5fps -> 2,5 fps verworfen, System bei 1% idle, und auch
+      #                      doorbird fing an Frames zu verlieren
+      # Die fps-Senkung half NICHT, sie verschlimmerte es sogar: der Engpass ist
+      # die Frame-GROESSE, nicht die Rate. Motion-Resize (INTER_NEAREST aus
+      # Millionen Pixeln auf 177x100), YUV-Konvertierung und shm-Kopien skalieren
+      # mit der Flaeche. Der Detektor selbst blieb durchweg bei 30-31 ms.
       inputs:
-        - path: "rtsp://{FRIGATE_GARTEN_USER}:{FRIGATE_GARTEN_PASSWORD}@{FRIGATE_GARTEN_IP}/h264Preview_01_sub"
+        - path: rtsp://127.0.0.1:8554/garten
+          input_args: preset-rtsp-restream
           roles: [detect]
-        - path: "rtsp://{FRIGATE_GARTEN_USER}:{FRIGATE_GARTEN_PASSWORD}@{FRIGATE_GARTEN_IP}/h264Preview_01_main"
+        - path: rtsp://127.0.0.1:8554/garten_main
+          input_args: preset-rtsp-restream
           roles: [record]
+    face_recognition:
+      # AUS -- nicht weil es die Kamera nicht koennte, sondern weil die Host-CPU
+      # es nicht hergibt. Gemessen waeren bei 4K-detect 1800-4640 px^2 grosse
+      # Gesichter drin gewesen, also durchaus brauchbar. Es scheitert daran, dass
+      # pve02 6 physische Cores hat und 17 an Gaeste zugeteilt sind: Frigate teilt
+      # sie sich mit Home Assistant (vm:100), postgres-prod (vm:4600) und
+      # docker-infra-2 (vm:4201). Zum Vergleich pve01 load 1,3 / pve03 load 1,6
+      # gegen pve02 4,6-9,4. Hoehere detect-Aufloesung hier zieht CPU von der
+      # Hausautomation und der Produktionsdatenbank ab.
+      # Auf dem Substream waeren es ~52 px^2 -- eingeschaltet wuerde YuNet nur
+      # sinnlos auf jedem Person-Crop rechnen.
+      #
+      # WAS ES AENDERN WUERDE (in dieser Reihenfolge):
+      #   1. Frigate zurueck auf pve03 (iGPU-Passthrough dort in Terraform, load 1,6)
+      #   2. garten kameraseitig von 25 auf 15 fps -> 40% weniger Decode
+      #   3. Motion-Masken auf die Vegetation -> weniger detection_fps
+      enabled: false
     objects:
       filters:
         all:
@@ -312,8 +471,28 @@ cameras:
 
   garage:
     ffmpeg:
+      # detect UND record vom Hauptstream (h264 2560x1440 @15fps) -- der
+      # 640x360-Substream ist raus, damit sinkt die Zahl der Dauerverbindungen
+      # zur Kamera sogar von 2 auf 1.
+      # Kosten (gemessen, ffmpeg -benchmark/VAAPI): 14,9 ms je dekodiertem Frame.
+      # Achtung: detect.fps senkt die DEKODIERUNG nicht -- der fps-Filter sitzt
+      # hinter dem Decoder, ffmpeg dekodiert alle 15 fps der Quelle. Macht ~22%
+      # eines Cores. Skalierung + hwdownload laufen per VAAPI auf der iGPU.
       inputs:
-        - path: "rtsp://{FRIGATE_GARAGE_USER}:{FRIGATE_GARAGE_PASSWORD}@{FRIGATE_GARAGE_IP}/h264Preview_01_sub"
-          roles: [detect]
-        - path: "rtsp://{FRIGATE_GARAGE_USER}:{FRIGATE_GARAGE_PASSWORD}@{FRIGATE_GARAGE_IP}/h264Preview_01_main"
-          roles: [record]
+        - path: rtsp://127.0.0.1:8554/garage
+          input_args: preset-rtsp-restream
+          roles: [detect, record]
+    detect:
+      # Quelle bleibt 2560x1440, VAAPI skaliert auf der iGPU auf 1080p -- nur
+      # dieses Frame kommt per hwdownload in den RAM (3,1 statt 5,5 MB, also 44%
+      # weniger Speicherverkehr je Frame).
+      # Bei vollen 1440p verwarf garage waehrend Aktivitaetsspitzen 2,3 fps bei
+      # 91% Detektorlast. Auf pve02 ist dafuer kein Spielraum: 6 physische Cores,
+      # 17 an Gaeste zugeteilt, geteilt mit Home Assistant und postgres-prod.
+      # Die Gesichter bleiben trotzdem gross: gemessen 17490 px^2 bei 1440p, bei
+      # 1080p also noch ~9838 px^2. doorbird funktioniert mit 5280 px^2, und die
+      # Community nennt 5000-20000 px^2 als den Bereich, in dem es zuverlaessig
+      # laeuft. Hier ist also Reserve, nicht Knappheit.
+      width: 1920
+      height: 1080
+      fps: 5

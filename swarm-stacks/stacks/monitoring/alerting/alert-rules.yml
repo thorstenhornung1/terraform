@@ -1553,6 +1553,103 @@ groups:
           summary: "OOM-kill on pve03 in last 10min — likely Frigate LXC 4502"
           description: "node_vmstat_oom_kill increased. Frühwarnung: Frigate-Container wurde vom Kernel gekillt. Check 'pct exec 4502 -- dmesg | tail' für killed processes + anon-rss values. Bei wiederholtem Auftreten: memory/swap im LXC weiter anheben (aktuell 12 GiB + 4 GiB swap)."
 
+      # --- Recordings-Volume läuft voll -------------------------------------
+      # 2026-08-15: Bis hierher gab es KEINEN Alert auf den Füllstand von
+      # /volume1 (Synology, 18 TB). Aufgefallen ist das nur zufällig: 32 Tage
+      # verwaiste Recordings (28.05.-28.06., ~520 GB) hatten das Volume auf
+      # 463 GB Restplatz gedrückt — 2,5%. Auf demselben Volume liegen Frigate,
+      # die PostgreSQL-Backups, der Mail-Import und alle Home-Verzeichnisse;
+      # läuft es voll, fällt das alles gleichzeitig aus.
+      #
+      # Metrik: frigate_storage_free_bytes{storage="/media/frigate/recordings"}
+      # misst das gesamte volume1, nicht nur Frigates Anteil. Das ist gewollt —
+      # der Alert warnt vor jedem Vollaufen, unabhängig vom Verursacher.
+      #
+      # Schwellen bei record.retain.mode=all (~100 GB/Tag Durchsatz):
+      #   warning  500 GB -> ~5 Tage Vorlauf   critical 250 GB -> ~2,5 Tage
+      # Der Steady State von Frigate selbst liegt bei ~500 GB (5 Tage
+      # continuous + alerts-Segmente); nach dem Cleanup sind 1,1 TB frei.
+      #
+      # Dieser Alert ist zugleich das Sicherheitsnetz für record.sync_recordings:
+      # dessen Datei-Abort bei >50% Abweichung loggt nur mit logger.debug und
+      # ist damit unsichtbar. Sammeln sich erneut Waisen an, sieht man es hier.
+      - uid: frigate-recordings-disk-warning
+        title: Frigate recordings volume filling up
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                min_over_time(frigate_storage_free_bytes{storage="/media/frigate/recordings"}[10m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [536870912000]   # 500 GiB
+              refId: C
+        for: 30m
+        # noData: frigate-down deckt den Metrik-Ausfall bereits ab -> hier OK,
+        # sonst doppelter Alarm beim selben Vorfall.
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Synology volume1 unter 500 GB frei (Frigate-Recordings)"
+          description: "Bei mode=all schreibt Frigate ~100 GB/Tag — das reicht noch etwa 5 Tage. Auf volume1 liegen auch PostgreSQL-Backups, Mail-Import und alle Home-Verzeichnisse. Prüfen: 'ssh root@192.168.4.70 df -h /mnt/frigate-recordings' und ob Ordner älter als 31 Tage existieren (= Waisen, siehe record.sync_recordings in config.yml)."
+
+      - uid: frigate-recordings-disk-critical
+        title: Frigate recordings volume critically full
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                min_over_time(frigate_storage_free_bytes{storage="/media/frigate/recordings"}[10m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [268435456000]   # 250 GiB
+              refId: C
+        for: 10m
+        # noData hier Alerting: fehlt die Serie bei laufendem Frigate, ist der
+        # NFS-Mount weg — Aufzeichnung läuft dann ins Leere, ohne dass
+        # frigate-down oder camera-fps etwas davon mitbekommen.
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "Synology volume1 unter 250 GB frei — ~2,5 Tage bis voll"
+          description: "Sofort handeln: volume1 trägt Frigate, PostgreSQL-Backups, Mail-Import und alle Home-Verzeichnisse. Kurzfristig record.retain.days senken oder Altlasten entfernen (/volume1/docker: dump 185 GB, syslog 127 GB, immich-app 88 GB). Bei noData statt Wert: NFS-Mount auf LXC 4502 prüfen — Frigate meldet sich dann weiter als 'up', schreibt aber nichts."
+
   # ===========================================================================
   # APPLICATIONS — Web-App-Verfügbarkeit (Blackbox)
   # ===========================================================================
