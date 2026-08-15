@@ -1,0 +1,228 @@
+# =============================================================================
+# Wallos Stack — Self-Hosted Abo-/Subscription-Tracker
+# =============================================================================
+# Access: https://abo.hornung-bn.de (intern, DNS-01-Zertifikat)
+# SSO:    Authentik OIDC (auth.hornung-bn.de), Discovery-basiert
+#
+# ⚠️ STORAGE — bewusste Abweichung vom CephFS-Standard:
+#   Wallos nutzt SQLite. SQLite im WAL-Modus mmap()t die -shm-Datei; upstream
+#   ist eindeutig: "WAL does not work over a network filesystem". Auf CephFS
+#   drohen Timeouts und Korruption (siehe CLAUDE.md, Storage-Wahl pro Workload).
+#
+#   Gewählt wurde deshalb ein LOKALES Verzeichnis auf docker-infra-2
+#   (/srv/data/wallos) statt CephFS — und bewusst KEIN Ceph-RBD-Volume:
+#   der volle RBD-Failover-Apparat (systemd map/mount + Watchdog-Timer auf
+#   drei Nodes, Label-Verschiebung) ist für eine Abo-Verwaltung überzogen.
+#
+#   Preis dieser Entscheidung: Fällt docker-infra-2 aus, ist Wallos offline
+#   und die Daten sind bis zur Rückkehr des Nodes nicht erreichbar. Abgefedert
+#   wird das vom Backup-Sidecar (siehe unten), der konsistente SQLite-Kopien
+#   nach CephFS schreibt — von dort erfasst sie das PBS-Backup.
+#
+# Deployment-Voraussetzungen:
+#   1. Verzeichnisse auf docker-infra-2:
+#        mkdir -p /srv/data/wallos/{db,logos}
+#      (Wallos chownt sie beim Start selbst auf UID/GID 82 = www-data)
+#   2. CephFS-Backupziel:
+#        mkdir -p /mnt/cephfs/swarm-state/stack-wallos/db-backup
+#   3. DNS: abo.hornung-bn.de -> Traefik-VIP (Technitium, NUR auf dns1)
+#   4. Authentik: OAuth2/OIDC-Provider + Application, Slug "wallos",
+#      Redirect-URI https://abo.hornung-bn.de/
+#   5. Docker Secrets über die Portainer-UI (NICHT per CLI):
+#        wallos_oidc_client_id, wallos_oidc_client_secret
+#      Fehlen sie, startet Wallos trotzdem — dann mit lokalem Login statt SSO.
+# =============================================================================
+
+version: '3.8'
+
+services:
+  wallos:
+    image: bellamy/wallos:5.4.2
+    hostname: wallos
+    networks:
+      - traefik_public
+    volumes:
+      # Lokal auf docker-infra-2 — NICHT CephFS (SQLite/WAL, siehe Kopf)
+      - /srv/data/wallos/db:/var/www/html/db
+      - /srv/data/wallos/logos:/var/www/html/images/uploads/logos
+    secrets:
+      - wallos_oidc_client_id
+      - wallos_oidc_client_secret
+    # Der Wrapper übersetzt die Docker Secrets in die von Wallos erwarteten
+    # Env-Variablen und schaltet OIDC ab, wenn sie fehlen. Original-Entrypoint
+    # des Images ist ["dumb-init","--"] mit Cmd /var/www/html/startup.sh —
+    # der Wrapper ruft ihn am Ende per exec auf, damit Signale durchkommen.
+    entrypoint: ["/bin/sh", "/entrypoint-wrapper.sh"]
+    configs:
+      - source: entrypoint_wrapper_${ENTRYPOINT_WRAPPER_HASH:-latest}
+        target: /entrypoint-wrapper.sh
+        mode: 0755
+    environment:
+      TZ: "Europe/Berlin"
+      # --- OIDC via Authentik ---------------------------------------------
+      # Nur der Issuer wird gesetzt; Wallos holt authorization/token/userinfo
+      # selbst aus $ISSUER/.well-known/openid-configuration
+      # (includes/oidc_settings.php:99).
+      # ⚠️ OHNE Slash am Ende — Wallos hängt "/.well-known/..." direkt an,
+      #    ein Trailing-Slash ergäbe einen doppelten und damit einen 404.
+      OIDC_ISSUER: "https://auth.hornung-bn.de/application/o/wallos"
+      OIDC_PROVIDER_NAME: "Authentik"
+      # Callback landet auf index.php -> checksession.php, das den Flow an
+      # ?code=&state= erkennt (includes/checksession.php:15).
+      OIDC_REDIRECT_URL: "https://abo.hornung-bn.de/"
+      OIDC_LOGOUT_URL: "https://auth.hornung-bn.de/application/o/wallos/end-session/"
+      OIDC_USER_IDENTIFIER: "preferred_username"
+      OIDC_SCOPES: "openid profile email"
+      OIDC_AUTO_CREATE_USER: "true"
+      # Passwort-Login bleibt bewusst aktiv: Wallos legt den ersten Benutzer
+      # über die Registrierung an, und ein lokaler Notzugang ist die Rückfall-
+      # ebene, wenn Authentik ausfällt. Nach dem ersten SSO-Login kann das
+      # auf "true" gezogen werden.
+      OIDC_DISABLE_PASSWORD_LOGIN: "false"
+      # Wallos blockt per SSRF-Schutz Requests in private Netze — ohne diesen
+      # Eintrag scheitert die OIDC-Discovery gegen den internen Authentik
+      # (includes/ssrf_helper.php). Env überschreibt die DB-Allowlist komplett.
+      SSRF_ALLOWLIST: "auth.hornung-bn.de"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          # Daten liegen lokal auf diesem Node — der Constraint ist NICHT
+          # optional, sondern die Zuordnung zum Bind-Mount. Beim Verschieben
+          # der Daten muss diese Zeile mitwandern.
+          - node.hostname == docker-infra-2
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 384M
+        reservations:
+          # Der Swarm-Scheduler kennt NUR reservations — zu niedrig angesetzt
+          # führt systematisch zur Überbuchung des Nodes (CLAUDE.md).
+          cpus: '0.05'
+          memory: 96M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        # stop-first ist bei SQLite PFLICHT: start-first ließe zwei Container
+        # gleichzeitig auf dieselbe wallos.db schreiben — der direkte Weg in
+        # eine korrupte Datenbank. Kurze Downtime beim Deploy ist der Preis.
+        order: stop-first
+        # pause statt rollback: Wallos fährt beim Start DB-Migrationen aus
+        # (migrations/). Ein Rollback stellt das alte Image wieder her, nie
+        # das alte Schema — genau das stille Mismatch, das swarm-stacks#90
+        # bei Vaultwarden begründet hat.
+        failure_action: pause
+        # monitor > healthcheck.start_period (60s), sonst stiller Rollback
+        # (reisekosten-v2.10.1-Falle).
+        monitor: 90s
+      labels:
+        # --- Traefik (v3.6+: traefik.swarm.*) ---
+        - traefik.swarm.network=traefik_public
+        - traefik.enable=true
+        - "traefik.http.routers.wallos.rule=Host(`abo.hornung-bn.de`)"
+        - traefik.http.routers.wallos.entrypoints=websecure
+        - traefik.http.routers.wallos.tls=true
+        - traefik.http.routers.wallos.tls.certresolver=dns
+        - traefik.http.services.wallos.loadbalancer.server.port=80
+        # --- HTTP -> HTTPS ---
+        - "traefik.http.routers.wallos-http.rule=Host(`abo.hornung-bn.de`)"
+        - traefik.http.routers.wallos-http.entrypoints=web
+        - traefik.http.routers.wallos-http.middlewares=wallos-redirect
+        - traefik.http.middlewares.wallos-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.wallos-redirect.redirectscheme.permanent=true
+    healthcheck:
+      # health.php im Image gibt BEDINGUNGSLOS 200/OK zurück (echo 'OK'; exit) —
+      # es beweist nur, dass nginx + php-fpm antworten, nicht dass die App
+      # arbeitsfähig ist. Deshalb zusätzlich ein Lesetest auf die SQLite-DB.
+      # Der DB-Teil ist bewusst tolerant, solange die Datei fehlt: Beim aller-
+      # ersten Start legt Wallos sie erst über die Migrationen an, ein harter
+      # Check würde den initialen Deploy in failure_action:pause laufen lassen.
+      test:
+        - "CMD-SHELL"
+        - "wget -q -O- http://127.0.0.1/health.php >/dev/null 2>&1 && { [ ! -f /var/www/html/db/wallos.db ] || sqlite3 /var/www/html/db/wallos.db 'SELECT 1;' >/dev/null 2>&1; }"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Backup-Sidecar
+  # ---------------------------------------------------------------------------
+  # Zieht per `sqlite3 .backup` konsistente Kopien der wallos.db nach CephFS.
+  # Von dort erfasst sie das PBS-Backup — damit überlebt der Datenbestand den
+  # Verlust von docker-infra-2, auf dem die produktive DB lokal liegt.
+  #
+  # Nutzt bewusst DASSELBE Image: bellamy/wallos bringt /usr/bin/sqlite3 bereits
+  # mit. Kein Fremd-Image, kein `apk add` zur Laufzeit (das bräuchte Internet
+  # bei jedem Neustart und wäre der fragilste Teil der Backup-Kette).
+  wallos-backup:
+    image: bellamy/wallos:5.4.2
+    hostname: wallos-backup
+    # startup.sh MUSS umgangen werden — sonst liefe hier ein zweiter nginx +
+    # crond auf derselben SQLite-Datei.
+    entrypoint: ["/bin/sh", "/backup-sidecar.sh"]
+    volumes:
+      # Read-write nötig: sqlite3 legt im WAL-Modus die -shm-Datei an, ein
+      # read-only-Mount ließe `.backup` an einer laufenden DB scheitern.
+      - /srv/data/wallos/db:/data/db
+      - /mnt/cephfs/swarm-state/stack-wallos/db-backup:/backup
+    configs:
+      - source: backup_sidecar_${BACKUP_SIDECAR_HASH:-latest}
+        target: /backup-sidecar.sh
+        mode: 0755
+    environment:
+      TZ: "Europe/Berlin"
+      BACKUP_INTERVAL_SECONDS: "21600"   # alle 6 h
+      BACKUP_RETENTION_DAYS: "14"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          # Muss auf demselben Node laufen wie wallos — er greift auf das
+          # gleiche lokale Verzeichnis zu.
+          - node.hostname == docker-infra-2
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.01'
+          memory: 16M
+      restart_policy:
+        condition: any
+        delay: 30s
+        window: 120s
+      update_config:
+        parallelism: 1
+        order: stop-first
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  traefik_public:
+    external: true
+
+# =============================================================================
+# CONFIGS
+# =============================================================================
+configs:
+  entrypoint_wrapper_${ENTRYPOINT_WRAPPER_HASH:-latest}:
+    file: ./entrypoint-wrapper.sh
+  backup_sidecar_${BACKUP_SIDECAR_HASH:-latest}:
+    file: ./backup-sidecar.sh
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  wallos_oidc_client_id:
+    external: true
+  wallos_oidc_client_secret:
+    external: true
