@@ -142,3 +142,42 @@ ssh root@192.168.4.40 "docker service scale wallos_wallos=1"
 - **Der Placement-Constraint ist keine Optimierung**, sondern die Zuordnung zum
   lokalen Bind-Mount. Wer die Daten verschiebt, muss `node.hostname` in
   **beiden** Services mitziehen (App und Sidecar).
+- **Der Sidecar muss den Healthcheck des Images abschalten** (`test: ["NONE"]`).
+  `bellamy/wallos` bringt `HEALTHCHECK curl -fsS http://127.0.0.1/health.php`
+  mit; ein Sidecar aus demselben Image **erbt ihn**, hat aber keinen nginx.
+  Folge (beobachtet beim Erst-Deploy am 2026-08-16): Exit 7, nach drei
+  Versuchen unhealthy, Swarm startet endlos neu — und der GitOps-Job bleibt
+  im Konvergenz-Gate hängen, obwohl der Sidecar seine Backups korrekt zog.
+  Der Fehler ist besonders tückisch, weil `docker service logs` beim
+  dauernd neu gestarteten Task leer bleibt: Man sieht die funktionierende
+  Arbeit erst über `docker logs <container-id>` direkt auf dem Node.
+- **`login.php` leitet auf `registration.php` um, solange kein Benutzer
+  existiert.** Der OIDC-Button erscheint deshalb erst nach der Anlage des
+  ersten Kontos — die Registrierungsseite selbst bietet keinen SSO-Weg.
+
+## Admin-Rechte
+
+Wallos hat **kein Rollenmodell**. `includes/header.php:54`:
+
+```php
+$isAdmin = $_SESSION['userId'] == 1;
+```
+
+Admin ist schlicht **Benutzer-ID 1**, der zuerst angelegte Account. Eine
+Zuweisung über Authentik-Gruppen ist nicht möglich — der OIDC-Callback wertet
+Gruppen gar nicht aus, er liest nur `sub`, `email`, `email_verified`,
+`preferred_username` und `name`.
+
+**Der Admin kann sich trotzdem per SSO anmelden:** Der Callback verknüpft einen
+bestehenden Account über die **E-Mail-Adresse** und setzt dabei `oidc_sub`
+(`includes/oidc/handle_oidc_callback.php`). Benutzer 1 behält seine Rechte.
+
+⚠️ **Der erste Login entscheidet, wer Admin wird.** Mit
+`OIDC_AUTO_CREATE_USER=true` bekommt derjenige ID 1, der sich als Erster
+anmeldet — auch per SSO. Deshalb zuerst selbst registrieren, mit derselben
+E-Mail wie in Authentik.
+
+Beim Verknüpfen greift `require_email_verified` (Default an). Liefert Authentik
+kein `email_verified: true`, bricht der Login mit `?error=oidc_email_not_verified`
+ab; Stellschraube wäre `OIDC_REQUIRE_EMAIL_VERIFIED`, die man aber erst
+anfassen sollte, wenn der Fehler wirklich auftritt.

@@ -179,6 +179,15 @@ services:
       TZ: "Europe/Berlin"
       BACKUP_INTERVAL_SECONDS: "21600"   # alle 6 h
       BACKUP_RETENTION_DAYS: "14"
+    # ⚠️ Den geerbten Healthcheck des Images ABSCHALTEN. bellamy/wallos bringt
+    # `HEALTHCHECK curl -fsS http://127.0.0.1/health.php` mit — im Sidecar läuft
+    # aber kein nginx, der darauf antworten könnte. Ohne dieses NONE scheitert
+    # der Check mit Exit 7, der Task wird nach 3 Versuchen unhealthy, Swarm
+    # startet ihn neu, und der Service konvergiert nie (der GitOps-Deploy
+    # bleibt dabei im Konvergenz-Gate hängen). Beobachtet beim Erst-Deploy
+    # am 2026-08-16: Der Sidecar sicherte korrekt und wurde trotzdem getötet.
+    healthcheck:
+      test: ["NONE"]
     deploy:
       mode: replicated
       replicas: 1
