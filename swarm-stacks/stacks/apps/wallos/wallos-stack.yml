@@ -74,6 +74,27 @@ services:
       OIDC_USER_IDENTIFIER: "preferred_username"
       OIDC_SCOPES: "openid profile email"
       OIDC_AUTO_CREATE_USER: "true"
+      # Muss auf false — sonst scheitert JEDER SSO-Login mit
+      # "?error=oidc_email_not_verified" (verifiziert am 2026-08-16).
+      #
+      # Ursache liegt NICHT bei Wallos: Das Standard-Scope-Mapping dieser
+      # Authentik-Version ("authentik default OAuth Mapping: OpenID 'email'")
+      # liefert den Wert hart verdrahtet als False:
+      #     return { "email": request.user.email, "email_verified": False }
+      # Authentik führt selbst keine E-Mail-Verifizierung durch und meldet das
+      # ehrlich; Wallos prüft ebenso korrekt. Beide Seiten verhalten sich
+      # richtig — die Vertrauensentscheidung muss trotzdem jemand treffen.
+      #
+      # Bewusst hier statt in Authentik: Das Mapping ist das GETEILTE Standard-
+      # Mapping aller OIDC-Anwendungen (Paperless, Immich, Taiga, …). Ein True
+      # dort würde eine Verifizierung behaupten, die nie stattfand, und zwar
+      # für jeden Consumer gleichzeitig. Diese Zeile wirkt nur auf Wallos.
+      #
+      # Das Risiko, das der Schutz adressiert, beschreibt Wallos selbst als
+      # "account takeover […] at a permissive or attacker-controlled IdP".
+      # Der IdP hier ist das eigene Authentik im eigenen Netz — das Szenario
+      # existiert in diesem Setup nicht.
+      OIDC_REQUIRE_EMAIL_VERIFIED: "false"
       # Passwort-Login bleibt bewusst aktiv: Wallos legt den ersten Benutzer
       # über die Registrierung an, und ein lokaler Notzugang ist die Rückfall-
       # ebene, wenn Authentik ausfällt. Nach dem ersten SSO-Login kann das

@@ -177,7 +177,37 @@ bestehenden Account über die **E-Mail-Adresse** und setzt dabei `oidc_sub`
 anmeldet — auch per SSO. Deshalb zuerst selbst registrieren, mit derselben
 E-Mail wie in Authentik.
 
-Beim Verknüpfen greift `require_email_verified` (Default an). Liefert Authentik
-kein `email_verified: true`, bricht der Login mit `?error=oidc_email_not_verified`
-ab; Stellschraube wäre `OIDC_REQUIRE_EMAIL_VERIFIED`, die man aber erst
-anfassen sollte, wenn der Fehler wirklich auftritt.
+### `OIDC_REQUIRE_EMAIL_VERIFIED=false` — warum das nötig ist
+
+Beim ersten SSO-Versuch am 2026-08-16 scheiterte der Login mit
+*"Ihre E-Mail-Adresse wurde vom Identitätsanbieter nicht verifiziert"*
+(`?error=oidc_email_not_verified`).
+
+Ursache ist das **Standard-Scope-Mapping dieser Authentik-Version**
+(*authentik default OAuth Mapping: OpenID 'email'*), das den Wert hart
+verdrahtet liefert:
+
+```python
+return {
+    "email": request.user.email,
+    "email_verified": False
+}
+```
+
+Authentik führt selbst keine E-Mail-Verifizierung durch und meldet das ehrlich;
+Wallos prüft ebenso korrekt. Beide Seiten verhalten sich richtig — die
+Vertrauensentscheidung muss trotzdem jemand treffen.
+
+**Sie wurde bewusst auf der Wallos-Seite getroffen, nicht in Authentik.** Das
+Mapping ist das *geteilte* Standard-Mapping aller OIDC-Anwendungen (Paperless,
+Immich, Taiga …). Ein `True` dort würde eine Verifizierung behaupten, die nie
+stattgefunden hat, und das für jeden Consumer gleichzeitig. Die Env-Variable
+wirkt dagegen nur auf Wallos.
+
+Das Risiko, das der Schutz adressiert, beschreibt Wallos im Quelltext selbst
+als *"account takeover […] at a permissive or attacker-controlled IdP"*. Der
+IdP ist hier das eigene Authentik im eigenen Netz.
+
+> Wer das anders lösen will: ein **eigenes** Scope-Mapping nur für den
+> Wallos-Provider anlegen (nicht das Standard-Mapping ändern) und dort
+> `email_verified: True` setzen. Dann kann die Env-Variable entfallen.
