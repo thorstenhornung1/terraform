@@ -95,15 +95,37 @@ services:
       # Der IdP hier ist das eigene Authentik im eigenen Netz — das Szenario
       # existiert in diesem Setup nicht.
       OIDC_REQUIRE_EMAIL_VERIFIED: "false"
-      # Passwort-Login bleibt bewusst aktiv: Wallos legt den ersten Benutzer
-      # über die Registrierung an, und ein lokaler Notzugang ist die Rückfall-
-      # ebene, wenn Authentik ausfällt. Nach dem ersten SSO-Login kann das
-      # auf "true" gezogen werden.
-      OIDC_DISABLE_PASSWORD_LOGIN: "false"
-      # Wallos blockt per SSRF-Schutz Requests in private Netze — ohne diesen
-      # Eintrag scheitert die OIDC-Discovery gegen den internen Authentik
-      # (includes/ssrf_helper.php). Env überschreibt die DB-Allowlist komplett.
-      SSRF_ALLOWLIST: "auth.hornung-bn.de"
+      # Auf "true" gezogen am 2026-08-16, nachdem der erste SSO-Login
+      # nachweislich durchlief (oidc_sub bei Benutzer 1 gesetzt). Ab jetzt
+      # ist Authentik der einzige Weg hinein.
+      #
+      # ⚠️ Damit ist Authentik ein Single Point of Failure für Wallos. Fällt
+      # es aus, kommt NIEMAND mehr rein — auch nicht der Admin. Rückweg in
+      # dem Fall (Reihenfolge beachten, sonst greift der Deploy nicht):
+      #   1. Diese Zeile auf "false" setzen, committen, pushen
+      #   2. GitOps-Deploy abwarten (~2 min)
+      #   3. Anmeldung mit dem lokalen Passwort von Benutzer 1
+      # Wer schneller sein muss, kann die Variable direkt am Service setzen:
+      #   docker service update --env-add OIDC_DISABLE_PASSWORD_LOGIN=false \
+      #     wallos_wallos
+      # Das erzeugt allerdings Drift zum Repo und muss nachgezogen werden.
+      OIDC_DISABLE_PASSWORD_LOGIN: "true"
+      # Wallos blockt per SSRF-Schutz JEDEN Zugriff auf private Netze — das
+      # betrifft zwei voneinander unabhängige Stellen (includes/ssrf_helper.php):
+      #   validate_oidc_endpoint_url() → auth.hornung-bn.de (OIDC-Discovery)
+      #   validate_smtp_host()         → 192.168.4.71 (Mail-Relay, VM 4505)
+      # Ohne Eintrag: "Security Error: SMTP host must not target link-local or
+      # loopback addresses" bzw. stille OIDC-Fehler.
+      #
+      # ⚠️ Die Env-Variable ÜBERSCHREIBT die in der Admin-UI gepflegte Liste
+      # vollständig — jeder neue Zielhost muss hier ergänzt werden, sonst geht
+      # er verloren. Der Abgleich ist ein exaktes in_array() über
+      # host / ip / host:port / ip:port: keine Wildcards, kein CIDR.
+      #
+      # Die IP steht bewusst ohne Port, damit ein Wechsel zwischen 25 und 587
+      # nicht sofort einen Deploy erzwingt. Wer enger zurren will, trägt
+      # stattdessen "192.168.4.71:25" ein.
+      SSRF_ALLOWLIST: "auth.hornung-bn.de,192.168.4.71"
     deploy:
       mode: replicated
       replicas: 1

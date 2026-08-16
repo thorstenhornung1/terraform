@@ -59,6 +59,13 @@ services:
     volumes:
       - /mnt/cephfs/swarm-state/stack-authentik/data/media:/data/media
       - /mnt/cephfs/swarm-state/stack-authentik/data/certs:/data/certs
+    # Eigene Blueprints unter /blueprints/custom/. Das Image bringt dort
+    # bereits default/, example/ und system/ mit — die bleiben unangetastet,
+    # die Config mountet nur diese eine zusätzliche Datei hinein.
+    configs:
+      - source: blueprint_email_verification_${BLUEPRINT_EMAIL_VERIFICATION_HASH:-latest}
+        target: /blueprints/custom/email-verification.yaml
+        mode: 0444
     secrets:
       - authentik_db_password
       - authentik_secret_key
@@ -162,6 +169,14 @@ services:
     volumes:
       - /mnt/cephfs/swarm-state/stack-authentik/data/media:/data/media
       - /mnt/cephfs/swarm-state/stack-authentik/data/certs:/data/certs
+    # Derselbe Blueprint wie beim Server — und hier ist er der wichtigere:
+    # Die Blueprint-Discovery und der eigentliche Import laufen im WORKER.
+    # Fehlt die Config hier, sieht der Server die Datei zwar, aber niemand
+    # wendet sie an.
+    configs:
+      - source: blueprint_email_verification_${BLUEPRINT_EMAIL_VERIFICATION_HASH:-latest}
+        target: /blueprints/custom/email-verification.yaml
+        mode: 0444
     secrets:
       - authentik_db_password
       - authentik_secret_key
@@ -247,6 +262,26 @@ networks:
     external: true
   postgres-ha-stack_postgres-network:
     external: true
+
+# =============================================================================
+# CONFIGS
+# =============================================================================
+# Docker Configs sind unveränderlich — gleicher Name bedeutet, der Inhalt
+# lässt sich nicht aktualisieren. Die GitOps-Pipeline hängt deshalb einen
+# SHA256-Präfix des Dateiinhalts an den Namen (ssh-deploy, Content-Hash):
+# jede inhaltliche Änderung erzeugt einen neuen Config-Namen, und
+# `docker stack deploy --prune` räumt den alten weg.
+#
+# ⚠️ Die Quelldatei MUSS auf .yml enden, nicht .yaml. Der Glob, mit dem die
+# Pipeline die Hashes berechnet, kennt nur *.yml, *.sh, *.conf, *.cfg, *.json
+# (deploy-stacks.yml). Eine .yaml-Datei bekommt keinen Hash, der Platzhalter
+# bleibt unersetzt, und `docker stack config` bricht ab mit
+# "Additional property blueprint_email_verification_${...} is not allowed".
+# Der Mount-Zielname darf .yaml bleiben — Authentiks eigene Blueprints
+# nutzen diese Endung.
+configs:
+  blueprint_email_verification_${BLUEPRINT_EMAIL_VERIFICATION_HASH:-latest}:
+    file: ./blueprint-email-verification.yml
 
 # =============================================================================
 # SECRETS

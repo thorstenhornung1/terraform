@@ -1,0 +1,168 @@
+# =============================================================================
+# Authentik-Blueprint: E-Mail-Verifikation + Scope-Mapping für Wallos
+# =============================================================================
+# Wird über eine Docker Config nach /blueprints/custom/ gemountet und von
+# authentik-worker automatisch importiert (Blueprint-Discovery).
+#
+# WAS DIESER BLUEPRINT LÖST
+#   Authentiks geteiltes Standard-Mapping "OpenID 'email'" liefert
+#   email_verified HART als False. Anwendungen, die den Claim auswerten
+#   (Wallos tut es beim E-Mail-Matching), lehnen deshalb jeden Login ab.
+#   Das Standard-Mapping zu ändern verbietet sich: Paperless, Immich und
+#   Taiga nutzen dasselbe Objekt.
+#
+#   Stattdessen: ein EIGENES email-Scope-Mapping, das den Wert aus einem
+#   User-Attribut liest, plus ein Flow, der dieses Attribut nach einer
+#   echten Bestätigung per Mail setzt.
+#
+# ⚠️ NICHT ENTHALTEN — bewusst:
+#   Die Zuweisung des Mappings an den Provider "Abos". Ein Blueprint müsste
+#   dafür dessen property_mappings-Liste komplett ersetzen und damit die
+#   Standard-Mappings openid/profile mit !Find nachbilden. Ein Fehler daran
+#   bricht die Anmeldung an einem produktiven SSO. Der Tausch ist in der UI
+#   zwei Klicks und sofort revidierbar — siehe README.
+#
+# ABLAUF FÜR EINEN NEUEN BENUTZER
+#   1. Konto in Authentik anlegen (wie bisher, von Hand)
+#   2. Link auf https://auth.hornung-bn.de/if/flow/email-verification/ schicken
+#   3. Benutzer meldet sich an, bekommt die Bestätigungsmail, klickt den Link
+#   4. attributes.email_verified = true wird geschrieben
+#   5. Erst danach kann er sich bei Wallos verknüpfen
+# =============================================================================
+
+version: 1
+metadata:
+  name: Hornung - E-Mail-Verifikation
+  labels:
+    blueprints.goauthentik.io/instantiate: "true"
+
+entries:
+  # ---------------------------------------------------------------------------
+  # 1. Scope-Mapping: email_verified aus dem User-Attribut
+  # ---------------------------------------------------------------------------
+  # Ersetzt NICHT das Standard-Mapping, sondern tritt daneben. Zugewiesen
+  # wird es pro Provider (siehe Kopf).
+  #
+  # Die Auswertung ist bewusst typtolerant: Je nachdem, ob das Attribut per
+  # Flow, per UI-YAML oder per API gesetzt wurde, steht dort ein Boolean oder
+  # ein String. Wallos vergleicht strikt (`!== true`), ein String "true"
+  # würde dort durchfallen — deshalb wird hier normalisiert.
+  - identifiers:
+      name: "Hornung: OpenID 'email' (verified aus Attribut)"
+    id: hornung-email-scope
+    model: authentik_providers_oauth2.scopemapping
+    attrs:
+      scope_name: email
+      description: "E-Mail-Adresse"
+      expression: |
+        verified = request.user.attributes.get("email_verified", False)
+        return {
+            "email": request.user.email,
+            "email_verified": (
+                verified is True
+                or str(verified).strip().lower() in ("true", "1", "yes")
+            ),
+        }
+
+  # ---------------------------------------------------------------------------
+  # 2. Email-Stage: verschickt den Bestätigungslink
+  # ---------------------------------------------------------------------------
+  # use_global_settings: true übernimmt AUTHENTIK_EMAIL__* aus dem Stack
+  # (Host 192.168.4.71, Absender homelab@hornung-bn.de — verifiziert am
+  # 2026-08-16 per `ak test_email`, status=sent 250 OK).
+  #
+  # activate_user_on_success bleibt aus: Die Konten legst du selbst an und
+  # sie sind bereits aktiv; diese Stage soll ausschließlich die Adresse
+  # bestätigen, nicht die Kontofreischaltung steuern.
+  - identifiers:
+      name: hornung-email-verification-send
+    id: email-verification-send
+    model: authentik_stages_email.emailstage
+    attrs:
+      use_global_settings: true
+      template: email/account_confirmation.html
+      activate_user_on_success: false
+
+  # ---------------------------------------------------------------------------
+  # 3. Verstecktes Feld: trägt den Wert in den Flow-Kontext
+  # ---------------------------------------------------------------------------
+  # field_key mit "attributes_"-Präfix: Die User-Write-Stage übersetzt das
+  # selbst nach "attributes." (user_write/stage.py:53), das erspart einen
+  # Punkt im Feldnamen.
+  #
+  # placeholder_expression: true ist der entscheidende Teil — der Platzhalter
+  # wird als Python ausgewertet, `return True` liefert damit ein echtes
+  # Boolean. Ohne das stünde der String "true" im Attribut, und Wallos'
+  # strikter Vergleich würde ihn ablehnen.
+  - identifiers:
+      name: hornung-field-email-verified
+    id: field-email-verified
+    model: authentik_stages_prompt.prompt
+    attrs:
+      field_key: attributes_email_verified
+      label: "E-Mail bestätigt"
+      type: hidden
+      required: false
+      placeholder: "return True"
+      placeholder_expression: true
+      order: 0
+
+  - identifiers:
+      name: hornung-email-verification-mark
+    id: email-verification-mark
+    model: authentik_stages_prompt.promptstage
+    attrs:
+      fields:
+        - !KeyOf field-email-verified
+
+  # ---------------------------------------------------------------------------
+  # 4. User-Write: schreibt das Attribut
+  # ---------------------------------------------------------------------------
+  # never_create ist wichtig: Dieser Flow soll ausschließlich bestehende
+  # Konten markieren und unter keinen Umständen neue anlegen.
+  - identifiers:
+      name: hornung-email-verification-write
+    id: email-verification-write
+    model: authentik_stages_user_write.userwritestage
+    attrs:
+      user_creation_mode: never_create
+
+  # ---------------------------------------------------------------------------
+  # 5. Der Flow
+  # ---------------------------------------------------------------------------
+  # stage_configuration + require_authenticated: Der Benutzer muss angemeldet
+  # sein. Damit ist sichergestellt, dass die bestätigte Adresse zu genau dem
+  # Konto gehört, das den Link angefordert hat.
+  - identifiers:
+      slug: email-verification
+    id: email-verification-flow
+    model: authentik_flows.flow
+    attrs:
+      name: E-Mail-Verifikation
+      title: E-Mail-Adresse bestätigen
+      designation: stage_configuration
+      authentication: require_authenticated
+
+  # ---------------------------------------------------------------------------
+  # 6. Reihenfolge im Flow
+  # ---------------------------------------------------------------------------
+  # 10 Mail raus und warten -> 20 Wert in den Kontext -> 30 schreiben.
+  # Die Prompt-Stage hat nur ein verstecktes Feld und läuft deshalb ohne
+  # sichtbare Interaktion durch.
+  - identifiers:
+      target: !KeyOf email-verification-flow
+      stage: !KeyOf email-verification-send
+      order: 10
+    model: authentik_flows.flowstagebinding
+
+  - identifiers:
+      target: !KeyOf email-verification-flow
+      stage: !KeyOf email-verification-mark
+      order: 20
+    model: authentik_flows.flowstagebinding
+
+  - identifiers:
+      target: !KeyOf email-verification-flow
+      stage: !KeyOf email-verification-write
+      order: 30
+    model: authentik_flows.flowstagebinding

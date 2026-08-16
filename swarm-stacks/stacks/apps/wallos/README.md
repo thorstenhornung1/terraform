@@ -132,9 +132,69 @@ ssh root@192.168.4.40 "docker service scale wallos_wallos=1"
 - **`order: stop-first` ist bei diesem Stack Pflicht.** `start-first` ließe
   zwei Container gleichzeitig auf dieselbe `wallos.db` schreiben — der direkte
   Weg in eine korrupte Datenbank. Kurze Downtime beim Deploy ist der Preis.
-- **`SSRF_ALLOWLIST` ist nicht optional.** Wallos blockt Requests in private
-  Netze; ohne `auth.hornung-bn.de` auf der Liste scheitert die OIDC-Discovery
-  gegen den internen Authentik (`includes/ssrf_helper.php`).
+- **`SSRF_ALLOWLIST` ist nicht optional — und betrifft mehr als OIDC.** Wallos
+  blockt jeden Zugriff auf private Netze an *zwei unabhängigen* Stellen
+  (`includes/ssrf_helper.php`):
+  `validate_oidc_endpoint_url()` für die Discovery und `validate_smtp_host()`
+  für den Mailversand. Fehlt der Mail-Relay auf der Liste, meldet die
+  SMTP-Maske *"Security Error: SMTP host must not target link-local or loopback
+  addresses"*.
+  Der Abgleich ist ein **exaktes `in_array()`** über `host`, `ip`, `host:port`
+  und `ip:port` — keine Wildcards, kein CIDR. Und die Env-Variable
+  **überschreibt** die in der Admin-UI gepflegte Liste vollständig: Jeder neue
+  Zielhost muss in den Stack, sonst verschwindet er beim nächsten Deploy.
+  Nebenbedingung: Interne Adressen darf ohnehin nur Benutzer 1 verwenden
+  (`Security Block: Standard users are not permitted…`).
+
+## SMTP
+
+**Nur über die Admin-UI konfigurierbar** — Wallos wertet dafür keine
+Env-Variablen aus. Die Werte landen in der SQLite-DB und werden damit vom
+Backup-Sidecar erfasst, sind aber **nicht** GitOps-verwaltet.
+
+| Feld | Wert |
+|---|---|
+| SMTP Adresse | `192.168.4.71` (Mail-Relay, LXC 4505) |
+| Port | `25` |
+| Verschlüsselung | **Keine** |
+| Benutzername / Passwort | *leer* |
+| Absender | **`homelab@hornung-bn.de`** — nicht frei wählbar, siehe unten |
+
+### ⚠️ Der Absender ist nicht frei wählbar
+
+Der Relay stellt über die **Microsoft-Graph-API** zu, die per
+`/users/{absender}/sendMail` versendet. Der Absender muss deshalb eine
+**existierende Mailbox im Tenant** sein; jede andere Adresse quittiert Graph
+mit `404 ErrorInvalidUser`.
+
+Belegt am 2026-08-16: `wallos@wallosapp.com` (Wallos-Default) und
+`abo@hornung-bn.de` wurden beide abgelehnt, `homelab@hornung-bn.de` stellt zu.
+
+**Die Falle dabei:** `ALLOW_EMPTY_SENDER_DOMAINS=true` lässt Postfix jeden
+Absender annehmen und mit `250 OK` quittieren — die sendende Anwendung meldet
+also **Erfolg**. Abgewiesen wird erst eine Station weiter, und die daraufhin
+erzeugte Bounce-Mail scheitert ebenfalls (ihr leerer Absender `<>` ist erst
+recht keine Mailbox). Ergebnis: Der Test in der Oberfläche ist grün, und es
+kommt trotzdem nichts an. Im Zweifel immer gegenprüfen:
+
+```bash
+ssh root@192.168.4.71 "docker logs mailrelay-postfix-1 --since 15m | grep -E 'status=(sent|bounced)'"
+ssh root@192.168.4.71 "docker logs mailrelay-smtp-oauth-relay-1 --since 15m | grep -A2 'Failed to send'"
+```
+
+Keine Zugangsdaten nötig, weil das Relay nach Herkunft entscheidet:
+`mynetworks` enthält `192.168.4.0/24`, und der Wallos-Container erscheint dort
+mit der Node-IP (NAT über die docker_gwbridge), greift also über
+`permit_mynetworks`.
+
+Keine Verschlüsselung, weil das Relay STARTTLS zwar anbietet
+(`smtpd_tls_security_level = may`), aber mit `ssl-cert-snakeoil.pem` — einem
+selbstsignierten Zertifikat, an dem PHPMailers Zertifikatsprüfung scheitert.
+
+Der Relay stellt über einen `smtp-oauth-relay` per Microsoft Graph zu.
+`ALLOW_EMPTY_SENDER_DOMAINS=true` heißt, Postfix nimmt jeden Absender an — ob
+Graph eine Adresse außerhalb des OAuth-Kontos akzeptiert, zeigt erst der
+Versand.
 - **Env schlägt Admin-UI.** Per Env gesetzte OIDC-Felder markiert Wallos als
   `managed_fields` und sperrt sie in der Oberfläche. Änderungen gehören in die
   Stack-Datei, nicht in die UI — sonst entsteht Drift, die beim nächsten Deploy
