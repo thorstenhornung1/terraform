@@ -1511,13 +1511,109 @@ groups:
           summary: "Frigate camera {{ $labels.camera_name }}: stream ok but pipeline stalled"
           description: "Kamera liefert Frames (camera_fps > 0), aber Frigate verarbeitet sie nicht (process_fps < 0.5 fuer 25+ min): Livebild eingefroren, keine Detection, Recording-Luecken. Typische Ursache: Kamera-Prozess-Deadlock nach OpenVINO-Detektor-Hang (docker logs frigate | grep -i stuck). Fix: Frigate-Container neu starten (192.168.4.70: cd /opt/frigate/compose && docker compose restart frigate). ffmpeg-Watchdog-Restarts und Kamera-Reboots heilen das NICHT."
 
-      # --- OOM-kill watchdog on pve03 (Frigate-LXC Memory-Druck) ---
+      # --- Detektor liefert keine Erkennungen (Stream ok, Pipeline ok) -------
+      # 2026-08-17: Sechs Stunden lang detection_fps == 0 auf ALLEN drei Kameras,
+      # ohne einen einzigen Alarm. Gemessen zum Zeitpunkt des Befunds:
+      #   camera_fps   doorbird 102.2  garage 5.1  garten 5.1
+      #   process_fps  doorbird 109.3  garage 5.0  garten 2.6
+      #   detection_fps            0             0           0
+      #   max_over_time(detection_fps[6h])  = 0 auf allen Kameras
+      #   inference_speed openvino_gpu      = 223.59 (normal ~0.02)
+      #
+      # Warum KEINE bestehende Regel gegriffen hat — jede schwieg zu Recht:
+      #   frigate-down                    up == 1, Scrape lief durch
+      #   frigate-camera-no-detection     prueft camera_fps == 0; der war 102/5/5
+      #   frigate-camera-pipeline-stalled verlangt process_fps < 0.5; der war 109
+      #   frigate-lxc-oom                 kann strukturell nicht feuern (s.u.)
+      #
+      # Der Name "frigate-camera-no-detection" ist dabei die eigentliche Falle:
+      # Er verspricht genau diese Ueberwachung, prueft aber, ob BILDER ankommen,
+      # nicht ob ERKANNT wird. Wer die Regelliste liest, hakt es als abgedeckt ab.
+      #
+      # Ursache am 17.08.: Synology (192.168.2.3) blockierte wiederholt bis zu
+      # 4min42s ("nfs: server not responding"), Recording-Segmente stauten sich,
+      # der LXC-cgroup lief voll (memory.events max 17182, sock_throttled 83185),
+      # der Kernel drosselte die Socket-Puffer -> ffmpeg bekam keine Frames mehr.
+      # Diese Regel ist deshalb zugleich der praktische NFS-Stall-Detektor: Ein
+      # haengendes Aufnahmeziel aeussert sich IMMER als Erkennungsausfall, und
+      # zwar unabhaengig davon, ob die PVE-Hosts ueberwacht werden (tun sie nicht).
+      #
+      # Expression analog pipeline-stalled: detection_fps nur fuer Kameras mit
+      # lebendem Stream (camera_fps > 0.5). Kamera tot -> Serie faellt raus ->
+      # noData -> OK (deckt camera-no-detection); Scrape weg -> deckt frigate-down.
+      # Threshold lt 0.01 statt == 0, weil detection_fps ein Gleitkommawert ist.
+      #
+      # Schutzzeit: max_over_time[15m] + for 15m = ~30min. Bewusst laenger als
+      # pipeline-stalled: Ein Detektor-Neustart (<1min) und ein Frigate-Neustart
+      # (3-5min Ramp-up) duerfen nicht feuern. Beobachteter echter Ausfall: 6h+.
+      # severity critical — anders als eine einzelne degradierte Kamera bedeutet
+      # das den Totalausfall der Erkennung bei scheinbar gesundem System.
+      - uid: frigate-no-detections
+        title: Frigate detects nothing (stream ok, pipeline ok, detector idle)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                max_over_time(frigate_detection_fps{job="frigate"}[15m])
+                  and (max_over_time(frigate_camera_fps{job="frigate"}[15m]) > 0.5)
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [0.01]
+              refId: C
+        for: 15m
+        keep_firing_for: 30m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "Frigate erkennt nichts auf {{ $labels.camera_name }} (Stream und Pipeline laufen)"
+          description: "detection_fps == 0 fuer 30+ min, obwohl camera_fps und process_fps normal sind — die Ueberwachung laeuft, erkennt aber keine Objekte. Erste Pruefung: 'curl -s frigate.hornung-bn.de/api/stats | jq .detectors' — inference_speed sollte ~20ms sein, nicht Sekunden. Haeufigste Ursache ist ein blockiertes Aufnahmeziel: 'ssh root@pve02 \"dmesg -T | grep -i \\\"nfs.*not responding\\\"\"' und 'df -h /mnt/nfs-frigate-recordings' (Synology 192.168.2.3). Danach cgroup-Druck pruefen: 'cat /sys/fs/cgroup/lxc/4502/memory.events' — steigende Werte bei max/sock_throttled bestaetigen es. Fix: Frigate-Container neu starten (pct exec 4502 -- docker restart frigate); das behebt die Ursache NICHT, wenn das NAS weiter aussetzt."
+
+      # --- OOM-kill watchdog (Frigate-LXC Memory-Druck) ---
       # Signal aus node-exporter: node_vmstat_oom_kill steigt bei jedem OOM.
       # 2026-04-23: 4 OOM-Kills in 48h auf frigate.capture (2.5-4.8GB anon-rss).
-      # LXC 4502 wurde auf 12 GiB + 4 GiB swap angehoben — dieser Alert warnt,
-      # falls der Workload trotzdem wieder an die neue Grenze läuft.
+      #
+      # 🔴 DIESE REGEL KANN NICHT FEUERN (verifiziert 2026-08-17).
+      #
+      # node_vmstat_oom_kill existiert ausschliesslich fuer die vier gescrapten
+      # VMs — docker-infra-1/2/3 und postgres-prod. Auf den PVE-HOSTS laeuft
+      # KEIN node-exporter; prometheus-scrape.yml kennt von pve* nur das
+      # Ceph-mgr-Modul. Der Selector unten trifft damit auf nichts:
+      #   "pve03.*"          -> es gibt keine Instanz dieses Namens
+      #   "192\.168\.4\.42.*" -> relabel_configs benennt sie in docker-infra-3 um
+      # Mit noDataState: OK bleibt die Regel dauerhaft still. Am 17.08.2026 gab
+      # es zwei OOM-Kills auf frigate.capture (12:30 und 14:24, je ~6GB) — kein
+      # Alarm.
+      #
+      # Zwei weitere Fehler in den Angaben unten, beide korrigiert:
+      #   - "pve03" ist falsch: CT 4502 laeuft per HA-Affinitaet bevorzugt auf
+      #     pve02 und kann auf allen drei Knoten landen. Ein Selector auf EINEN
+      #     Host waere auch mit node-exporter zu eng.
+      #   - "12 GiB + 4 GiB swap" ist falsch: tatsaechlich 7168 MB + 4096 MB.
+      #
+      # DAMIT SIE WIRKT, muss node-exporter auf pve01-03 laufen und in
+      # prometheus-scrape.yml eingetragen sein. Bis dahin uebernimmt
+      # frigate-no-detections die Abdeckung: Ein OOM-Kill von frigate.capture
+      # aeussert sich dort binnen 30 min als detection_fps == 0.
       - uid: frigate-lxc-oom
-        title: OOM-kill on pve03 (Frigate host)
+        title: OOM-kill on Frigate host (INAKTIV — kein node-exporter auf pve*)
         condition: C
         data:
           - refId: A
@@ -1550,8 +1646,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "OOM-kill on pve03 in last 10min — likely Frigate LXC 4502"
-          description: "node_vmstat_oom_kill increased. Frühwarnung: Frigate-Container wurde vom Kernel gekillt. Check 'pct exec 4502 -- dmesg | tail' für killed processes + anon-rss values. Bei wiederholtem Auftreten: memory/swap im LXC weiter anheben (aktuell 12 GiB + 4 GiB swap)."
+          summary: "OOM-kill auf dem Frigate-Host in den letzten 10min — vermutlich LXC 4502"
+          description: "node_vmstat_oom_kill ist gestiegen: Ein Prozess im Frigate-LXC wurde vom Kernel gekillt. ACHTUNG — diese Regel ist derzeit WIRKUNGSLOS, weil auf pve01-03 kein node-exporter laeuft (siehe Kommentar in alert-rules.yml). Pruefen: 'ssh root@pve02 \"dmesg -T | grep -iE oom-kill\"' fuer die getroffenen Prozesse und deren anon-rss, sowie 'cat /sys/fs/cgroup/lxc/4502/memory.events'. LXC 4502 hat aktuell 7168 MB + 4096 MB swap. Mehr Speicher hilft nur, wenn der Druck aus dem Workload kommt — staut sich dagegen das Aufnahmeziel (Synology), verlaengert er nur die Zeit bis zum naechsten Kill."
 
       # --- Recordings-Volume läuft voll -------------------------------------
       # 2026-08-15: Bis hierher gab es KEINEN Alert auf den Füllstand von
