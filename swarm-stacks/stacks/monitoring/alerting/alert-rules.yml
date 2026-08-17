@@ -1538,18 +1538,34 @@ groups:
       # haengendes Aufnahmeziel aeussert sich IMMER als Erkennungsausfall, und
       # zwar unabhaengig davon, ob die PVE-Hosts ueberwacht werden (tun sie nicht).
       #
-      # Expression analog pipeline-stalled: detection_fps nur fuer Kameras mit
-      # lebendem Stream (camera_fps > 0.5). Kamera tot -> Serie faellt raus ->
-      # noData -> OK (deckt camera-no-detection); Scrape weg -> deckt frigate-down.
-      # Threshold lt 0.01 statt == 0, weil detection_fps ein Gleitkommawert ist.
+      # 🔴 NICHT auf detection_fps alarmieren — der erste Entwurf dieser Regel tat
+      # das und waere jede ruhige Nacht falsch losgegangen. Frigate fuehrt
+      # Objekterkennung NUR bei Bewegung aus; eine gesunde, ruhige Kamera hat
+      # legitim detection_fps == 0. Direkt nach der Reparatur am 17.08. gemessen:
+      #   detection_fps  doorbird 3.2   garage 0.0   garten 0.7
+      #   skipped_fps    doorbird 0     garage 0     garten 0
+      #   inference_speed openvino_gpu = 0.0289
+      # garage stand auf 0, war aber voellig gesund — es bewegte sich nur nichts.
       #
-      # Schutzzeit: max_over_time[15m] + for 15m = ~30min. Bewusst laenger als
-      # pipeline-stalled: Ein Detektor-Neustart (<1min) und ein Frigate-Neustart
-      # (3-5min Ramp-up) duerfen nicht feuern. Beobachteter echter Ausfall: 6h+.
+      # Alarmiert wird deshalb auf die INFERENZZEIT des Detektors. Sie ist
+      # bewegungsunabhaengig, wird auch bei voelliger Ruhe gemeldet, und war
+      # exakt der Messwert, der im Fehlerfall um Faktor 7700 danebenlag:
+      #   gesund  0.0289 s  (28.9 ms, typischer OpenVINO-iGPU-Wert)
+      #   defekt  223.59 s
+      # Die Einheit ist damit auch geklaert: Die Metrik meint wirklich Sekunden.
+      #
+      # Threshold 0.5 s = 17-fache Reserve gegen den Normalwert und drei
+      # Groessenordnungen unter dem beobachteten Fehlerfall. Dazwischen liegt
+      # nichts Reales, die Wahl ist deshalb unkritisch. Kein per-Kamera-Label:
+      # der Detektor ist geteilt, ein Hang trifft immer alle Kameras zugleich.
+      #
+      # Schutzzeit: max_over_time[15m] + for 15m = ~30min. Ein Frigate-Neustart
+      # (3-5min Ramp-up, gemessen: API nach ~7min gesund) feuert damit nicht.
       # severity critical — anders als eine einzelne degradierte Kamera bedeutet
-      # das den Totalausfall der Erkennung bei scheinbar gesundem System.
+      # ein haengender Detektor den Totalausfall der Erkennung, bei ansonsten
+      # vollstaendig gesund aussehendem System.
       - uid: frigate-no-detections
-        title: Frigate detects nothing (stream ok, pipeline ok, detector idle)
+        title: Frigate detector wedged (inference speed collapsed)
         condition: C
         data:
           - refId: A
@@ -1559,8 +1575,7 @@ groups:
             datasourceUid: victoriametrics
             model:
               expr: |
-                max_over_time(frigate_detection_fps{job="frigate"}[15m])
-                  and (max_over_time(frigate_camera_fps{job="frigate"}[15m]) > 0.5)
+                max_over_time(frigate_detector_inference_speed_seconds{job="frigate"}[15m])
               instant: true
               refId: A
           - refId: C
@@ -1573,8 +1588,8 @@ groups:
               expression: A
               conditions:
                 - evaluator:
-                    type: lt
-                    params: [0.01]
+                    type: gt
+                    params: [0.5]
               refId: C
         for: 15m
         keep_firing_for: 30m
@@ -1583,8 +1598,8 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "Frigate erkennt nichts auf {{ $labels.camera_name }} (Stream und Pipeline laufen)"
-          description: "detection_fps == 0 fuer 30+ min, obwohl camera_fps und process_fps normal sind — die Ueberwachung laeuft, erkennt aber keine Objekte. Erste Pruefung: 'curl -s frigate.hornung-bn.de/api/stats | jq .detectors' — inference_speed sollte ~20ms sein, nicht Sekunden. Haeufigste Ursache ist ein blockiertes Aufnahmeziel: 'ssh root@pve02 \"dmesg -T | grep -i \\\"nfs.*not responding\\\"\"' und 'df -h /mnt/nfs-frigate-recordings' (Synology 192.168.2.3). Danach cgroup-Druck pruefen: 'cat /sys/fs/cgroup/lxc/4502/memory.events' — steigende Werte bei max/sock_throttled bestaetigen es. Fix: Frigate-Container neu starten (pct exec 4502 -- docker restart frigate); das behebt die Ursache NICHT, wenn das NAS weiter aussetzt."
+          summary: "Frigate-Detektor haengt — Inferenzzeit {{ $values.A }}s statt ~0.03s"
+          description: "Der Objektdetektor braucht 0.5s+ pro Bild statt der ueblichen 29ms. Folge: skipped_fps steigt, detection_fps faellt auf 0 — die Ueberwachung laeuft sichtbar weiter, erkennt aber nichts mehr. camera_fps und process_fps bleiben dabei NORMAL, deshalb schweigen frigate-camera-no-detection und frigate-camera-pipeline-stalled. Am 17.08.2026 lag der Wert bei 223.59s, sechs Stunden lang. Ursache damals: Synology (192.168.2.3) blockierte bis 4min42s ('nfs: server not responding'), der LXC-cgroup lief voll und der Kernel drosselte die Socket-Puffer (memory.events: sock_throttled). Pruefen: 'ssh root@pve02 \"dmesg -T | grep -iE \\\"nfs.*not responding|oom-kill\\\" | tail\"' und 'cat /sys/fs/cgroup/lxc/4502/memory.events'. Fix: 'pct exec 4502 -- docker restart frigate' — behebt den Hang, aber NICHT die Ursache, wenn das NAS weiter aussetzt."
 
       # --- OOM-kill watchdog (Frigate-LXC Memory-Druck) ---
       # Signal aus node-exporter: node_vmstat_oom_kill steigt bei jedem OOM.
