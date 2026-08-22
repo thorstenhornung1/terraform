@@ -1762,6 +1762,148 @@ groups:
           description: "Sofort handeln: volume1 trägt Frigate, PostgreSQL-Backups, Mail-Import und alle Home-Verzeichnisse. Kurzfristig record.retain.days senken oder Altlasten entfernen (/volume1/docker: dump 185 GB, syslog 127 GB, immich-app 88 GB). Bei noData statt Wert: NFS-Mount auf LXC 4502 prüfen — Frigate meldet sich dann weiter als 'up', schreibt aber nichts."
 
   # ===========================================================================
+  # USV — Stromversorgung (EATON Ellipse PRO 650)
+  # ===========================================================================
+  # Quelle: ups_*-Metriken, von den drei Hypervisoren per Prometheus-Import
+  # geschoben (ansible/files/ups-metrics-push.sh). Kein Scrape-Job — die
+  # Swarm-Nodes duerfen den NUT-Server auf der Synology nicht abfragen.
+  #
+  # Eingerichtet nach dem Stromausfall vom 2026-08-21, bei dem alle drei Nodes
+  # hart ausfielen und kein einziger Alert den Betreiber erreichte
+  # (docs/RCA-STROMAUSFALL-2026-08-21.md, swarm-stacks#121).
+
+  - orgId: 1
+    name: USV
+    folder: Infrastructure
+    interval: 60s
+    rules:
+
+      # --- Batteriebetrieb --------------------------------------------------
+      # for: 2m entspricht der Karenz des Staffelskripts. Kuerzere Netzwischer
+      # loesen dort nichts aus und sollen auch hier nicht alarmieren.
+      - uid: ups-on-battery
+        title: USV im Batteriebetrieb
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: victoriametrics
+            model:
+              expr: max_over_time(ups_status_on_battery[2m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+              refId: C
+        for: 2m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stromausfall — USV laeuft auf Batterie"
+          description: "Die Karenz von 120 s ist abgelaufen, das Staffelskript hat Ballast abgeworfen und das CRS-Rebalancing angehalten. Reihenfolge und Schwellen im Dashboard 'USV — Stromversorgung'. Abgeschaltet wird bei 60 % / 45 % / 30 % Akkuladung; die Synology folgt bei 20 %."
+
+      # --- Akku faellt in den kritischen Bereich ------------------------------
+      - uid: ups-battery-low
+        title: USV-Akku unter 50 Prozent
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: victoriametrics
+            model:
+              expr: min_over_time(ups_battery_charge_percent[5m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [50] }
+              refId: C
+        for: 1m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "USV-Akku unter 50 % — erste Nodes schalten bald ab"
+          description: "Bei 45 % faehrt der zweite Node herunter, bei 30 % der Node mit Home Assistant, postgres-prod und Frigate. Ab dann blockiert Ceph (min_size=2 auf drei Hosts). Kommt der Strom nicht zurueck, ist das der geordnete Weg — kein Eingriff noetig, aber der Zeitpunkt zum Mitlesen."
+
+      # --- Ein Node sieht die USV nicht mehr ---------------------------------
+      # Der stille Ausfall: Der Node laeuft normal weiter, wuerde im Ernstfall
+      # aber nicht gestaffelt herunterfahren. Haeufigste Ursache waere ein
+      # Switch, der nicht an der USV haengt.
+      - uid: ups-reporter-down
+        title: Node erreicht den USV-Server nicht
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: victoriametrics
+            model:
+              expr: min_over_time(ups_reporter_up[5m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: C
+        for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ein Hypervisor erreicht den NUT-Server auf der Synology nicht"
+          description: "Dieser Node wuerde bei einem Stromausfall NICHT gestaffelt herunterfahren — er faellt auf upsmon/LOWBATT zurueck oder geht hart aus. Pruefen: 'upsc ups@192.168.2.3 ups.status' auf dem betroffenen Node, Freigabe in DSM unter Hardware/USV, und ob der Switch an der USV haengt."
+
+      # --- Batterie am Ende --------------------------------------------------
+      - uid: ups-replace-battery
+        title: USV meldet Batterietausch
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: victoriametrics
+            model:
+              expr: min_over_time(ups_status_replace_battery[30m])
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+              refId: C
+        for: 30m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "USV haelt ihre Batterie fuer verbraucht (RB-Flag)"
+          description: "Die Batterie wurde 2026-08 auf 9,6 Ah getauscht. Meldet die USV trotzdem RB, ist entweder die neue Batterie defekt oder die Firmware hat sie nach dem Wechsel nie neu kalibriert — Letzteres loest ein vollstaendiger Entladezyklus."
+
+  # ===========================================================================
   # APPLICATIONS — Web-App-Verfügbarkeit (Blackbox)
   # ===========================================================================
   # Source: blackbox_exporter via job=blackbox-apps (60s, http_2xx_tls).

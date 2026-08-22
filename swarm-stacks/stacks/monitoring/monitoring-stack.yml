@@ -253,6 +253,8 @@ services:
         target: /var/lib/grafana/dashboards-infra/ceph-storage-cluster.json
       - source: dashboard_postgres_prod
         target: /var/lib/grafana/dashboards-infra/postgres-prod.json
+      - source: dashboard_ups_power
+        target: /var/lib/grafana/dashboards-infra/ups-power.json
       - source: alerting_contact_points
         target: /etc/grafana/provisioning/alerting/contact-points.yml
       - source: alerting_notification_policies
@@ -568,6 +570,14 @@ configs:
   dashboard_postgres_prod:
     name: dashboard_postgres_prod_${POSTGRES_PROD_HASH:-latest}
     file: ./dashboards/postgres-prod.json
+
+  # USV-Dashboard. Die Metriken kommen nicht aus einem Scrape-Job, sondern
+  # werden von den drei Hypervisoren per Prometheus-Import geschoben — die
+  # Swarm-Nodes duerfen den NUT-Server auf der Synology nicht abfragen
+  # ("ERR ACCESS-DENIED"). Siehe ansible/files/ups-metrics-push.sh
+  dashboard_ups_power:
+    name: dashboard_ups_power_${UPS_POWER_HASH:-latest}
+    file: ./dashboards/ups-power.json
 
   alerting_contact_points:
     name: alerting_contact_points_${CONTACT_POINTS_HASH:-latest}

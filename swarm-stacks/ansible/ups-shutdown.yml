@@ -48,6 +48,10 @@
     ups_monitor_user: "monuser"
     # ups_monitor_password: wird per -e uebergeben, siehe Kopf
 
+    # Ziel fuer die Metriken. VictoriaMetrics ist von den Hypervisoren aus
+    # erreichbar (geprueft: HTTP 200 von allen dreien).
+    ups_metrics_url: "http://192.168.4.40:8428/api/v1/import/prometheus"
+
     # Karenz gegen kurzes Steckerziehen und Netzwischer
     ups_grace_seconds: 120
 
@@ -180,6 +184,9 @@
           # Wird nach der Karenz abgeworfen
           UPS_BALLAST_GUESTS="{{ ups_ballast_guests | join(' ') }}"
 
+          # Ziel fuer die Metriken (VictoriaMetrics, Prometheus-Import-Endpunkt)
+          UPS_METRICS_URL="{{ ups_metrics_url }}"
+
     - name: Staffelskript ausrollen
       ansible.builtin.copy:
         src: files/ups-staged-shutdown.sh
@@ -233,6 +240,69 @@
         enabled: yes
         state: started
         daemon_reload: yes
+
+    # -------------------------------------------------------------------------
+    # Metrik-Export
+    # -------------------------------------------------------------------------
+    # Push statt Exporter im Swarm: Die Synology gibt NUT nur fuer die
+    # Proxmox-IPs frei ("ERR ACCESS-DENIED" von den Swarm-Nodes). Die
+    # Hypervisoren duerfen lesen und erreichen VictoriaMetrics — also schieben
+    # sie die Werte selbst. Kein zusaetzlicher Container, keine DSM-Aenderung.
+    - name: Metrik-Push-Skript ausrollen
+      ansible.builtin.copy:
+        src: files/ups-metrics-push.sh
+        dest: /usr/local/sbin/ups-metrics-push.sh
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: systemd-Unit fuer den Metrik-Push
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/ups-metrics-push.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=USV-Metriken nach VictoriaMetrics schieben
+          Documentation=file:///usr/local/sbin/ups-metrics-push.sh
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/ups-metrics-push.sh
+          TimeoutStartSec=60
+          StandardOutput=journal
+          StandardError=journal
+      notify: systemd neu laden
+
+    - name: Timer fuer den Metrik-Push
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/ups-metrics-push.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Schiebt alle 30 s die USV-Werte nach VictoriaMetrics
+
+          [Timer]
+          OnBootSec=60
+          OnUnitActiveSec=30
+          AccuracySec=5
+          Unit=ups-metrics-push.service
+
+          [Install]
+          WantedBy=timers.target
+      notify: systemd neu laden
+
+    - name: Metrik-Push-Timer aktivieren
+      ansible.builtin.systemd:
+        name: ups-metrics-push.timer
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Einmal sofort schieben, damit sofort Daten da sind
+      ansible.builtin.command: /usr/local/sbin/ups-metrics-push.sh
+      changed_when: false
 
     # -------------------------------------------------------------------------
     # Verifikation
