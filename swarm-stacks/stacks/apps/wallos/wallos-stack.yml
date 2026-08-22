@@ -37,7 +37,7 @@ version: '3.8'
 
 services:
   wallos:
-    image: bellamy/wallos:5.4.2
+    image: bellamy/wallos:5.4.4
     hostname: wallos
     networks:
       - traefik_public
@@ -74,27 +74,26 @@ services:
       OIDC_USER_IDENTIFIER: "preferred_username"
       OIDC_SCOPES: "openid profile email"
       OIDC_AUTO_CREATE_USER: "true"
-      # Muss auf false — sonst scheitert JEDER SSO-Login mit
-      # "?error=oidc_email_not_verified" (verifiziert am 2026-08-16).
+      # Steht bewusst NICHT mehr hier — der Default ist "true", und genau so
+      # soll es sein (Umstellung 2026-08-16).
       #
-      # Ursache liegt NICHT bei Wallos: Das Standard-Scope-Mapping dieser
-      # Authentik-Version ("authentik default OAuth Mapping: OpenID 'email'")
-      # liefert den Wert hart verdrahtet als False:
-      #     return { "email": request.user.email, "email_verified": False }
-      # Authentik führt selbst keine E-Mail-Verifizierung durch und meldet das
-      # ehrlich; Wallos prüft ebenso korrekt. Beide Seiten verhalten sich
-      # richtig — die Vertrauensentscheidung muss trotzdem jemand treffen.
+      # Zwischenzeitlich musste die Variable auf "false" stehen: Authentiks
+      # GETEILTES Standard-Mapping "OpenID 'email'" liefert den Wert hart
+      # verdrahtet als False, weshalb jeder SSO-Login mit
+      # "?error=oidc_email_not_verified" scheiterte.
       #
-      # Bewusst hier statt in Authentik: Das Mapping ist das GETEILTE Standard-
-      # Mapping aller OIDC-Anwendungen (Paperless, Immich, Taiga, …). Ein True
-      # dort würde eine Verifizierung behaupten, die nie stattfand, und zwar
-      # für jeden Consumer gleichzeitig. Diese Zeile wirkt nur auf Wallos.
+      # Gelöst ist das jetzt an der richtigen Stelle: Der Provider "Abos"
+      # nutzt ein EIGENES Scope-Mapping, das email_verified aus dem
+      # User-Attribut liest, und ein Verifikations-Flow setzt dieses Attribut
+      # nach einer echten Bestätigung per Mail
+      # (stacks/apps/authentik/blueprint-email-verification.yml).
       #
-      # Das Risiko, das der Schutz adressiert, beschreibt Wallos selbst als
-      # "account takeover […] at a permissive or attacker-controlled IdP".
-      # Der IdP hier ist das eigene Authentik im eigenen Netz — das Szenario
-      # existiert in diesem Setup nicht.
-      OIDC_REQUIRE_EMAIL_VERIFIED: "false"
+      # Damit ist der Claim keine Behauptung mehr, sondern belegt — und der
+      # Schutz greift für jedes NEUE Konto: Wer den Flow nicht durchlaufen
+      # hat, kann sich bei Wallos weder verknüpfen noch per Auto-Create
+      # anlegen. Bestehende Verknüpfungen sind unberührt, weil die Prüfung
+      # nur im else-Zweig von handle_oidc_callback.php greift (also allein
+      # bei unbekanntem oidc_sub).
       # Auf "true" gezogen am 2026-08-16, nachdem der erste SSO-Login
       # nachweislich durchlief (oidc_sub bei Benutzer 1 gesetzt). Ab jetzt
       # ist Authentik der einzige Weg hinein.
@@ -204,7 +203,7 @@ services:
   # mit. Kein Fremd-Image, kein `apk add` zur Laufzeit (das bräuchte Internet
   # bei jedem Neustart und wäre der fragilste Teil der Backup-Kette).
   wallos-backup:
-    image: bellamy/wallos:5.4.2
+    image: bellamy/wallos:5.4.4
     hostname: wallos-backup
     # startup.sh MUSS umgangen werden — sonst liefe hier ein zweiter nginx +
     # crond auf derselben SQLite-Datei.
