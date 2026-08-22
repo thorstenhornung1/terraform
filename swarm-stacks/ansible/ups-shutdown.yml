@@ -1,0 +1,263 @@
+---
+# =============================================================================
+# USV-gesteuertes Herunterfahren der Proxmox-Nodes (NUT-Client)
+# =============================================================================
+# Anlass: Beim Stromausfall am 2026-08-21 fielen alle drei Nodes hart aus
+# (siehe docs/RCA-STROMAUSFALL-2026-08-21.md). Die EATON Ellipse PRO 650 haengt
+# an der Synology, die bereits als NUT-Server laeuft und die Proxmox-IPs
+# freigegeben hat — es fehlte nur der Client auf den Nodes.
+#
+# WAS DIESES PLAYBOOK EINRICHTET
+#   1. nut-client + upsmon als Sicherheitsnetz (LOWBATT -> geordneter Shutdown)
+#   2. ups-staged-shutdown.sh + Timer fuer die prozentgenaue Staffelung
+#
+# DIE REIHENFOLGE STEHT NICHT IM PLAYBOOK
+#   Bewusst keine host-spezifischen Schwellen: Der Cluster faehrt
+#   ha-auto-rebalance=1, die kritischen Gaeste wandern. Das Skript bestimmt zur
+#   Laufzeit, welcher Node wie viele davon traegt, und leitet daraus die
+#   Abschaltreihenfolge ab. Alle Nodes bekommen dieselbe Konfiguration.
+#
+# VORAUSSETZUNGEN
+#   - Synology: NUT-Server aktiv, Proxmox-IPs unter "Permitted DiskStation
+#     Devices" freigegeben (bereits erledigt)
+#   - Switch UND Router haengen an der USV. Ohne sie erreichen die Nodes den
+#     NUT-Server nicht und die ganze Kette ist wirkungslos.
+#
+# AUFRUF
+#   ansible-playbook -i inventory.ini ups-shutdown.yml \
+#     -e ups_monitor_password='<DSM-NUT-Passwort>'
+#
+#   Das Passwort steht bewusst nicht im Repo. Bei DSM ist es der fest
+#   vorgegebene Standardzugang fuer NUT-Clients; aendern laesst er sich in der
+#   Oberflaeche nicht.
+#
+# PRUEFEN OHNE RISIKO
+#   ansible-playbook -i inventory.ini ups-shutdown.yml --check
+#   ssh root@192.168.2.10 "/usr/local/sbin/ups-staged-shutdown.sh --print-rank"
+#   ssh root@192.168.2.10 "UPS_SHUTDOWN_DRYRUN=1 /usr/local/sbin/ups-staged-shutdown.sh"
+# =============================================================================
+
+- name: USV-gesteuertes Herunterfahren auf den Proxmox-Nodes einrichten
+  hosts: pve_nodes
+  become: yes
+  gather_facts: yes
+
+  vars:
+    ups_server: "192.168.2.3"
+    ups_name: "ups"
+    ups_monitor_user: "monuser"
+    # ups_monitor_password: wird per -e uebergeben, siehe Kopf
+
+    # Karenz gegen kurzes Steckerziehen und Netzwischer
+    ups_grace_seconds: 120
+
+    # Schwellen nach Rang: [zuerst, zweiter, Kern-Node]
+    # Die Synology faehrt bei 20 % herunter und nimmt den NUT-Server mit —
+    # deshalb endet die letzte Stufe bei 30 % und nicht tiefer.
+    ups_stage_thresholds: [60, 45, 30]
+
+    # Gaeste, deren Ort die Abschaltreihenfolge bestimmt
+    ups_critical_guests:
+      - "vm:100"     # Home Assistant
+      - "vm:4600"    # postgres-prod
+      - "ct:4502"    # Frigate (Reolink-Kameras haengen per PoE am Switch)
+
+    # Wird nach der Karenz abgeworfen: kostet Strom, traegt im Ausfall nichts bei
+    ups_ballast_guests:
+      - "ct:4303"    # GitHub-Runner
+      - "ct:4304"    # GitHub-Runner 2
+
+  pre_tasks:
+    - name: Passwort muss uebergeben worden sein
+      ansible.builtin.assert:
+        that:
+          - ups_monitor_password is defined
+          - ups_monitor_password | length > 0
+        fail_msg: >-
+          ups_monitor_password fehlt. Aufruf:
+          ansible-playbook -i inventory.ini ups-shutdown.yml -e ups_monitor_password='...'
+      run_once: yes
+
+    - name: NUT-Server erreichbar?
+      ansible.builtin.wait_for:
+        host: "{{ ups_server }}"
+        port: 3493
+        timeout: 10
+      changed_when: false
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # NUT-Client
+    # -------------------------------------------------------------------------
+    - name: nut-client installieren
+      ansible.builtin.apt:
+        name: nut-client
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: NUT als reiner Netz-Client betreiben
+      ansible.builtin.copy:
+        dest: /etc/nut/nut.conf
+        mode: "0640"
+        owner: root
+        group: nut
+        content: |
+          # Ausgerollt von ansible/ups-shutdown.yml
+          # netclient: kein eigener Treiber, kein eigener upsd — die USV haengt
+          # per USB an der Synology, die den NUT-Server stellt.
+          MODE=netclient
+
+    - name: upsmon als Sicherheitsnetz konfigurieren
+      ansible.builtin.copy:
+        dest: /etc/nut/upsmon.conf
+        mode: "0640"
+        owner: root
+        group: nut
+        content: |
+          # Ausgerollt von ansible/ups-shutdown.yml — NICHT auf dem Host editieren.
+          #
+          # upsmon ist hier NICHT der Hauptmechanismus, sondern das Netz darunter:
+          # Es kennt nur ONBATT/LOWBATT/ONLINE, keine prozentgenauen Schwellen.
+          # Die Staffelung macht ups-staged-shutdown.sh. Greift die aus
+          # irgendeinem Grund nicht, faehrt spaetestens LOWBATT den Node geordnet
+          # herunter, statt ihn hart ausgehen zu lassen.
+          MONITOR {{ ups_name }}@{{ ups_server }} 1 {{ ups_monitor_user }} {{ ups_monitor_password }} slave
+          MINSUPPLIES 1
+          SHUTDOWNCMD "/sbin/shutdown -h +0"
+          POLLFREQ 5
+          POLLFREQALERT 5
+          HOSTSYNC 15
+          DEADTIME 15
+          RBWARNTIME 43200
+          NOCOMMWARNTIME 300
+          FINALDELAY 5
+          NOTIFYFLAG ONBATT   SYSLOG
+          NOTIFYFLAG ONLINE   SYSLOG
+          NOTIFYFLAG LOWBATT  SYSLOG
+          NOTIFYFLAG COMMBAD  SYSLOG
+          NOTIFYFLAG COMMOK   SYSLOG
+      notify: upsmon neu starten
+
+    - name: upsmon aktivieren
+      ansible.builtin.systemd:
+        name: nut-monitor
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    # -------------------------------------------------------------------------
+    # Staffelskript
+    # -------------------------------------------------------------------------
+    # Konfiguration und Code sind getrennt: Das Skript ist reines Bash und
+    # laesst sich ohne Ansible testen (bash -n, shellcheck), die Werte stehen
+    # in /etc/default. Ausserdem kollidiert Bashs ${#ARRAY[@]} mit Jinjas
+    # Kommentar-Syntax {# — ein Grund mehr, den Code nicht zu templaten.
+    - name: Konfiguration ausrollen
+      ansible.builtin.copy:
+        dest: /etc/default/ups-staged-shutdown
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          # Ausgerollt von ansible/ups-shutdown.yml — NICHT auf dem Host editieren.
+          # Gelesen von /usr/local/sbin/ups-staged-shutdown.sh
+
+          UPS_NAME="{{ ups_name }}"
+          UPS_SERVER="{{ ups_server }}"
+
+          # Karenz gegen kurzes Steckerziehen und Netzwischer
+          UPS_GRACE_SECONDS={{ ups_grace_seconds }}
+
+          # Schwellen nach Rang: zuerst / zweiter / Kern-Node.
+          # Die Synology faehrt bei 20 % herunter und nimmt den NUT-Server mit —
+          # deshalb endet die letzte Stufe bei 30 % und nicht tiefer.
+          UPS_STAGE_THRESHOLDS="{{ ups_stage_thresholds | join(' ') }}"
+
+          # Ihr Aufenthaltsort bestimmt die Abschaltreihenfolge
+          UPS_CRITICAL_GUESTS="{{ ups_critical_guests | join(' ') }}"
+
+          # Wird nach der Karenz abgeworfen
+          UPS_BALLAST_GUESTS="{{ ups_ballast_guests | join(' ') }}"
+
+    - name: Staffelskript ausrollen
+      ansible.builtin.copy:
+        src: files/ups-staged-shutdown.sh
+        dest: /usr/local/sbin/ups-staged-shutdown.sh
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: systemd-Unit fuer das Staffelskript
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/ups-staged-shutdown.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Gestaffeltes Herunterfahren bei Stromausfall (USV)
+          Documentation=file:///usr/local/sbin/ups-staged-shutdown.sh
+          After=network-online.target pve-cluster.service
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/ups-staged-shutdown.sh
+          # Grosszuegig: Stufe 4 wartet 45 s auf das Beenden der Gaeste
+          TimeoutStartSec=300
+          StandardOutput=journal
+          StandardError=journal
+      notify: systemd neu laden
+
+    - name: Timer fuer das Staffelskript
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/ups-staged-shutdown.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Prueft alle 30 s den USV-Zustand
+          Documentation=file:///usr/local/sbin/ups-staged-shutdown.sh
+
+          [Timer]
+          OnBootSec=90
+          OnUnitActiveSec=30
+          AccuracySec=5
+          Unit=ups-staged-shutdown.service
+
+          [Install]
+          WantedBy=timers.target
+      notify: systemd neu laden
+
+    - name: Timer aktivieren
+      ansible.builtin.systemd:
+        name: ups-staged-shutdown.timer
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    # -------------------------------------------------------------------------
+    # Verifikation
+    # -------------------------------------------------------------------------
+    - name: USV lesbar?
+      ansible.builtin.command: "upsc {{ ups_name }}@{{ ups_server }} ups.status"
+      register: ups_check
+      changed_when: false
+      failed_when: ups_check.stdout == ""
+
+    - name: Rangfolge, wie dieser Node sie sieht
+      ansible.builtin.command: /usr/local/sbin/ups-staged-shutdown.sh --print-rank
+      register: rank_out
+      changed_when: false
+
+    - name: Ergebnis
+      ansible.builtin.debug:
+        msg: "{{ [inventory_hostname + ': USV=' + ups_check.stdout] + rank_out.stdout_lines }}"
+
+  handlers:
+    - name: upsmon neu starten
+      ansible.builtin.systemd:
+        name: nut-monitor
+        state: restarted
+
+    - name: systemd neu laden
+      ansible.builtin.systemd:
+        daemon_reload: yes
