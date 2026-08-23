@@ -40,6 +40,8 @@ STATUS="$(ups_get ups.status)"
 if [ -z "$STATUS" ]; then
   printf 'ups_reporter_up{node="%s"} 0\n' "$NODE" \
     | curl -s --max-time 10 -X POST --data-binary @- "$VM_URL" >/dev/null 2>&1
+  # exit 0, nicht 1: Dass die USV gerade nicht antwortet, meldet die Metrik
+  # ups_reporter_up=0 — dafuer muss der Dienst nicht auch noch "failed" sein.
   exit 0
 fi
 
@@ -88,3 +90,11 @@ replace=0;  [[ "$STATUS" == *RB* ]] && replace=1
     [ -n "$rnk" ] && printf 'ups_node_shutdown_rank{node="%s"} %s\n' "$NODE" "$rnk"
   fi
 } | curl -s --max-time 10 -X POST --data-binary @- "$VM_URL" >/dev/null 2>&1
+
+# Bewusst immer 0: Ist VictoriaMetrics gerade nicht erreichbar — etwa weil beim
+# Kaltstart die Swarm-VMs selbst noch hochfahren —, ist das kein Defekt. Der
+# Timer versucht es 30 s spaeter erneut. Ohne dieses exit 0 bliebe der Dienst
+# als "failed" stehen und verrauschte genau die systemctl --failed-Uebersicht,
+# die nach einem Kaltstart der wichtigste Blick ist. (Beobachtet 2026-08-23:
+# status=7/NOTRUNNING, curls Code fuer "konnte nicht verbinden".)
+exit 0
