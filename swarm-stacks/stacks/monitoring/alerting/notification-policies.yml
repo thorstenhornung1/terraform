@@ -36,7 +36,14 @@ policies:
       - receiver: telegram-critical
         matchers:
           - severity = critical
-        group_wait: 10s
+        # 2026-06-30: group_by NUR grafana_folder (überschreibt das geerbte
+        # [grafana_folder, alertname]). Ein Incident-Sturm in EINEM Ordner
+        # (z.B. pve03-Freeze: swarm-node-down + frigate-down + camera gleichzeitig)
+        # kommt damit als EIN Telegram statt 4+. group_wait 10s→30s sammelt
+        # korrelierte Criticals kurz, bevor gesendet wird.
+        group_by:
+          - grafana_folder
+        group_wait: 30s
         group_interval: 5m
         repeat_interval: 4h
         continue: false

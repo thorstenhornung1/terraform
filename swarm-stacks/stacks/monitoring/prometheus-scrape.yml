@@ -90,6 +90,51 @@ scrape_configs:
         replacement: postgres-prod
 
   # ---------------------------------------------------------------------------
+  # PVE Node Exporter — die Hypervisoren selbst (Bare-Metal, seit 2026-08-23)
+  # ---------------------------------------------------------------------------
+  # Eigener Job-Name, NICHT `node-exporter`: der Job oben misst die Swarm-VMs,
+  # dieser die Bleche darunter. Die Alert-Regeln unterscheiden beide ueber
+  # job= — ein gemeinsamer Job wuerde z.B. swarm-node-down auf einen
+  # PVE-Reboot feuern lassen.
+  #
+  # Schliesst die Luecke aus dem RCA vom 2026-08-21: Beim Stromausfall blieb
+  # ein Ceph-OSD vier Stunden tot, ohne dass etwas Alarm schlug — die Hosts
+  # lieferten schlicht keine Metriken. pvestatd pusht zwar per InfluxDB-LP
+  # (object="nodes", siehe /etc/pve/status.cfg), aber nur ~50 aggregierte
+  # Werte: kein node_vmstat_oom_kill, keine Dateisysteme, keine Temperaturen.
+  #
+  # Der Exporter lauscht auf der LAN-IP (192.168.2.x), nicht auf 0.0.0.0 —
+  # ausgerollt von ansible/pve-monitoring.yml. Deshalb hier die 2er-Adressen
+  # und nicht die Storage-VLAN-IPs (192.168.12.x) wie beim ceph-Job.
+  #
+  # host= wird aus instance= dupliziert, damit sich die Serien im Dashboard
+  # ohne label_replace mit den pvestatd-Push-Metriken zusammenlegen lassen —
+  # die tragen host="pve01" und kein instance.
+  - job_name: pve-node-exporter
+    static_configs:
+      - targets:
+          - 192.168.2.10:9100
+          - 192.168.2.11:9100
+          - 192.168.2.12:9100
+        labels:
+          role: hypervisor
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '192\.168\.2\.10:.*'
+        target_label: instance
+        replacement: pve01
+      - source_labels: [__address__]
+        regex: '192\.168\.2\.11:.*'
+        target_label: instance
+        replacement: pve02
+      - source_labels: [__address__]
+        regex: '192\.168\.2\.12:.*'
+        target_label: instance
+        replacement: pve03
+      - source_labels: [instance]
+        target_label: host
+
+  # ---------------------------------------------------------------------------
   # PostgreSQL Exporter — Database metrics (Single-PG-VM postgres-prod)
   # ---------------------------------------------------------------------------
   # 2026-06-15: Patroni-Cluster durch Single-VM postgres-prod (192.168.4.45)
@@ -138,6 +183,62 @@ scrape_configs:
           - pbs-exporter:10019
         labels:
           instance: pbs
+
+  # ---------------------------------------------------------------------------
+  # SNMP — Synology DS918+
+  # ---------------------------------------------------------------------------
+  # Liefert Plattentemperaturen, Luefter, RAID-Zustand, CPU/RAM und
+  # Netzwerkdurchsatz. Schliesst die Luecke aus dem RCA vom 2026-08-21: Die
+  # Synology war bis dahin genauso unueberwacht wie die PVE-Hosts.
+  #
+  # SNMP-Scrapes laufen anders als normale Exporter: Prometheus fragt nicht das
+  # Geraet, sondern den Exporter — und uebergibt das Ziel als Parameter. Das
+  # Relabeling unten dreht deshalb __address__ und __param_target um, damit als
+  # instance die Synology erscheint und nicht der Exporter.
+  #
+  # auth=synology_v3 verweist auf den Eintrag, den snmp-entrypoint.sh zur
+  # Laufzeit aus den beiden Docker Secrets baut.
+  #
+  # 120s Intervall: SNMP-Walks ueber 248 Metriken sind traege, und
+  # Temperaturen aendern sich nicht im Sekundentakt.
+  - job_name: snmp-synology
+    scrape_interval: 120s
+    scrape_timeout: 60s
+    metrics_path: /snmp
+    params:
+      auth: [synology_v3]
+      module: [synology, if_mib]
+    static_configs:
+      - targets:
+          - 192.168.2.3
+        labels:
+          device: synology-ds918
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: snmp-exporter:9116
+
+  # ---------------------------------------------------------------------------
+  # UnPoller — UniFi-Controller (UDM Pro)
+  # ---------------------------------------------------------------------------
+  # Liefert Leistungsaufnahme je PoE-Port, Switch-Gesamtleistung, Client- und
+  # AP-Daten. Zweck ist Transparenz ueber das Rack: Nach dem USV-Cut-Over lagen
+  # 275 W an, von denen sich nur ~190 W zuordnen liessen.
+  #
+  # 60s statt der ueblichen 30s: UnPoller fragt bei jedem Scrape den Controller
+  # ab, und die UDM Pro braucht dafuer spuerbar Zeit. Fuer Leistungsdaten ist
+  # Minutenaufloesung reichlich — die USV-Metriken kommen ohnehin alle 30s.
+  - job_name: unpoller
+    scrape_interval: 60s
+    scrape_timeout: 30s
+    static_configs:
+      - targets:
+          - unpoller:9130
+        labels:
+          instance: udm-pro
 
   # ---------------------------------------------------------------------------
   # Patroni REST API — ENTFERNT 2026-06-15 (Patroni→Single-VM-Migration).

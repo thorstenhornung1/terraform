@@ -49,6 +49,10 @@ CHARGE="$(ups_get battery.charge)"
 RUNTIME="$(ups_get battery.runtime)"
 LOAD="$(ups_get ups.load)"
 POWER="$(ups_get ups.power)"
+# Wirkleistung: die Zahl, auf die es bei der Lastbilanz ankommt. ups.power ist
+# Scheinleistung (VA), ups.realpower die tatsaechlich verbrauchten Watt — bei
+# Schaltnetzteilen liegen die spuerbar auseinander (gemessen: 392 VA / 269 W).
+REALPOWER="$(ups_get ups.realpower)"
 INVOLT="$(ups_get input.voltage)"
 OUTVOLT="$(ups_get output.voltage)"
 CHARGE_LOW="$(ups_get battery.charge.low)"
@@ -76,6 +80,7 @@ replace=0;  [[ "$STATUS" == *RB* ]] && replace=1
   v="$(num "$RUNTIME")";    [ -n "$v" ] && printf 'ups_battery_runtime_seconds{ups="%s"} %s\n' "$UPS_NAME" "$v"
   v="$(num "$LOAD")";       [ -n "$v" ] && printf 'ups_load_percent{ups="%s"} %s\n' "$UPS_NAME" "$v"
   v="$(num "$POWER")";      [ -n "$v" ] && printf 'ups_power_va{ups="%s"} %s\n' "$UPS_NAME" "$v"
+  v="$(num "$REALPOWER")";  [ -n "$v" ] && printf 'ups_realpower_watts{ups="%s"} %s\n' "$UPS_NAME" "$v"
   v="$(num "$INVOLT")";     [ -n "$v" ] && printf 'ups_input_voltage{ups="%s"} %s\n' "$UPS_NAME" "$v"
   v="$(num "$OUTVOLT")";    [ -n "$v" ] && printf 'ups_output_voltage{ups="%s"} %s\n' "$UPS_NAME" "$v"
   v="$(num "$CHARGE_LOW")"; [ -n "$v" ] && printf 'ups_battery_charge_low_percent{ups="%s"} %s\n' "$UPS_NAME" "$v"

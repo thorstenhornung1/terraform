@@ -255,6 +255,10 @@ services:
         target: /var/lib/grafana/dashboards-infra/postgres-prod.json
       - source: dashboard_ups_power
         target: /var/lib/grafana/dashboards-infra/ups-power.json
+      - source: dashboard_pve_hosts
+        target: /var/lib/grafana/dashboards-infra/pve-hosts.json
+      - source: dashboard_unifi_poe
+        target: /var/lib/grafana/dashboards-infra/unifi-poe.json
       - source: alerting_contact_points
         target: /etc/grafana/provisioning/alerting/contact-points.yml
       - source: alerting_notification_policies
@@ -369,6 +373,175 @@ services:
         window: 120s
     healthcheck:
       disable: true
+
+  # ===========================================================================
+  # SNMP EXPORTER — VORUEBERGEHEND DEAKTIVIERT (2026-08-23)
+  # ===========================================================================
+  # Die Secrets synology_snmp_auth_password und synology_snmp_priv_password
+  # wurden zur Rotation geloescht. Ein fehlendes Secret laesst NICHT nur diesen
+  # Dienst scheitern, sondern den gesamten Stack-Deploy — docker stack deploy
+  # ist atomar. Dadurch blockierte er Aenderungen an voellig anderen Diensten.
+  #
+  # WIEDER AKTIVIEREN: Sobald beide Secrets neu angelegt sind, den Block unten
+  # und die beiden Secret-Deklarationen am Dateiende einkommentieren.
+  # Dabei pruefen: Der Wrapper erwartet priv_protocol AES; steht im DSM DES,
+  # muss eines von beidem angepasst werden.
+  # ===========================================================================
+#   # ===========================================================================
+#   # SNMP EXPORTER — Synology DS918+ (und spaeter weitere SNMP-Geraete)
+#   # ===========================================================================
+#   # Zweck: Die Synology war bislang genauso unueberwacht wie die PVE-Hosts —
+#   # eine Luecke, die im RCA zum Stromausfall vom 2026-08-21 stand. SNMPv3
+#   # liefert Plattentemperaturen, Luefterdrehzahlen, RAID-Zustand, CPU- und
+#   # Speicherauslastung sowie Netzwerkdurchsatz.
+#   #
+#   # AUFBAU: MODULE OEFFENTLICH, ZUGANG GEHEIM
+#   #   snmp-modules.yml (82 KB, Docker Config) traegt die MIB-Definitionen der
+#   #   Module "synology" und "if_mib" aus dem offiziellen Generator. Nichts
+#   #   davon ist geheim, es gehoert versioniert ins Repo. Die vollstaendige
+#   #   snmp.yml waere 2 MB gross und spraengte das 500-KB-Limit fuer Docker
+#   #   Configs — deshalb nur die beiden benoetigten Module.
+#   #
+#   #   Die SNMPv3-Zugangsdaten baut snmp-entrypoint.sh zur Laufzeit aus zwei
+#   #   Docker Secrets zusammen. Anders als UnPoller kennt der snmp_exporter
+#   #   kein file://-Praefix fuer Einzelwerte; er liest Zugangsdaten nur aus
+#   #   einer Konfigurationsdatei. Die entstehende Datei liegt in tmpfs und
+#   #   beruehrt nie ein Volume.
+#   snmp-exporter:
+#     image: prom/snmp-exporter:v0.30.1
+#     hostname: snmp-exporter
+#     entrypoint: /snmp-entrypoint.sh
+#     environment:
+#       SNMP_USERNAME: "grafana"
+#       TZ: "Europe/Berlin"
+#     configs:
+#       - source: snmp_modules
+#         target: /etc/snmp_exporter/snmp-modules.yml
+#         mode: 0444
+#       - source: snmp_entrypoint
+#         target: /snmp-entrypoint.sh
+#         mode: 0555
+#     secrets:
+#       - synology_snmp_auth_password
+#       - synology_snmp_priv_password
+#     tmpfs:
+#       - /tmp:size=1m,mode=0700
+#     networks:
+#       - monitoring-network
+#     deploy:
+#       mode: replicated
+#       replicas: 1
+#       placement:
+#         constraints:
+#           - node.labels.app == true
+#       resources:
+#         limits:
+#           cpus: '0.25'
+#           memory: 128M
+#         reservations:
+#           cpus: '0.05'
+#           memory: 32M
+#       restart_policy:
+#         condition: any
+#         delay: 30s
+#         window: 120s
+#       update_config:
+#         parallelism: 1
+#         delay: 10s
+#         order: stop-first
+#     healthcheck:
+#       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9116/-/healthy >/dev/null 2>&1 || exit 1"]
+#       interval: 60s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 30s
+
+  # ===========================================================================
+  # UNPOLLER — UniFi-Controller (UDM Pro) als Metrikquelle
+  # ===========================================================================
+  # Zweck: Transparenz ueber das Rack. Liefert Leistungsaufnahme je PoE-Port,
+  # Switch-Gesamtleistung, Client- und AP-Daten.
+  #
+  # WARUM UEBERHAUPT
+  #   Nach dem USV-Cut-Over am 2026-08-23 lag die Wirkleistung bei 275 W, von
+  #   denen sich rechnerisch nur ~190 W zuordnen liessen. Ohne Messung pro Port
+  #   bleibt jede Abwurfentscheidung im Ernstfall geraten.
+  #
+  # WAS ES NICHT SIEHT
+  #   PoE-Injektoren und Geraete an normalen Steckdosen tauchen hier nicht auf.
+  #   Die Differenz zwischen ups_realpower_watts und der Summe der Switch-Ports
+  #   ist genau dieser unsichtbare Teil — im Dashboard als eigenes Panel.
+  #
+  # ZUGANG
+  #   Lokaler UniFi-Benutzer "unpoller", Rolle Viewer (read-only), kein 2FA.
+  #   URL ohne Port 8443: UniFi OS stellt die Netzwerk-Anwendung hinter
+  #   /proxy/network/ bereit, UnPoller erkennt das selbst.
+  #   Das Passwort kommt per file://-Praefix direkt aus dem Docker Secret —
+  #   UnPoller unterstuetzt das nativ, es braucht keinen Entrypoint-Wrapper.
+  unpoller:
+    image: ghcr.io/unpoller/unpoller:v4.0.1
+    hostname: unpoller
+    environment:
+      UP_UNIFI_DEFAULT_URL: "https://192.168.2.1"
+      UP_UNIFI_DEFAULT_USER: "unpoller"
+      UP_UNIFI_DEFAULT_PASS: "file:///run/secrets/unpoller_unifi_password"
+      # Selbstsigniertes Zertifikat der UDM Pro
+      UP_UNIFI_DEFAULT_VERIFY_SSL: "false"
+      UP_UNIFI_DEFAULT_SAVE_SITES: "true"
+      # Auch Ports mitzaehlen, die gerade nichts ziehen — sonst verschwindet
+      # ein abgeschaltetes Geraet aus der Zeitreihe, statt auf 0 zu gehen.
+      UP_UNIFI_DEFAULT_SAVE_DPI: "false"
+      UP_PROMETHEUS_DISABLE: "false"
+      UP_PROMETHEUS_HTTP_LISTEN: "0.0.0.0:9130"
+      # Wir schreiben nach VictoriaMetrics per Scrape, nicht nach InfluxDB
+      UP_INFLUXDB_DISABLE: "true"
+      UP_LOKI_DISABLE: "true"
+      UP_POLLER_QUIET: "false"
+      TZ: "Europe/Berlin"
+    secrets:
+      # v2 nach Passwort-Rotation (2026-08-23). Docker Secrets sind
+      # unveraenderlich, deshalb ein neuer Name. target haelt den Dateinamen
+      # stabil, sodass die file://-Referenz oben unveraendert bleibt.
+      - source: unpoller_unifi_password_v2
+        target: unpoller_unifi_password
+    networks:
+      - monitoring-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 192M
+        reservations:
+          cpus: '0.05'
+          memory: 48M
+      restart_policy:
+        condition: any
+        # 120s statt 30s: Jeder Neustart bedeutet einen neuen Anmeldeversuch am
+        # Controller. Die UDM Pro drosselt Logins mit HTTP 429 (Brute-Force-
+        # Schutz) — schnelle Neustarts verschaerfen die Sperre, statt sie
+        # abklingen zu lassen.
+        delay: 120s
+        window: 600s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+    # KEIN Healthcheck: Das UnPoller-Image ist distroless und hat keine Shell
+    # ("exec: /bin/sh: no such file or directory"). Jeder CMD-SHELL-Test
+    # scheitert deshalb grundsaetzlich — der Container lief, exportierte
+    # Metriken, und blieb trotzdem ewig auf health=starting. Swarm meldete
+    # 0/1, der Service bekam keine VIP im Overlay, und vmagent fand kein Ziel.
+    #
+    # Der Scrape selbst ist der bessere Gesundheitstest: up{job="unpoller"}
+    # zeigt unmittelbar, ob der Exporter antwortet. Ein Healthcheck, der die
+    # Frage nicht beantworten kann, ist schlechter als keiner.
+    healthcheck:
+      test: ["NONE"]
 
   # ===========================================================================
   # BLACKBOX EXPORTER — HTTP/HTTPS probes + SSL cert-expiry
@@ -575,9 +748,33 @@ configs:
   # werden von den drei Hypervisoren per Prometheus-Import geschoben — die
   # Swarm-Nodes duerfen den NUT-Server auf der Synology nicht abfragen
   # ("ERR ACCESS-DENIED"). Siehe ansible/files/ups-metrics-push.sh
+  snmp_modules:
+    name: snmp_modules_${SNMP_MODULES_HASH:-latest}
+    file: ./snmp-modules.yml
+
+  snmp_entrypoint:
+    name: snmp_entrypoint_${SNMP_ENTRYPOINT_HASH:-latest}
+    file: ./snmp-entrypoint.sh
+
   dashboard_ups_power:
     name: dashboard_ups_power_${UPS_POWER_HASH:-latest}
     file: ./dashboards/ups-power.json
+
+  # Hypervisor-Dashboard (pve01-03). Quelle ist der node-exporter auf dem
+  # Blech, ausgerollt von ansible/pve-monitoring.yml — der Scrape-Job heisst
+  # pve-node-exporter und ist bewusst vom Swarm-Job node-exporter getrennt.
+  dashboard_pve_hosts:
+    name: dashboard_pve_hosts_${PVE_HOSTS_HASH:-latest}
+    file: ./dashboards/pve-hosts.json
+
+  # PoE- und Netzwerkgeraete-Dashboard. Quelle ist der unpoller-Service in
+  # diesem Stack. Die Port-zu-Geraet-Zuordnung entsteht per Join ueber
+  # sw_name/sw_port aus den Client-Metriken; UniFi-Infrastruktur (Access
+  # Points) laesst sich so nicht aufloesen, weil UnPoller fuer Geraete keine
+  # Uplink-Portnummer liefert — dort hilft nur, den Port in UniFi zu benennen.
+  dashboard_unifi_poe:
+    name: dashboard_unifi_poe_${UNIFI_POE_HASH:-latest}
+    file: ./dashboards/unifi-poe.json
 
   alerting_contact_points:
     name: alerting_contact_points_${CONTACT_POINTS_HASH:-latest}
@@ -635,6 +832,15 @@ networks:
 # SECRETS
 # =============================================================================
 secrets:
+  unpoller_unifi_password_v2:
+    external: true
+
+  # synology_snmp_auth_password:      # deaktiviert, siehe SNMP-Block oben
+  #   external: true
+
+  # synology_snmp_priv_password:      # deaktiviert, siehe SNMP-Block oben
+  #   external: true
+
   grafana_monitoring_admin_password:
     external: true
   pbs_api_token:

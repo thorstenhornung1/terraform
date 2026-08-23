@@ -530,12 +530,22 @@ groups:
           description: "Ceph enters read-only at ~95%. Clean up or expand storage."
 
   # ===========================================================================
-  # PVE HOSTS — Memory-Pressure- & Freeze-Frühwarnung
+  # PVE HOSTS — Memory-Pressure- & Freeze-Frühwarnung, Hostgesundheit
   # ===========================================================================
-  # Source: PVE-Status-Push (/etc/pve/status.cfg → InfluxDB-Proto an
-  # VictoriaMetrics :8428, ~10s-Takt via pvestatd). Serien object="nodes",
-  # host=pve01/02/03 — u.a. memory_memavailable (= echtes MemAvailable der
-  # HOSTS; kein node-exporter auf den PVE-Hosts nötig).
+  # ZWEI Quellen, bewusst nebeneinander:
+  #
+  # 1) PVE-Status-Push (/etc/pve/status.cfg → InfluxDB-Proto an
+  #    VictoriaMetrics :8428, ~10s-Takt via pvestatd). Serien object="nodes",
+  #    host=pve01/02/03 — u.a. memory_memavailable (= echtes MemAvailable der
+  #    HOSTS). Trägt pve-host-memory-pressure und pve-host-metrics-stale.
+  # 2) node-exporter auf den Hosts (job=pve-node-exporter, seit 2026-08-23,
+  #    ausgerollt von ansible/pve-monitoring.yml). Liefert alles, was der Push
+  #    nicht kennt: CPU je Modus, Dateisysteme, Netzzähler, Temperaturen und
+  #    node_vmstat_oom_kill.
+  #
+  # Die Trennung ist kein Zufall: fällt eine der beiden Pipelines aus, sieht
+  # die andere es. Ein Freeze-Detektor, der an derselben Leitung hängt wie
+  # alles andere, meldet den Freeze nur, solange es keinen gibt.
   # Ergänzt pve-i915-livelock-warning (Ceph-Storage-Gruppe). Vorfälle
   # 2026-08-08 (2× an EINEM Tag):
   #   - pve01 13:35 CEST: vzdump 13:30 lief 22min (üblich 2-3min) →
@@ -652,6 +662,329 @@ groups:
         annotations:
           summary: "PVE-Host {{ $labels.host }}: keine Status-Metriken seit {{ $values.A.Value }}s — Host-Freeze-Verdacht"
           description: "pvestatd auf {{ $labels.host }} pusht seit >4min keine Werte (Normaltakt ~10s). Muster pve03 08.08.2026: i915-Freeze 06:07, bemerkt erst ~12:20. Prüfen: ping + SSH auf den Host; eingefroren → Hard-Reset, danach RCA via journalctl -b -1 (i915-Livelock-Muster). Bei geplantem Reboot feuert die Regel einmal — Silence setzen."
+
+      # =====================================================================
+      # Ab hier: node-exporter auf den Hosts (job=pve-node-exporter, seit
+      # 2026-08-23, ansible/pve-monitoring.yml). Die beiden Regeln oben
+      # bleiben auf dem pvestatd-Push — bewusst: die zwei Quellen fallen
+      # unabhängig voneinander aus, und ein Freeze-Detektor, der an derselben
+      # Pipeline hängt wie alles andere, ist keiner.
+      # =====================================================================
+
+      # --- Host nicht erreichbar ---
+      # Zweiter, unabhängiger Weg zu derselben Aussage wie
+      # pve-host-metrics-stale: dort reißt der Push ab (Host oder pvestatd
+      # tot), hier scheitert der Scrape (Host, Netz oder Exporter tot). Beide
+      # critical und im selben Ordner — die Notification-Policy gruppiert nach
+      # grafana_folder, ein Ausfall wird also EIN Telegram mit zwei Zeilen.
+      # Das ist gewollt: die zweite Zeile sagt, welche Pipeline noch lebt.
+      #
+      # for: 2m wie swarm-node-down. Bei 30s Scrape-Intervall sind das vier
+      # Fehlversuche — kurze Netzwischer (Corosync-Flapping auf dem einen
+      # 1-GbE-Draht) laufen darunter durch.
+      - uid: pve-host-down
+        title: PVE host unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: up{job="pve-node-exporter"} == 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 2m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "PVE-Host {{ $labels.instance }} antwortet nicht mehr"
+          description: "node-exporter auf {{ $labels.instance }} ist seit 2min nicht erreichbar. Prüfen: ping, SSH, dann 'systemctl status prometheus-node-exporter'. Antwortet der Host auf Ping, aber SSH läuft in den Timeout, ist das das i915-Livelock-Muster (pve01/pve03) — siehe pve-host-memory-pressure. Mit diesem Alert stehen die Gäste des Hosts still: welche, zeigt 'ha-manager status' von einem der anderen Nodes."
+
+      # --- Wurzel-Dateisystem: Warnung ---
+      # Nur mountpoint="/" (LVM pve-root, 65-68 GB). Die ZFS-Datasets unter
+      # /tank melden alle denselben Pool-Restplatz — acht identische Serien je
+      # Host, die nichts zusätzlich aussagen. NFS und CephFS liefert der
+      # Exporter gar nicht erst (fs-types-exclude, siehe Playbook); deren
+      # Füllstand deckt SNMP bzw. der ceph-Job ab.
+      #
+      # Belegung am 2026-08-23: pve01 34%, pve02 48%, pve03 28%. Der Abstand
+      # zu 80% ist groß genug, dass die Warnung nicht zum Dauerzustand wird.
+      # Was / hier vollaufen lässt, sind vor allem /var/log (Purge-Sturm im
+      # Livelock schreibt tausende Zeilen/min) und liegengebliebene
+      # vzdump-Zwischendateien.
+      - uid: pve-host-root-disk-warning
+        title: PVE host root filesystem filling up
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                100 - (
+                  node_filesystem_avail_bytes{job="pve-node-exporter", mountpoint="/"}
+                  / node_filesystem_size_bytes{job="pve-node-exporter", mountpoint="/"}
+                  * 100
+                ) > 80
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 10m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "PVE-Host {{ $labels.instance }}: / über 80% belegt"
+          description: "Wurzel-Dateisystem von {{ $labels.instance }} läuft voll. Übliche Verursacher: 'journalctl --disk-usage' (Purge-Sturm nach i915-Livelock), abgebrochene vzdump-Läufe in /var/tmp, alte Kernel. Aufräumen bevor es kritisch wird — ein volles / legt pmxcfs und damit den Cluster-Status lahm."
+
+      # --- Wurzel-Dateisystem: kritisch ---
+      # Getrennte Regel statt einer mit zwei Schwellen: nur so trennt die
+      # Notification-Policy die Wege (critical sofort, warning in den Digest
+      # 08:00/18:00). Ein volles / auf einem PVE-Node ist kein Digest-Thema —
+      # pmxcfs kann dann nicht mehr schreiben, und ohne /etc/pve fällt die
+      # Cluster-Kommunikation aus.
+      - uid: pve-host-root-disk-critical
+        title: PVE host root filesystem critical
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                100 - (
+                  node_filesystem_avail_bytes{job="pve-node-exporter", mountpoint="/"}
+                  / node_filesystem_size_bytes{job="pve-node-exporter", mountpoint="/"}
+                  * 100
+                ) > 90
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 5m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "PVE-Host {{ $labels.instance }}: / über 90% belegt"
+          description: "Nur noch wenige GB frei auf {{ $labels.instance }}. Sofort: 'journalctl --vacuum-size=200M', 'du -xh --max-depth=2 / | sort -h | tail -20'. KEINE Gäste anfassen — ein volles / verhindert Snapshots und macht ein Rollback unmöglich."
+
+      # --- Arbeitsspeicher knapp (Frühwarnung) ---
+      # Ergänzt pve-host-memory-pressure, ersetzt sie nicht: die feuert
+      # critical bei <1.25 GiB absolut — das ist die Livelock-Schwelle, wenige
+      # Minuten vor dem Freeze. Hier geht es um die Stunde davor.
+      #
+      # Relativ statt absolut, weil pve02 mit 32 GB doppelt so viel Speicher
+      # hat wie pve01/pve03 mit 15-16 GB. Eine absolute Schwelle wäre auf
+      # pve02 zu scharf oder auf pve01 wirkungslos.
+      #
+      # Schwellwert-Herleitung (7d, 15m-Mittel, Stand 2026-08-23):
+      #   5%-Quantil:  pve01 10.7% | pve02 11.5% | pve03 11.9%
+      #   1%-Quantil:  pve01  8.3% | pve02  9.3% | pve03 10.4%
+      #   Minimum:     pve01  6.0% | pve02  6.6% | pve03  9.1%
+      # Bei 8% zählt VictoriaMetrics in 7 Tagen 17 (pve01) bzw. 4 (pve02)
+      # 5min-Punkte darunter, pve03 keinen — also einige wenige Episoden je
+      # Woche, praktisch alle in den vzdump-Fenstern. Als warning landet das
+      # im Digest und ist dort genau richtig: es zeigt den Trend, es weckt
+      # niemanden.
+      #
+      # 15m-Mittel im Query statt `for: 15m`, aus demselben Grund wie bei
+      # pve-host-memory-pressure: reißt der Scrape im Speicherdruck ab, würde
+      # eine Pending-Phase durch noData zurückgesetzt.
+      - uid: pve-host-memory-warning
+        title: PVE host memory getting tight
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                avg_over_time(node_memory_MemAvailable_bytes{job="pve-node-exporter"}[15m])
+                / avg_over_time(node_memory_MemTotal_bytes{job="pve-node-exporter"}[15m])
+                * 100
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [8]
+              refId: C
+        for: 0s
+        # Eine Druck-Welle = EIN Alert-Fenster (wie swarm-node-oom-kill).
+        keep_firing_for: 30m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "PVE-Host {{ $labels.instance }}: nur noch {{ $values.A.Value }}% MemAvailable (15m-Mittel)"
+          description: "Speicherreserve auf {{ $labels.instance }} unter 8%. Meist läuft gerade ein vzdump. Prüfen: 'ps aux | grep vzdump', 'arcstat' (ZFS-ARC), 'ha-manager status' (Gäste, die nach einem Failover hier gelandet sind). Erreicht der Wert 1.25 GiB absolut, feuert pve-host-memory-pressure critical — dann ist es zu spät für eine geordnete Reaktion."
+
+      # --- OOM-Kill auf dem Host ---
+      # Bis 2026-08-23 gab es diese Metrik auf den Hypervisoren nicht: die
+      # Regel frigate-lxc-oom fragte node_vmstat_oom_kill schon seit Monaten
+      # ab, nur lieferte kein Exporter den Wert. Sie war damit still
+      # wirkungslos — und der OOM-Kill im Frigate-LXC (LXC 4502, Speicher
+      # 6144→7168 MB angehoben) fiel nur zufällig auf.
+      #
+      # Diese Regel deckt alle drei Hosts ab, egal welcher Gast betroffen ist:
+      # node_vmstat_oom_kill zählt kernelweit, also auch Kills innerhalb einer
+      # LXC-cgroup. frigate-lxc-oom bleibt daneben bestehen und trägt den
+      # Frigate-spezifischen Runbook-Text; sie ist warning und läuft damit
+      # über einen anderen Zustellweg (Digest statt sofort).
+      - uid: pve-host-oom-kill
+        title: PVE host OOM-killed a process
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                increase(node_vmstat_oom_kill{job="pve-node-exporter"}[10m]) > 0
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 0s
+        # OOM-Wellen entprellen: mehrere Kills in Folge = ein Alert-Fenster.
+        keep_firing_for: 30m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: critical
+        annotations:
+          summary: "OOM-Kill auf PVE-Host {{ $labels.instance }} in den letzten 10min"
+          description: "Der Kernel auf {{ $labels.instance }} hat einen Prozess gekillt. Wer es traf, zeigt 'dmesg -T | grep -i oom-kill' (mit anon-rss). War es ein Gast, steht die cgroup dabei — Gegenprobe: 'cat /sys/fs/cgroup/lxc/<vmid>/memory.events'. Traf es einen Host-Prozess (ceph-osd, pvestatd, corosync), ist der Dienst danach womöglich tot, ohne dass ein eigener Alert dafür existiert: nach dem Stromausfall 2026-08-21 blieb genau so ein OSD vier Stunden unbemerkt liegen. 'systemctl --failed' prüfen."
+
+      # --- CPU-Dauerlast ---
+      # Nicht die Momentanlast, sondern das 30-Minuten-Mittel: einzelne
+      # Spitzen sind auf einem Hypervisor normal (Backup, Migration,
+      # Frigate-Inferenz). Interessant ist der Zustand, in dem Gäste
+      # dauerhaft auf CPU warten.
+      #
+      # Schwellwert-Herleitung (7d, Stand 2026-08-23, pvestatd-Daten):
+      #   Median:                pve01 21% | pve02 40% | pve03 23%
+      #   99%-Quantil (10s):     pve01 54% | pve02 84% | pve03 65%
+      #   höchstes 30m-Mittel:   pve01 55% | pve02 64% | pve03 66%
+      # 85% liegt über allem, was in 7 Tagen vorkam — die Regel hätte in
+      # dieser Woche kein einziges Mal gefeuert. pve02 ist dabei der enge
+      # Fall: 6 Kerne, 17 vCPU zugeteilt, Frigate teilt sich die CPU mit
+      # Home Assistant und postgres-prod.
+      #
+      # Load average bleibt bewusst außen vor: er zählt auch I/O-Waiter, und
+      # auf diesen Hosts (Ceph über EINE 1-GbE-Leitung) wartet dauernd etwas.
+      # Er steht im Dashboard, taugt aber nicht als Alarmkriterium.
+      - uid: pve-host-cpu-high
+        title: PVE host CPU saturated
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              expr: |
+                100 - (
+                  avg by (instance) (
+                    rate(node_cpu_seconds_total{job="pve-node-exporter", mode="idle"}[30m])
+                  ) * 100
+                )
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [85]
+              refId: C
+        for: 0s
+        keep_firing_for: 30m
+        noDataState: OK
+        execErrState: OK
+        labels:
+          severity: warning
+        annotations:
+          summary: "PVE-Host {{ $labels.instance }}: CPU {{ $values.A.Value }}% im 30min-Mittel"
+          description: "Anhaltende CPU-Sättigung auf {{ $labels.instance }}. Verursacher finden: 'top -b -n1 | head -20' auf dem Host, dann 'qm list'/'pct list' für die Gäste. Im LXC ist der Load-Average unbrauchbar (er zeigt den Host) — dort mit 'vmstat 1 5' auf id/wa schauen. Läuft gerade ein vzdump oder eine Migration, klärt sich das von selbst."
 
   # ===========================================================================
   # POSTGRESQL — Single-VM postgres-prod (192.168.4.45)
@@ -1324,8 +1657,9 @@ groups:
               # frigate→frigate-down, postgres-exporter→postgres-prod-down) raus —
               # sonst Doppel-/Dreifach-Alerts pro Ausfall. (blackbox bleibt drin:
               # fängt einen down-Exporter als 1 Alert statt N Probe-Fails ab.)
+              # 2026-08-23: pve-node-exporter ergänzt → pve-host-down.
               expr: |
-                up{job!~"ceph|homeassistant|node-exporter|postgres-exporter|frigate"} == 0
+                up{job!~"ceph|homeassistant|node-exporter|pve-node-exporter|postgres-exporter|frigate"} == 0
               instant: true
               refId: A
           - refId: C
@@ -1354,7 +1688,9 @@ groups:
   # FRIGATE NVR — Camera Health & Detection
   # ===========================================================================
   # Source: Frigate Prometheus metrics on frigate.hornung-bn.de:443 (job=frigate)
-  # LXC 4502 on pve03 with OpenVINO iGPU
+  # LXC 4502 mit OpenVINO-iGPU, HA-verwaltet (Affinity frigate-loc:
+  # pve02 > pve01 > pve03) — steht am 2026-08-23 auf pve02. Regeln, die den
+  # Host adressieren, duerfen ihn deshalb NICHT festverdrahten.
 
   - orgId: 1
     name: Frigate NVR
@@ -1627,8 +1963,27 @@ groups:
       # prometheus-scrape.yml eingetragen sein. Bis dahin uebernimmt
       # frigate-no-detections die Abdeckung: Ein OOM-Kill von frigate.capture
       # aeussert sich dort binnen 30 min als detection_fps == 0.
+      # --- OOM-Kill auf dem Frigate-Host --------------------------------------
+      # 2026-08-23 REPARIERT. Die Regel war doppelt kaputt:
+      #   1. node_vmstat_oom_kill gab es auf keinem PVE-Host — kein Exporter,
+      #      keine Metrik, kein Alarm. Vier Monate lang stiller Blindflug.
+      #   2. Der Filter zeigte auf pve03 und auf 192.168.4.42. Frigate läuft
+      #      aber in LXC 4502 auf pve02, und 192.168.4.42 ist docker-infra-3 —
+      #      eine Swarm-VM, die mit Frigate nichts zu tun hat. Selbst mit
+      #      Exporter hätte die Regel den Kill nicht gesehen.
+      #
+      # Jetzt: job=pve-node-exporter über ALLE drei Hosts. Kein Pin auf einen
+      # Node, denn genau das war Fehler 2 — CT 4502 ist HA-verwaltet
+      # (Affinity frigate-loc: pve02 > pve01 > pve03) und wandert.
+      #
+      # Verhältnis zu pve-host-oom-kill (Gruppe "PVE Hosts"): dieselbe Metrik,
+      # dieselben Hosts. Die dortige Regel ist critical und meldet sofort,
+      # dass überhaupt ein Kill passiert ist. Diese hier ist warning, landet
+      # im Digest und trägt den Frigate-Runbook-Text — die wahrscheinlichste
+      # Erklärung für einen Kill auf diesen Hosts steht damit nachlesbar
+      # daneben, ohne dass sie zweimal weckt.
       - uid: frigate-lxc-oom
-        title: OOM-kill on Frigate host (INAKTIV — kein node-exporter auf pve*)
+        title: OOM-kill on Frigate host (LXC 4502 verdächtig)
         condition: C
         data:
           - refId: A
@@ -1638,7 +1993,7 @@ groups:
             datasourceUid: victoriametrics
             model:
               expr: |
-                increase(node_vmstat_oom_kill{instance=~"pve03.*|192\\.168\\.4\\.42.*"}[10m])
+                increase(node_vmstat_oom_kill{job="pve-node-exporter"}[10m])
               instant: true
               refId: A
           - refId: C
@@ -1661,8 +2016,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "OOM-kill auf dem Frigate-Host in den letzten 10min — vermutlich LXC 4502"
-          description: "node_vmstat_oom_kill ist gestiegen: Ein Prozess im Frigate-LXC wurde vom Kernel gekillt. ACHTUNG — diese Regel ist derzeit WIRKUNGSLOS, weil auf pve01-03 kein node-exporter laeuft (siehe Kommentar in alert-rules.yml). Pruefen: 'ssh root@pve02 \"dmesg -T | grep -iE oom-kill\"' fuer die getroffenen Prozesse und deren anon-rss, sowie 'cat /sys/fs/cgroup/lxc/4502/memory.events'. LXC 4502 hat aktuell 7168 MB + 4096 MB swap. Mehr Speicher hilft nur, wenn der Druck aus dem Workload kommt — staut sich dagegen das Aufnahmeziel (Synology), verlaengert er nur die Zeit bis zum naechsten Kill."
+          summary: "OOM-kill auf PVE-Host {{ $labels.instance }} in den letzten 10min — LXC 4502 verdaechtig"
+          description: "node_vmstat_oom_kill auf {{ $labels.instance }} ist gestiegen. Laeuft Frigate auf diesem Host ('pct list | grep 4502'), ist LXC 4502 der wahrscheinlichste Verursacher. Pruefen: 'ssh root@{{ $labels.instance }} \"dmesg -T | grep -iE oom-kill\"' fuer die getroffenen Prozesse und deren anon-rss, sowie 'cat /sys/fs/cgroup/lxc/4502/memory.events'. LXC 4502 hat aktuell 7168 MB + 4096 MB swap. Mehr Speicher hilft nur, wenn der Druck aus dem Workload kommt — staut sich dagegen das Aufnahmeziel (Synology), verlaengert er nur die Zeit bis zum naechsten Kill."
 
       # --- Recordings-Volume läuft voll -------------------------------------
       # 2026-08-15: Bis hierher gab es KEINEN Alert auf den Füllstand von

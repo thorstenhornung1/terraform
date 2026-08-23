@@ -1,0 +1,123 @@
+{
+  "annotations": { "list": [ { "builtIn": 1, "datasource": { "type": "grafana", "uid": "-- Grafana --" }, "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)", "name": "Annotations & Alerts", "type": "dashboard" } ] },
+  "description": "Single-VM PostgreSQL (postgres-prod, 192.168.4.45) — ersetzt Patroni-Cluster (2026-06-15)",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "mappings": [ { "options": { "0": { "color": "red", "text": "DOWN" }, "1": { "color": "green", "text": "UP" } }, "type": "value" } ], "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
+      "pluginVersion": "11.0.0",
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "pg_up{instance=\"postgres-prod\"}", "instant": true, "refId": "A" } ],
+      "title": "PostgreSQL",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 } ] }, "unit": "percent", "max": 100, "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 5, "x": 4, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "11.0.0",
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "sum(pg_stat_database_numbackends{instance=\"postgres-prod\"}) / max(pg_settings_max_connections{instance=\"postgres-prod\"}) * 100", "refId": "A" } ],
+      "title": "Connection Saturation (% of max)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 5, "x": 9, "y": 0 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "11.0.0",
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "sum(pg_stat_database_numbackends{instance=\"postgres-prod\"})", "refId": "A" } ],
+      "title": "Active Connections",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 15 }, { "color": "green", "value": 25 } ] }, "unit": "percent", "max": 100, "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 5, "x": 14, "y": 0 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "11.0.0",
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "min(node_filesystem_avail_bytes{instance=\"postgres-prod\",fstype!~\"tmpfs|overlay|squashfs\"} / node_filesystem_size_bytes{instance=\"postgres-prod\",fstype!~\"tmpfs|overlay|squashfs\"}) * 100", "refId": "A" } ],
+      "title": "Free Disk (min %)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }, "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 5, "x": 19, "y": 0 },
+      "id": 5,
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "11.0.0",
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "time() - node_boot_time_seconds{instance=\"postgres-prod\"}", "refId": "A" } ],
+      "title": "VM Uptime",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": false, "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never", "stacking": { "mode": "none" } }, "unit": "bytes" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 6,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "pg_database_size_bytes{instance=\"postgres-prod\",datname!~\"template.*\"}", "legendFormat": "{{datname}}", "refId": "A" } ],
+      "title": "Database Sizes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": false, "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never", "stacking": { "mode": "none" } }, "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 7,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "sum(rate(pg_stat_database_xact_commit{instance=\"postgres-prod\"}[5m]))", "legendFormat": "commits/s", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "sum(rate(pg_stat_database_xact_rollback{instance=\"postgres-prod\"}[5m]))", "legendFormat": "rollbacks/s", "refId": "B" }
+      ],
+      "title": "Transactions / sec",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": false, "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "percent", "max": 100, "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "id": 8,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "sum(rate(pg_stat_database_blks_hit{instance=\"postgres-prod\"}[5m])) / (sum(rate(pg_stat_database_blks_hit{instance=\"postgres-prod\"}[5m])) + sum(rate(pg_stat_database_blks_read{instance=\"postgres-prod\"}[5m]))) * 100", "legendFormat": "cache hit ratio", "refId": "A" } ],
+      "title": "Cache Hit Ratio",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": false, "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }, "unit": "percent", "max": 100, "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 9,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "100 - (avg(rate(node_cpu_seconds_total{instance=\"postgres-prod\",mode=\"idle\"}[5m])) * 100)", "legendFormat": "CPU %", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "(1 - node_memory_MemAvailable_bytes{instance=\"postgres-prod\"} / node_memory_MemTotal_bytes{instance=\"postgres-prod\"}) * 100", "legendFormat": "RAM %", "refId": "B" }
+      ],
+      "title": "VM CPU & RAM",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["postgresql", "database", "postgres-prod"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "PostgreSQL — postgres-prod (Single-VM)",
+  "uid": "postgres-prod-singlevm",
+  "version": 1,
+  "weekStart": ""
+}
