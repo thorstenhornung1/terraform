@@ -1,0 +1,256 @@
+# =============================================================================
+# Assets Stack — zentrale Auslieferung statischer Dateien im Homelab
+# =============================================================================
+# Access: https://assets.hornung-bn.de (intern, DNS-01-Zertifikat)
+# Kein SSO: die Dateien sind Logos und Themes, also genau das, was jeder
+# Browser VOR einer Anmeldung laden koennen muss. Eine Absicherung mit
+# Authentik wuerde die Icons auf der Login-Seite selbst unerreichbar machen.
+#
+# WARUM ES DIESEN DIENST GIBT
+#   Das Authentik-Dashboard hat seine Icons bis 2026-08-16 von jsDelivr
+#   geladen (cdn.jsdelivr.net/gh/selfhst/icons). Das kostete zweierlei:
+#   Jeder Aufruf des Dashboards meldete IP und Referer der Familie an ein
+#   fremdes CDN, und bei dessen Ausfall fehlten die Bilder. Beides faellt
+#   weg, sobald die Dateien aus dem eigenen Netz kommen.
+#
+# =============================================================================
+# ⚠️ WIE DIE DATEIEN IN DEN CONTAINER KOMMEN — und warum so
+# =============================================================================
+# Gewaehlt: DOCKER CONFIGS, eine pro Datei, versioniert im Repo.
+#
+#   Die Alternativen und warum sie verloren haben:
+#
+#   * Bind-Mount auf CephFS (/mnt/cephfs/swarm-state/stack-assets/):
+#     flexibel, aber die Dateien lebten dann UNVERSIONIERT neben dem Repo.
+#     Wer ein Logo austauscht, hinterlaesst keine Spur im Git-Log, und ein
+#     verlorenes CephFS nimmt die Dateien mit. Genau die Sorte Drift, gegen
+#     die der GitOps-Weg hier ueberhaupt gebaut wurde.
+#
+#   * Eigenes Image (images/assets/ + build-assets.yml, wie kitinerary &
+#     Co.): sauber, aber es macht aus einem Deploy zwei. Ein Commit, der
+#     Logo UND Stack aendert, startet Bild-Build und Stack-Deploy PARALLEL —
+#     der Deploy greift dann nach einem Tag, den der Build noch nicht
+#     gepusht hat. Fuer sechs Dateien von zusammen 29 KB ist das zu viel
+#     Apparat. Sollte hier je eine echte Bildersammlung landen (backgrounds/
+#     mit Fotos), ist der Wechsel dorthin die richtige Antwort.
+#
+#   * Docker Configs: die Dateien liegen im Repo, sind im Diff lesbar (SVG
+#     ist Text), brauchen keinen Speicher auf einem Node und keinen
+#     placement-Constraint. Der Dienst ist damit vollstaendig zustandslos
+#     und ueberlebt den Verlust eines Nodes.
+#
+# 🔴 DER PREIS — BITTE LESEN, BEVOR EINE DATEI GEAENDERT WIRD
+#   Docker Configs sind UNVERAENDERLICH. Gleicher Config-Name = Docker
+#   benutzt weiter den alten Inhalt, ohne Fehler, ohne Warnung.
+#
+#   Die Pipeline loest das sonst ueber Content-Hashes im Config-Namen
+#   (${NGINX_HASH} unten) — aber ihr Glob kennt nur *.yml, *.sh, *.conf,
+#   *.cfg und *.json (.github/workflows/deploy-stacks.yml). Fuer .svg und
+#   .png berechnet sie KEINEN Hash. Eine geaenderte Datei wuerde also still
+#   ignoriert.
+#
+#   Deshalb tragen alle Asset-Configs ein Generations-Kuerzel: derzeit _v1.
+#   REGEL: Wird eine Datei unter logos/, css/ oder backgrounds/ ausgetauscht
+#   oder ergaenzt, wird das Kuerzel in ALLEN Asset-Configs gemeinsam erhoeht:
+#
+#       sed -i '' 's/_v1/_v2/g' stacks/infrastructure/assets/assets-stack.yml
+#
+#   Ein Durchgang, alle Namen neu. Wer das vergisst, deployt erfolgreich —
+#   und liefert weiter das alte Bild aus. Kontrolle nach dem Deploy deshalb
+#   immer am echten Abruf, nie am gruenen Haken der Pipeline:
+#     curl -sk --resolve assets.hornung-bn.de:443:192.168.4.40 \
+#       https://assets.hornung-bn.de/logos/immich.svg | sha256sum
+#
+#   Und: Die alten Config-Objekte bleiben liegen. Das `--prune` der Pipeline
+#   raeumt nur verwaiste SERVICES weg, keine Configs — im Cluster lagen am
+#   2026-08-16 bereits 98 Stueck, allein 24 Generationen alerting_rules.
+#   Das kostet nichts ausser Uebersicht, laesst sich aber gelegentlich
+#   aufraeumen (loescht nur, was kein Service referenziert):
+#     docker config ls -q | xargs -r -n1 docker config rm 2>/dev/null
+#
+# Voraussetzungen fuer den Betrieb:
+#   1. DNS: assets.hornung-bn.de -> 192.168.4.40/.41/.42 (Traefik-Nodes).
+#      Wird von HAND in Technitium gepflegt, ausschliesslich auf dns1
+#      (192.168.4.2) — dns2/dns3 sind read-only Secondaries.
+#   2. Sonst nichts: keine Secrets, kein Volume, kein Verzeichnis auf einem
+#      Node, keine Datenbank.
+# =============================================================================
+
+version: '3.8'
+
+services:
+  assets:
+    image: nginx:1.30.4-alpine
+    hostname: assets
+    networks:
+      - traefik_public
+
+    # ⚠️ KEIN command-Override, um worker_processes zu senken — das war der
+    # erste Versuch und er kostete einen kaputten Deploy:
+    #   command: ["nginx", "-g", "daemon off; worker_processes 1;"]
+    # Das Image setzt worker_processes bereits in /etc/nginx/nginx.conf:3.
+    # Ein zweites Vorkommen per -g ist fuer nginx kein Ueberschreiben,
+    # sondern ein Fehler ("worker_processes directive is duplicate"), der
+    # Container beendet sich mit Exit 1 — und zwar ohne eine Zeile in
+    # `docker service logs`, weil nginx stirbt, bevor es die Logdateien
+    # nach /dev/stdout umbiegt. Sichtbar wird der Grund erst mit
+    # `docker run ... nginx -t` auf einem Node.
+    #
+    # Es bleibt also beim Image-Default "auto" = ein Worker je Kern, auf den
+    # Infra-Nodes vier. Kostet ein paar MB mehr als noetig, ist aber im
+    # Budget unten eingerechnet.
+
+    configs:
+      # Content-Hash: nginx.conf faellt unter den Glob der Pipeline, hier
+      # greift die automatische Aufloesung. Nur die Asset-Dateien darunter
+      # brauchen das Generations-Kuerzel von Hand (siehe Kopf).
+      - source: nginx_conf_${NGINX_HASH:-latest}
+        target: /etc/nginx/conf.d/default.conf
+        mode: 0444
+
+      # --- Logos ---------------------------------------------------------
+      # Ziel-Pfade ergeben die oeffentliche URL:
+      #   /usr/share/nginx/html/logos/immich.svg -> /logos/immich.svg
+      - source: logo_wallos_v1
+        target: /usr/share/nginx/html/logos/wallos.svg
+        mode: 0444
+      - source: logo_paperless_ngx_v1
+        target: /usr/share/nginx/html/logos/paperless-ngx.svg
+        mode: 0444
+      - source: logo_immich_v1
+        target: /usr/share/nginx/html/logos/immich.svg
+        mode: 0444
+      - source: logo_frigate_v1
+        target: /usr/share/nginx/html/logos/frigate.svg
+        mode: 0444
+      - source: logo_taiga_v1
+        target: /usr/share/nginx/html/logos/taiga.svg
+        mode: 0444
+      # Einziges Raster-Bild im Bestand: Open Archiver liefert sein Logo
+      # nicht als SVG (selfhst/icons index.json: "SVG": "No"). 25 KB PNG
+      # sind vertretbar; ein SVG waere vorzuziehen, existiert aber nicht.
+      - source: logo_open_archiver_v1
+        target: /usr/share/nginx/html/logos/open-archiver.png
+        mode: 0444
+
+    deploy:
+      mode: replicated
+      # Zwei Replicas, nicht eine: Der Ausfall eines CDNs war einer der zwei
+      # Gruende, diesen Dienst zu bauen — ihn dann an einen einzelnen Node zu
+      # haengen, haette das Problem nur nach innen verlegt. Und nicht drei
+      # (mode: global): zwei ueberstehen den Verlust eines Nodes ebenso, bei
+      # zwei Dritteln der Reservierung.
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.app == true
+        # Ohne diese Grenze duerfte der Scheduler beide Replicas auf denselben
+        # Node legen — dann waere die zweite reine Dekoration.
+        max_replicas_per_node: 1
+        preferences:
+          - spread: node.hostname
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M
+        reservations:
+          # Der Swarm-Scheduler kennt NUR reservations — ein Dienst ohne
+          # Angabe ist fuer ihn unsichtbar und fuehrt zur Ueberbuchung des
+          # Nodes (CLAUDE.md). Deshalb steht hier ein Wert, auch wenn der
+          # Dienst winzig ist.
+          #
+          # Gemessen auf docker-infra-1 (nginx-alpine, Master + Worker,
+          # sechs Dateien): 4,8 MB im Leerlauf. Die 32M sind also mit
+          # Absicht das Sechsfache — der Page-Cache der ausgelieferten
+          # Dateien wird dem cgroup zugerechnet, und unter backgrounds/
+          # sollen spaeter Hintergrundbilder liegen, die aus 29 KB schnell
+          # ein paar MB machen. Lieber einmal grosszuegig reserviert als bei
+          # der ersten Bilddatei nachjustiert.
+          # 64M Limit faengt einen Ausreisser ab, ohne im Normalbetrieb je
+          # zu greifen.
+          cpus: '0.01'
+          memory: 32M
+      restart_policy:
+        condition: any
+        delay: 5s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        # ⚠️ stop-first, obwohl der Dienst zustandslos ist und start-first
+        # hier auf den ersten Blick besser passt. Der Grund ist das
+        # Zusammenspiel mit max_replicas_per_node: 1 (siehe oben):
+        #
+        # start-first will die neue Instanz starten, BEVOR die alte geht.
+        # Bei zwei Replicas auf drei Nodes braucht dieser Tausch zeitweise
+        # einen vierten Platz — den max_replicas_per_node nicht hergibt.
+        # Am 2026-08-16 blieb der Deploy genau daran haengen: 3/2 Replicas,
+        # eine Task dauerhaft "Pending: no suitable node (max replicas per
+        # node limit exceed)", UpdateStatus fuer immer "updating". Die
+        # Auslieferung lief dabei weiter — der Deploy meldete den Stillstand
+        # also nur ueber das Konvergenz-Gate der Pipeline.
+        #
+        # stop-first kommt mit zwei Plaetzen aus. Verfuegbarkeit kostet das
+        # nichts: parallelism ist 1, es wird also immer nur eine der beiden
+        # Instanzen getauscht, und Traefik schickt die Anfragen so lange auf
+        # die andere.
+        order: stop-first
+        # Zustandslos und ohne Migrationen: ein Rollback stellt hier
+        # tatsaechlich den vorherigen, funktionierenden Zustand her (anders
+        # als bei Wallos oder Vaultwarden, wo das Schema zurueckbliebe).
+        failure_action: rollback
+        # monitor > healthcheck.start_period (10s), sonst stiller Rollback.
+        monitor: 30s
+      labels:
+        # --- Traefik (v3.6+: traefik.swarm.*) ---
+        - traefik.swarm.network=traefik_public
+        - traefik.enable=true
+        - "traefik.http.routers.assets.rule=Host(`assets.hornung-bn.de`)"
+        - traefik.http.routers.assets.entrypoints=websecure
+        - traefik.http.routers.assets.tls=true
+        - traefik.http.routers.assets.tls.certresolver=dns
+        - traefik.http.services.assets.loadbalancer.server.port=80
+        # --- HTTP -> HTTPS ---
+        - "traefik.http.routers.assets-http.rule=Host(`assets.hornung-bn.de`)"
+        - traefik.http.routers.assets-http.entrypoints=web
+        - traefik.http.routers.assets-http.middlewares=assets-redirect
+        - traefik.http.middlewares.assets-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.assets-redirect.redirectscheme.permanent=true
+
+    healthcheck:
+      # Prueft den eigenen /healthz-Block, NICHT eine der Asset-Dateien:
+      # sonst haette ein vergessener Config-Eintrag den ganzen Dienst als
+      # krank gemeldet, statt nur eine 404 auf ein Logo zu liefern.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  traefik_public:
+    external: true
+
+# =============================================================================
+# CONFIGS
+# =============================================================================
+# Das Generations-Kuerzel _v1 wird bei JEDER Aenderung an einer Asset-Datei
+# gemeinsam erhoeht — Begruendung im Kopf dieser Datei.
+configs:
+  nginx_conf_${NGINX_HASH:-latest}:
+    file: ./nginx.conf
+  logo_wallos_v1:
+    file: ./logos/wallos.svg
+  logo_paperless_ngx_v1:
+    file: ./logos/paperless-ngx.svg
+  logo_immich_v1:
+    file: ./logos/immich.svg
+  logo_frigate_v1:
+    file: ./logos/frigate.svg
+  logo_taiga_v1:
+    file: ./logos/taiga.svg
+  logo_open_archiver_v1:
+    file: ./logos/open-archiver.png

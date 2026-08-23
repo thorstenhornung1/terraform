@@ -1,0 +1,108 @@
+---
+# =============================================================================
+# Traefik-Reload nach Zertifikatserneuerung
+# =============================================================================
+# Ergaenzt den Swarm-Dienst traefik_certs-renew um den Schritt, den dieser
+# nicht selbst tun kann: Traefik dazu bringen, die neuen Zertifikate zu lesen.
+#
+# Hintergrund im Kopf von files/traefik-certs-reload.sh. Kurz: Traefiks
+# fsnotify-Watcher sieht Aenderungen nicht, die ein anderer CephFS-Client
+# schreibt. Ohne diesen Timer erneuert lego zwar korrekt, aber Traefik liefert
+# weiter die alten Zertifikate — bis zum naechsten Neustart, also potenziell
+# ueber den Ablauf hinaus.
+#
+#   ansible-playbook -i inventory ansible/traefik-certs-reload.yml
+# =============================================================================
+
+- name: Traefik-Reload bei geaenderten Zertifikaten
+  hosts: infra_nodes
+  become: true
+  gather_facts: true
+
+  vars:
+    # Taeglich reicht: Die Erneuerung setzt 30 Tage vor Ablauf ein, ein Tag
+    # Verzoegerung beim Reload faellt daneben nicht ins Gewicht. Seltener
+    # anzusetzen hiesse, einem stillen Fehler laenger Zeit zu geben.
+    reload_oncalendar: "*-*-* 04:30:00"
+
+  tasks:
+    - name: Reload-Skript ausrollen
+      ansible.builtin.copy:
+        src: files/traefik-certs-reload.sh
+        dest: /usr/local/sbin/traefik-certs-reload.sh
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: systemd-Service anlegen
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/traefik-certs-reload.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Traefik neu laden, wenn sich die Zertifikate geaendert haben
+          # Ohne den Mount ist die Pruefung sinnlos; das Skript beendet sich
+          # dann sauber mit 0, damit der Dienst nicht als failed stehenbleibt
+          # und die systemctl --failed-Uebersicht verrauscht.
+          After=network-online.target docker.service mnt-cephfs.mount
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/traefik-certs-reload.sh
+          TimeoutStartSec=300
+      notify: systemd neu einlesen
+
+    - name: systemd-Timer anlegen
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/traefik-certs-reload.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Taeglicher Traefik-Reload-Check
+
+          [Timer]
+          OnCalendar={{ reload_oncalendar }}
+          # Streuung, damit die drei Nodes nicht gleichzeitig um den Lock
+          # konkurrieren. Wer ihn nicht bekommt, beendet sich sofort — die
+          # Streuung spart nur unnoetige Laeufe.
+          RandomizedDelaySec=900
+          # Nach einem Kaltstart nachholen: Faellt der Cluster ueber den
+          # Zeitpunkt hinweg aus, liefe der Check sonst erst am naechsten Tag.
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      notify: systemd neu einlesen
+
+    - name: Handler jetzt ausfuehren
+      ansible.builtin.meta: flush_handlers
+
+    - name: Timer aktivieren
+      ansible.builtin.systemd:
+        name: traefik-certs-reload.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    # Einmal direkt ausfuehren: Das legt den Marker an. Ohne ihn haelt der
+    # erste echte Lauf certs.yml faelschlich fuer neu und startet Traefik
+    # ohne Anlass durch.
+    - name: Einmalig ausfuehren, um den Marker zu setzen
+      ansible.builtin.command: /usr/local/sbin/traefik-certs-reload.sh
+      register: first_run
+      changed_when: "'Reload ausgeloest' in first_run.stdout"
+      failed_when: false
+
+    - name: Ergebnis anzeigen
+      ansible.builtin.debug:
+        msg: "{{ first_run.stdout_lines | default(['(keine Ausgabe)']) }}"
+
+  handlers:
+    - name: systemd neu einlesen
+      ansible.builtin.systemd:
+        daemon_reload: true

@@ -65,7 +65,32 @@ entries:
         }
 
   # ---------------------------------------------------------------------------
-  # 2. Email-Stage: verschickt den Bestätigungslink
+  # 2. Identification-Stage: setzt den pending_user
+  # ---------------------------------------------------------------------------
+  # ⚠️ OHNE DIESE STAGE BRICHT DER FLOW AB. Die Email-Stage verlangt einen
+  # pending_user im Flow-Kontext und ruft sonst stage_invalid() auf
+  # (stages/email/stage.py:153) — in der Oberfläche sichtbar als
+  # "Anfrage wurde verweigert / Unknown error", ohne Eintrag im Event-Log.
+  #
+  # Gesetzt wird pending_user NUR beim Flow-Start über die API
+  # (flows/api/flows.py:193), nicht beim direkten Aufruf von
+  # /if/flow/<slug>/. Angemeldet zu sein genügt also nicht.
+  #
+  # Dass hier trotz bestehender Anmeldung nochmals die Kennung abgefragt
+  # wird, ist der Preis dafür — und inhaltlich vertretbar: Die Eingabe legt
+  # fest, WELCHE Adresse bestätigt werden soll. Dasselbe Muster nutzt
+  # Authentiks eigenes Beispiel flows-recovery-email-verification.yaml.
+  - identifiers:
+      name: hornung-email-verification-ident
+    id: email-verification-ident
+    model: authentik_stages_identification.identificationstage
+    attrs:
+      user_fields:
+        - email
+        - username
+
+  # ---------------------------------------------------------------------------
+  # 3. Email-Stage: verschickt den Bestätigungslink
   # ---------------------------------------------------------------------------
   # use_global_settings: true übernimmt AUTHENTIK_EMAIL__* aus dem Stack
   # (Host 192.168.4.71, Absender homelab@hornung-bn.de — verifiziert am
@@ -82,6 +107,7 @@ entries:
       use_global_settings: true
       template: email/account_confirmation.html
       activate_user_on_success: false
+      token_expiry: minutes=30
 
   # ---------------------------------------------------------------------------
   # 3. Verstecktes Feld: trägt den Wert in den Flow-Kontext
@@ -90,10 +116,16 @@ entries:
   # selbst nach "attributes." (user_write/stage.py:53), das erspart einen
   # Punkt im Feldnamen.
   #
-  # placeholder_expression: true ist der entscheidende Teil — der Platzhalter
-  # wird als Python ausgewertet, `return True` liefert damit ein echtes
-  # Boolean. Ohne das stünde der String "true" im Attribut, und Wallos'
-  # strikter Vergleich würde ihn ablehnen.
+  # ⚠️ Der Wert kommt aus initial_value, NICHT aus placeholder. Authentik hat
+  # dafür zwei getrennte Felderpaare (stages/prompt/models.py:127-148):
+  #   placeholder / placeholder_expression -> nur der graue Hinweistext
+  #   initial_value / initial_value_expression -> der übermittelte WERT
+  # Mit placeholder gesetzt landete am 2026-08-16 der Rohtext "return True"
+  # als String im Attribut — und ein String besteht Wallos' strikten
+  # Vergleich (`!== true`) nicht.
+  #
+  # initial_value_expression: true wertet den Ausdruck als Python aus,
+  # `return True` liefert damit ein echtes Boolean.
   - identifiers:
       name: hornung-field-email-verified
     id: field-email-verified
@@ -103,8 +135,8 @@ entries:
       label: "E-Mail bestätigt"
       type: hidden
       required: false
-      placeholder: "return True"
-      placeholder_expression: true
+      initial_value: "return True"
+      initial_value_expression: true
       order: 0
 
   - identifiers:
@@ -146,9 +178,16 @@ entries:
   # ---------------------------------------------------------------------------
   # 6. Reihenfolge im Flow
   # ---------------------------------------------------------------------------
-  # 10 Mail raus und warten -> 20 Wert in den Kontext -> 30 schreiben.
+  # 5 Kennung abfragen (setzt pending_user) -> 10 Mail raus und warten
+  # -> 20 Wert in den Kontext -> 30 schreiben.
   # Die Prompt-Stage hat nur ein verstecktes Feld und läuft deshalb ohne
   # sichtbare Interaktion durch.
+  - identifiers:
+      target: !KeyOf email-verification-flow
+      stage: !KeyOf email-verification-ident
+      order: 5
+    model: authentik_flows.flowstagebinding
+
   - identifiers:
       target: !KeyOf email-verification-flow
       stage: !KeyOf email-verification-send

@@ -1,0 +1,75 @@
+---
+# =============================================================================
+# Deploy Swarm Degrade Guard
+# =============================================================================
+# Wirft bei Node-Ausfall nicht-kritische, RAM-hungrige Swarm-Services ab
+# (paperless-ai, immich-ml), um Host-RAM-Headroom fuer das HA-Failover der
+# kritischen Gaeste (postgres-prod, Home Assistant, Frigate) frei zu machen.
+# Bei Node-Rueckkehr werden sie automatisch wiederhergestellt.
+#
+# Laeuft per systemd-Timer (60s) auf allen infra-Nodes; nur der Swarm-Leader
+# handelt (Script ist leader-gated). Marker auf CephFS = leader-wechsel-sicher.
+#
+# Usage: ansible-playbook -i inventory.ini swarm-degrade-guard.yml
+# =============================================================================
+- name: Deploy Swarm Degrade Guard
+  hosts: infra_nodes
+  become: yes
+
+  handlers:
+    - name: daemon-reload
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+  tasks:
+    - name: Guard-Script nach /usr/local/bin deployen
+      ansible.builtin.copy:
+        src: files/swarm-degrade-guard.sh
+        dest: /usr/local/bin/swarm-degrade-guard.sh
+        mode: '0755'
+
+    - name: systemd-Service (oneshot)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/swarm-degrade-guard.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Swarm Degrade Guard (shed non-critical services on node failure)
+          After=docker.service
+          Wants=docker.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/swarm-degrade-guard.sh
+      notify: daemon-reload
+
+    - name: systemd-Timer (alle 60s)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/swarm-degrade-guard.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Run Swarm Degrade Guard every 60s
+
+          [Timer]
+          OnBootSec=120
+          OnUnitActiveSec=60
+          AccuracySec=10
+
+          [Install]
+          WantedBy=timers.target
+      notify: daemon-reload
+
+    - name: Handlers jetzt flushen (daemon-reload vor enable)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Timer aktivieren + starten
+      ansible.builtin.systemd:
+        name: swarm-degrade-guard.timer
+        enabled: yes
+        state: started
+
+    - name: Smoke-Test — Guard einmal ausfuehren (Normalbetrieb = No-Op, leader-gated)
+      ansible.builtin.command: /usr/local/bin/swarm-degrade-guard.sh
+      changed_when: false
+      failed_when: false

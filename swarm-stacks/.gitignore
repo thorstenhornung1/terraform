@@ -18,6 +18,13 @@ Thumbs.db
 *.env
 .env.*
 secrets.yml
+
+# Lokale Arbeitskopien fremder Repos + deren Build-Artefakte.
+# reindex-pr/ ist ein Checkout des Open-Archiver-Quellcodes (~845 MB) samt
+# .svelte-kit-Bundles, Server-Builds und Source-Maps. Nie eingecheckt, taucht
+# aber in `git status` und in jeder Dateisystem-Suche auf — eine Suche nach
+# Node-Labels lieferte darueber mehr JavaScript als Konfiguration.
+stacks/apps/openarchiver/reindex-pr/
 *-secrets.yml
 *.key
 *.pem

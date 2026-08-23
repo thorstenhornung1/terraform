@@ -25,6 +25,15 @@ services:
       placement:
         constraints:
           - node.labels.app == true
+      # Neu 2026-08-16: lief zuvor ohne jede Angabe. Gemessen ist 3-14 MB,
+      # peak 15-18 MB. Bei mode:global gilt der Wert PRO NODE.
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
       restart_policy:
         condition: on-failure
 
@@ -87,7 +96,45 @@ services:
         target: /etc/traefik/dynamic/dns.yml
 
     volumes:
+      # acme.json bleibt vorerst: Der certresolver ist in 22 Router-Labels
+      # gesetzt und wird schrittweise entfernt. Solange er aktiv ist, braucht
+      # Traefik den Speicher — er ist aber nicht mehr die Quelle der
+      # ausgelieferten Zertifikate (siehe certs.yml unten).
       - traefik_letsencrypt:/letsencrypt
+
+      # ZENTRALE ZERTIFIKATE (2026-08-23)
+      # Alle drei Instanzen lesen denselben Satz von CephFS. Vorher fuehrte
+      # jede ihr eigenes acme.json und forderte eigene Zertifikate an — das
+      # ergab drei verschiedene Zertifikate pro Domain und bei zwei Domains
+      # gar keines, was sich als TRAEFIK DEFAULT CERT zeigte.
+      #
+      # Read-only ist Absicht: Schreiben darf nur der Erneuerungsdienst.
+      - /mnt/cephfs/swarm-state/traefik/certs:/certs:ro
+
+      # Einzelne DATEI, nicht das Verzeichnis: /etc/traefik/dynamic enthaelt
+      # bereits dns.yml als Docker Config. Ein Verzeichnis-Mount wuerde die
+      # verdecken — und damit die serversTransports, an denen LightRAG haengt.
+      - /mnt/cephfs/swarm-state/traefik/dynamic/certs.yml:/etc/traefik/dynamic/certs.yml:ro
+
+      # LOKALE ZERTIFIKATE (2026-08-23) — der kuenftige Laufpfad.
+      # Bestueckt von traefik-certs-sync.sh (systemd-Timer je Node), das die
+      # PEMs aus der Uebergabe-Ablage auf CephFS holt. Zwei Gruende:
+      #
+      #   1. Der Ingress haengt damit NICHT mehr an CephFS. Faellt es aus,
+      #      laufen die lokalen Kopien weiter.
+      #   2. fsnotify sieht Aenderungen NICHT, die ein anderer Client eines
+      #      Netzwerk-Dateisystems schreibt — das ist Protokollebene, nicht
+      #      Traefik-spezifisch (fsnotify-Doku: "Notifications on network
+      #      filesystems (NFS, SMB, FUSE, etc.) generally don't work").
+      #      Nachgewiesen am 2026-08-23: Der Container sah die neue Datei und
+      #      lieferte trotzdem das alte Zertifikat.
+      #
+      # Eigener Dateiname (certs-local.yml): Traefik fuehrt alle Dateien im
+      # Provider-Verzeichnis zusammen. Alte und neue Quelle laufen dadurch
+      # nebeneinander, bis die CephFS-Mounts oben entfallen.
+      - /opt/traefik/certs:/certs-local:ro
+      - /opt/traefik/dynamic/certs.yml:/etc/traefik/dynamic/certs-local.yml:ro
+
 
     networks:
       - traefik_public
@@ -98,10 +145,35 @@ services:
       placement:
         constraints:
           - node.labels.app == true
+      # Neu 2026-08-16: Der INGRESS lief bis dahin ohne Reservation und ohne
+      # Limit — fuer den Swarm-Scheduler unsichtbar. Das ist ausgerechnet bei
+      # dem Dienst gefaehrlich, ueber den jede eingehende Anfrage laeuft:
+      # Auf einem ueberbuchten Node haette ihn der Kernel-OOM-Killer als
+      # ersten Kandidaten getroffen.
+      #
+      # Gemessen: ist 51-70 MB, peak 75-105 MB (die drei Instanzen streuen,
+      # weil sie unterschiedlich viele Router bedienen). Bei mode:global gilt
+      # der Wert PRO NODE, macht 3x 128M im Cluster.
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
       update_config:
         parallelism: 1
         delay: 10s
-        order: start-first
+        # stop-first, nicht start-first — und zwar wegen der Ressourcenlage,
+        # nicht aus Vorliebe: docker-infra-1 hat 5860 von 5893 MB reserviert,
+        # also 33 MB frei. start-first braucht die Reservation waehrend des
+        # Wechsels doppelt (2x 128 MB) und blieb deshalb dauerhaft in
+        # "insufficient resources on 1 node" haengen (beobachtet 2026-08-23).
+        #
+        # Bei mode:global ist stop-first ohnehin die richtige Wahl: Es trifft
+        # immer nur einen Node, die beiden anderen bedienen weiter, und das
+        # Routing Mesh leitet um. Ein Gesamtausfall entsteht dabei nicht.
+        order: stop-first
       restart_policy:
         condition: on-failure
       labels:
@@ -115,6 +187,104 @@ services:
         - traefik.http.routers.traefik.middlewares=traefik-auth
         - traefik.http.middlewares.traefik-auth.basicauth.usersFile=/run/secrets/traefik_dashboard_auth
         - traefik.http.services.traefik.loadbalancer.server.port=8080
+
+  # ===========================================================================
+  # Zertifikats-Controller (2026-08-23)
+  # ===========================================================================
+  # Cluster-weit GENAU EIN ACME-Client. Er liest die Traefik-Router-Labels aus
+  # der Swarm-API und leitet daraus ab, welche Zertifikate gebraucht werden —
+  # dieselbe Ableitung, die Traefik intern macht, nur ausserhalb.
+  #
+  # Ersetzt das vorherige Shell-Skript. Der Unterschied ist nicht die Sprache,
+  # sondern das Modell: Statt einer festen Domainliste in EXTRA_DOMAINS
+  # ermittelt der Controller den Sollzustand bei jedem Durchlauf neu. Eine neue
+  # Domain mit zwei Sub-Ebenen — die das Wildcard NICHT abdeckt — bekommt damit
+  # von selbst ein Zertifikat, statt bis zum naechsten Handgriff still das
+  # Default-Zertifikat auszuliefern.
+  certs-renew:
+    # Auf den Digest gepinnt, nicht auf :latest. Der Dienst darf Zertifikate
+    # ausstellen — ein unbemerkt gewechseltes Image waere hier teurer als
+    # anderswo, weil Fehlversuche gegen das Wochenkontingent von Let's Encrypt
+    # zaehlen. Beim Aktualisieren: Digest aus dem Build-Workflow uebernehmen.
+    image: ghcr.io/thorstenhornung1/swarm-stacks/traefik-cert-controller@sha256:4dd22803d8cf8e16fee11a29587e0fbe186286a6bd2a7af6999f172e596b25d8
+    # Der Dienstname bleibt certs-renew, damit Timer und Doku auf den Nodes
+    # nicht angefasst werden muessen.
+
+    environment:
+      ACME_EMAIL: admin@hornung-bn.de
+      DNS_PROVIDER: cloudflare
+
+      # EIN Wildcard fuer die Zone. Es deckt 27 der 30 Domains ab; fuer die
+      # Masse ist Discovery damit gar nicht noetig. Der Nutzen des Controllers
+      # liegt bei den uebrigen — Domains mit ZWEI Sub-Ebenen, die ein Wildcard
+      # nicht abdeckt.
+      #
+      # Format: name=domain1,domain2;name2=... Die Zone selbst muss separat
+      # aufgefuehrt werden, ein Wildcard deckt sie nicht mit ab.
+      WILDCARD_CERTS: "wildcard.hornung-bn.de=*.hornung-bn.de,hornung-bn.de"
+
+      # Domains, um die sich der Controller NICHT kuemmert.
+      # admin.frigate.* bedient der Traefik im Frigate-LXC mit eigenem
+      # Zertifikatsspeicher — wuerde der Controller sie mitausstellen, gaebe es
+      # wieder zwei Stellen fuer dieselbe Domain.
+      IGNORE_DOMAINS: "admin.frigate.hornung-bn.de"
+
+      # 30 Tage entspricht Traefiks eigenem Verhalten; bei 90 Tagen Laufzeit
+      # bleiben zwei Monate Puffer fuer Fehlversuche.
+      RENEW_BELOW_DAYS: "30"
+      # Obergrenze je Durchlauf. Laeuft etwas systematisch schief, verbrennt
+      # das nicht in einem Durchgang das Wochenkontingent von Let's Encrypt.
+      MAX_PER_RUN: "5"
+      # Vollstaendiger Abgleich auch ohne Ereignis — faengt einen abgerissenen
+      # Event-Stream auf.
+      FULL_RECONCILE_SECONDS: "21600"
+
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      CLOUDFLARE_DNS_API_TOKEN_FILE: /run/secrets/traefik_dns_api_token
+
+    secrets:
+      # lego liest das Token selbst per _FILE-Konvention; der Controller fasst
+      # es nicht an und kann es folglich nicht ins Log schreiben.
+      - traefik_dns_api_token
+
+    volumes:
+      # Uebergabe-Ablage, KEIN Laufpfad: Von hier holen die Nodes die PEMs per
+      # traefik-certs-sync.sh nach lokal. Der laufende Ingress liest nur lokal
+      # und ueberlebt einen CephFS-Ausfall.
+      - /mnt/cephfs/swarm-state/traefik:/state
+
+    networks:
+      # BEIDE Netze werden gebraucht, und zwar aus verschiedenen Gruenden:
+      #   traefik_public   — Internet fuer Cloudflare und Let's Encrypt
+      #   traefik_internal — der docker-socket-proxy, ueber den die Swarm-API
+      #                      gelesen wird. Das Netz ist internal:true und
+      #                      haette allein keinen Weg nach draussen.
+      - traefik_public
+      - traefik_internal
+
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+          # TEMPORAER (2026-08-23): docker-infra-3 ausgeschlossen. Dort blieb
+          # der Task in "Ready" stehen — der Container war erstellt, aber das
+          # Overlay-Attachment kam nicht zustande ("network ... not found").
+          # Auf docker-infra-2 startet derselbe Dienst in unter drei Sekunden.
+          # RUECKBAU nach "systemctl restart docker" auf docker-infra-3.
+          - node.hostname != docker-infra-3
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        # BEWUSST OHNE reservations. Mit 32M lief docker-infra-1 auf 5892 von
+        # 5893 MB reserviert — der Ingress fand dort keinen Platz mehr und
+        # blieb in "insufficient resources on 1 node" haengen. Ein Dienst, der
+        # zwischen den Durchlaeufen schlaeft, muss dem Scheduler keinen
+        # Speicher wegnehmen; das Limit begrenzt ihn trotzdem nach oben.
+      restart_policy:
+        condition: on-failure
+        delay: 60s
 
 networks:
   traefik_public:
@@ -130,6 +300,7 @@ volumes:
 configs:
   dns_dynamic_config_${DNS_EXTERNAL_HASH:-latest}:
     file: ./dns-external.yml
+
 
 secrets:
   traefik_dns_api_token:

@@ -36,10 +36,15 @@ services:
       resources:
         limits:
           cpus: '0.25'
-          memory: 128M
+          # 128M -> 192M: Der Peak lag mit 76 MB zwar unter dem alten Limit,
+          # aber zu dicht darunter, um Spitzen aufzufangen.
+          memory: 192M
         reservations:
           cpus: '0.05'
-          memory: 32M
+          # 32M -> 96M (2026-08-16). Gemessen ist 34-61 MB, peak 63-76 MB —
+          # der Agent lag auf ALLEN drei Nodes dauerhaft ueber seiner
+          # Reservation. Bei mode:global gilt der Wert pro Node.
+          memory: 96M
 
   # ===========================================================================
   # Portainer Server - Any Swarm manager (CephFS shared storage)

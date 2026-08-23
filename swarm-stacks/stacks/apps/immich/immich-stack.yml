@@ -91,6 +91,22 @@ services:
       placement:
         constraints:
           - node.role == manager
+      # Neu 2026-08-16: Der Dienst lief bis dahin OHNE jede Angabe — weder
+      # Reservation noch Limit. Fuer den Swarm-Scheduler war er damit
+      # unsichtbar (er rechnet ausschliesslich mit reservations), obwohl er
+      # real 643 MB belegte und in Spitzen 1184 MB erreichte. Ein Node konnte
+      # so beliebig ueberbucht werden, ohne dass es in der Bilanz auftauchte.
+      #
+      # Werte aus der Messung: ist 643 MB, peak 1184 MB.
+      # Limit mit Reserve ueber dem Peak — Immich zieht beim Transcodieren und
+      # beim Aufbau von Thumbnails stossweise deutlich mehr als im Leerlauf.
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1536M
+        reservations:
+          cpus: '0.25'
+          memory: 768M
       restart_policy:
         condition: any
         delay: 10s

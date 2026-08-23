@@ -18,7 +18,9 @@ set -e
 # Password is restricted to [a-zA-Z0-9] by create-secrets.sh, so no URL
 # encoding needed. If you change the password generation, add encoding here.
 DB_PASS=$(cat /run/secrets/vaultwarden_db_password)
-export DATABASE_URL="postgresql://vaultwarden:${DB_PASS}@pg-haproxy:5433/vaultwarden"
+# 2026-06-15: Migriert von Patroni (pg-haproxy:5433) auf Single-PG-VM
+# postgres-prod (postgres.hornung-bn.de:5432) — Patroni→Single-VM-HA-Migration.
+export DATABASE_URL="postgresql://vaultwarden:${DB_PASS}@postgres.hornung-bn.de:5432/vaultwarden"
 unset DB_PASS
 
 # ---------------------------------------------------------------------------

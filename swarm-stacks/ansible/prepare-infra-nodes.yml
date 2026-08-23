@@ -106,7 +106,13 @@
         path: "{{ data_mount }}"
         src: "{{ data_disk }}1"
         fstype: xfs
-        opts: defaults,noatime
+        # nofail: ein fehlgeschlagener Data-Disk-Mount darf NICHT local-fs.target
+        # reißen → sonst Boot in Emergency Mode ohne sshd (Node dunkel, nur per
+        # Hard-Reset rettbar). Vorfall 2026-06-14: infra-1 nach OS-Update-Reboot
+        # (XFS-Log-Replay) → Emergency Mode. device-timeout begrenzt die Wartezeit.
+        # Docker wartet separat via drop-in RequiresMountsFor=/srv/data, damit es
+        # bei fehlendem Mount nicht auf die Root-Disk schreibt.
+        opts: defaults,noatime,nofail,x-systemd.device-timeout=30
         state: mounted
       when: disk_check.stat.exists
 
@@ -115,7 +121,13 @@
         path: "{{ data_mount }}"
         src: "{{ data_disk }}1"
         fstype: xfs
-        opts: defaults,noatime
+        # nofail: ein fehlgeschlagener Data-Disk-Mount darf NICHT local-fs.target
+        # reißen → sonst Boot in Emergency Mode ohne sshd (Node dunkel, nur per
+        # Hard-Reset rettbar). Vorfall 2026-06-14: infra-1 nach OS-Update-Reboot
+        # (XFS-Log-Replay) → Emergency Mode. device-timeout begrenzt die Wartezeit.
+        # Docker wartet separat via drop-in RequiresMountsFor=/srv/data, damit es
+        # bei fehlendem Mount nicht auf die Root-Disk schreibt.
+        opts: defaults,noatime,nofail,x-systemd.device-timeout=30
         state: present
       when: disk_check.stat.exists
 
@@ -218,6 +230,23 @@
             path: /var/lib/docker
             state: absent
 
+    # Boot-safety: Docker muss auf die Data-Disk warten (data-root=/srv/data/docker).
+    # Ohne diese Abhängigkeit würde Docker bei fehlendem Mount (z.B. nofail greift)
+    # /srv/data/docker auf der kleinen Root-Disk anlegen. Ergänzt 2026-06-14.
+    - name: Docker drop-in — RequiresMountsFor data disk
+      copy:
+        dest: /etc/systemd/system/docker.service.d/wait-for-data.conf
+        mode: '0644'
+        content: |
+          [Unit]
+          RequiresMountsFor={{ data_mount }}
+      register: docker_data_dropin
+
+    - name: Reload systemd if Docker data drop-in changed
+      systemd:
+        daemon_reload: true
+      when: docker_data_dropin is changed
+
     # Portainer Agent compatibility — /var/lib/docker/volumes symlink
     # The data-root migration above removes /var/lib/docker entirely, but
     # the Portainer Agent bind-mounts /var/lib/docker/volumes.  This symlink
@@ -293,25 +322,45 @@
   hosts: swarm_managers[0]
   become: yes
   vars:
+    # =========================================================================
+    # Node-Labels — Stand 2026-08-16
+    # =========================================================================
+    # Wer welches Label tatsaechlich auswertet (gegen stacks/ geprueft):
+    #   app        -> zahlreiche Stacks (node.labels.app == true)
+    #   apptier    -> AUSSCHLIESSLICH taiga-stack.yml (5x == heavy)
+    #   infra_node -> monitoring (alloy/loki: infra_node != 2)
+    #   <dienst>-rbd=active -> von den RBD-Watchdogs gesetzt, NICHT hier
+    #                          verwalten (sie wandern beim Failover mit dem
+    #                          Volume, siehe ansible/rbd-mount-*.yml)
+    #
+    # ENTFERNT am 2026-08-16:
+    #   storage: seaweedfs — SeaweedFS existiert nicht mehr. Das Label stand
+    #     auf keinem Node mehr, waere aber beim naechsten Playbook-Lauf neu
+    #     gesetzt worden.
+    #   database: patroni  — Patroni ist seit 2026-06-15 gestoppt (Migration
+    #     auf die Einzel-VM postgres-prod). Kein Stack wertet es aus.
     infra_nodes:
       - hostname: docker-infra-1
         labels:
           app: "true"
           infra_node: "1"
-          storage: "seaweedfs"
-          database: "patroni"
+          apptier: "heavy"
       - hostname: docker-infra-2
         labels:
           app: "true"
           infra_node: "2"
-          storage: "seaweedfs"
-          database: "patroni"
+          apptier: "heavy"
       - hostname: docker-infra-3
         labels:
           app: "true"
           infra_node: "3"
-          storage: "seaweedfs"
-          database: "patroni"
+          # "light" -> "heavy" am 2026-08-16. Das alte Label bildete eine
+          # Topologie ab, in der infra-3 die kleinste VM war. Nach dem
+          # Balloon-Angleich (balloon 5120 -> 6144) ist der Node mit 7841 MB
+          # der GROESSTE im Cluster; "light" haette ausgerechnet den
+          # Taiga-Stack — den einzigen Auswerter dieses Labels — von der
+          # meisten freien Kapazitaet ausgesperrt.
+          apptier: "heavy"
 
   tasks:
     - name: Get node IDs
@@ -328,6 +377,32 @@
     - name: Display discovered nodes
       debug:
         var: node_ids
+
+    # Das Playbook kannte bis 2026-08-16 nur --label-add und wurde deshalb
+    # Altlasten nie los: Labels abgeschalteter Dienste blieben auf den Nodes
+    # stehen, auch wenn sie hier laengst entfernt waren.
+    #
+    # ⚠️ Jedes Label MUSS einzeln entfernt werden. Docker bricht mit
+    #    "key <label> doesn't exist in node's labels" ab, sobald eines der
+    #    angegebenen Labels fehlt — und wendet dann AUCH die uebrigen nicht
+    #    an. Gebuendelt (`--label-rm a --label-rm b`) scheitert der Aufruf
+    #    also, sobald ein einziges Label bereits weg ist, und der Task waere
+    #    genau ab dem zweiten Lauf wirkungslos. Belegt am 2026-08-16.
+    #    Deshalb: Produkt-Schleife ueber Nodes x Labels, mit failed_when:false.
+    - name: Remove obsolete node labels
+      command: >
+        docker node update --label-rm {{ item.1 }} {{ node_ids[item.0.hostname] }}
+      vars:
+        # storage:  SeaweedFS abgebaut
+        # database: Patroni gestoppt (2026-06-15, Migration auf postgres-prod)
+        obsolete_labels:
+          - storage
+          - database
+      loop: "{{ infra_nodes | product(obsolete_labels) | list }}"
+      when: item.0.hostname in node_ids
+      register: label_rm_result
+      failed_when: false
+      changed_when: label_rm_result.rc == 0
 
     - name: Set node labels
       command: >

@@ -1,0 +1,136 @@
+# =============================================================================
+# Build & Push traefik-cert-controller
+# =============================================================================
+# "cert-manager light" fuer Docker Swarm: liest Traefik-Router-Labels aus der
+# Swarm-API, leitet daraus die benoetigten Zertifikate ab und laesst lego sie
+# ausstellen. Traefik selbst betreibt seit 2026-08-23 kein ACME mehr.
+#
+# Hintergrund: Traefik CE kann ACME nicht ueber mehrere Instanzen betreiben —
+# acme.json ist laut Doku ausdruecklich nicht teilbar, und der Feature-Request
+# fuer verteiltes Storage wurde abgelehnt. Traefik verweist fuer echtes HA auf
+# einen "Certificate Controller such as Cert-Manager"; den gibt es aber nur
+# fuer Kubernetes. Dieses Image ist das Aequivalent fuer Swarm.
+#
+# Das Image buendelt zwei Dinge: das lego-Binary (dieselbe Bibliothek, die
+# Traefik intern nutzt — gleiche DNS-Provider-Semantik) und den Python-Daemon,
+# der nur orchestriert. ACME-Protokoll und DNS-Challenge werden bewusst NICHT
+# nachgebaut.
+#
+# Image: ghcr.io/thorstenhornung1/swarm-stacks/traefik-cert-controller
+# =============================================================================
+
+name: Build traefik-cert-controller
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'images/traefik-cert-controller/**'
+      - '.github/workflows/build-cert-controller.yml'
+  schedule:
+    # Donnerstag — die anderen Builds liegen auf Montag/Dienstag, das
+    # verteilt die Runner-Last. Der woechentliche Lauf holt CVE-Fixes des
+    # python:alpine-Basisimages.
+    - cron: '0 5 * * 4'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/traefik-cert-controller
+
+jobs:
+  build-and-push:
+    runs-on: [self-hosted, linux, x64, homelab]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # Vor dem Build, nicht danach: Ein Fehler in covers() oder
+      # extract_hosts() fuehrt zu falschen Zertifikatsbestellungen und faellt
+      # sonst erst auf, wenn ein Browser das falsche Zertifikat bekommt — oder
+      # gar nicht, weil zu viel bestellt wird und trotzdem alles funktioniert
+      # (nur das Wochenkontingent von Let's Encrypt schmilzt).
+      - name: Unit-Tests der Kernlogik
+        run: |
+          cd images/traefik-cert-controller
+          python3 test_cert_controller.py
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=
+            type=raw,value={{date 'YYYYMMDD'}}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: images/traefik-cert-controller
+          file: images/traefik-cert-controller/Dockerfile
+          # x86-64-v3 wie bei den anderen Images dieses Repos: Der CI-Runner
+          # hat eine andere CPU als die Homelab-i5, und ein auf der Build-
+          # Maschine optimiertes Binary faellt dort mit SIGILL um
+          # (swarm-stacks#9 / #12).
+          platforms: linux/amd64/v3
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Smoke test — gepushtes Image pruefen
+        # Prueft am tatsaechlich veroeffentlichten Image: lego ist enthalten
+        # und lauffaehig, die Tests laufen darin durch, und der Daemon startet
+        # bis zum Konfigurationsteil. Ohne das koennte ein gruener Build ein
+        # Image liefern, dem das lego-Binary fehlt — der COPY --from kommt aus
+        # einer anderen Stage und schlaegt nicht zwangslaeufig fehl.
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE_REF"
+
+          echo "::group::lego vorhanden?"
+          docker run --rm --entrypoint lego "$IMAGE_REF" --version
+          echo "::endgroup::"
+
+          echo "::group::openssl vorhanden?"
+          docker run --rm --entrypoint openssl "$IMAGE_REF" version
+          echo "::endgroup::"
+
+          # Die Tests liegen im Image, nicht als Mount: "docker run -v" loest
+          # Pfade gegen den DAEMON-Host auf, nicht gegen das Arbeitsverzeichnis
+          # des Runners. Beim ersten Versuch legte Docker deshalb ein leeres
+          # Verzeichnis an — "can't find '__main__' module in '/app/test.py'".
+          echo "::group::Unit-Tests im Image"
+          docker run --rm --entrypoint python \
+            -e ACME_EMAIL=smoke@test.invalid \
+            "$IMAGE_REF" /app/test_cert_controller.py
+          echo "::endgroup::"
+
+          echo "::notice::Smoke test bestanden fuer $IMAGE_REF"
+
+      - name: Digest ausgeben (zum Pinnen)
+        run: |
+          echo "::notice::Digest: ${{ steps.build.outputs.digest }}"
+          echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"

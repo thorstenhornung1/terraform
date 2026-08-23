@@ -1,0 +1,133 @@
+---
+# =============================================================================
+# Zertifikatsverteilung auf die Swarm-Nodes
+# =============================================================================
+# Zweite Haelfte der zentralen Zertifikatsverwaltung. Die erste — Ausstellung
+# und Erneuerung — macht der Swarm-Dienst traefik_certs-renew (lego, DNS-01,
+# replicas:1). Er legt die PEM-Dateien in einer Uebergabe-Ablage auf CephFS ab.
+#
+# Dieses Playbook richtet den Teil ein, der sie von dort nach LOKAL holt:
+#
+#     lego (Swarm, replicas:1)  --DNS-01-->  Let's Encrypt
+#              |
+#              v
+#     /mnt/cephfs/.../dist/          Uebergabe-Ablage
+#              |
+#      (dieser Timer, je Node)
+#              v
+#     /opt/traefik/certs/            LOKAL je Node
+#              |
+#              v
+#     Traefik (mode: global)         liest nur lokal
+#
+# Der laufende Ingress braucht CephFS damit nicht mehr. Faellt es aus, bleiben
+# die lokalen Kopien gueltig und Traefik arbeitet weiter.
+#
+#   ansible-playbook -i inventory.ini ansible/traefik-certs-sync.yml
+# =============================================================================
+
+- name: Zertifikate von der Uebergabe-Ablage nach lokal verteilen
+  hosts: infra_nodes
+  become: true
+  gather_facts: true
+
+  vars:
+    # Alle 15 Minuten. Der Lauf ist billig — ein Zeitstempelvergleich, und nur
+    # bei echter Aenderung wird kopiert. Haeufig genug, dass ein erneuertes
+    # Zertifikat zeitnah ueberall liegt.
+    sync_oncalendar: "*:0/15"
+
+  tasks:
+    - name: Verzeichnisse anlegen
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        # 0700 fuer die Zertifikate: Dort liegen private Schluessel. Traefik
+        # laeuft im Container als root und kommt trotzdem heran.
+        - { path: /opt/traefik/certs, mode: "0700" }
+        - { path: /opt/traefik/dynamic, mode: "0755" }
+
+    - name: Sync-Skript ausrollen
+      ansible.builtin.copy:
+        src: files/traefik-certs-sync.sh
+        dest: /usr/local/sbin/traefik-certs-sync.sh
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: systemd-Service anlegen
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/traefik-certs-sync.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Traefik-Zertifikate von der Uebergabe-Ablage holen
+          # mnt-cephfs.mount als Wants, nicht Requires: Fehlt der Mount, soll
+          # der Dienst sauber mit 0 enden statt als failed die
+          # systemctl --failed-Uebersicht zu verrauschen. Das Skript prueft
+          # selbst und meldet den Fall.
+          After=network-online.target mnt-cephfs.mount
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/traefik-certs-sync.sh
+          TimeoutStartSec=120
+      notify: systemd neu einlesen
+
+    - name: systemd-Timer anlegen
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/traefik-certs-sync.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Zertifikate viertelstuendlich abgleichen
+
+          [Timer]
+          OnCalendar={{ sync_oncalendar }}
+          # Streuung, damit die drei Nodes nicht gleichzeitig auf CephFS
+          # zugreifen. Bei einem Zeitstempelvergleich ist das unkritisch,
+          # kostet aber auch nichts.
+          RandomizedDelaySec=120
+          # Nach einem Kaltstart nachholen — sonst wartet ein Node, der ueber
+          # den Zeitpunkt hinweg aus war, bis zum naechsten Intervall.
+          Persistent=true
+          # Beim Boot einmal ausfuehren, bevor der regulaere Takt greift.
+          OnBootSec=3min
+
+          [Install]
+          WantedBy=timers.target
+      notify: systemd neu einlesen
+
+    - name: Handler jetzt ausfuehren
+      ansible.builtin.meta: flush_handlers
+
+    - name: Timer aktivieren
+      ansible.builtin.systemd:
+        name: traefik-certs-sync.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Einmalig ausfuehren
+      ansible.builtin.command: /usr/local/sbin/traefik-certs-sync.sh
+      register: sync_run
+      changed_when: "'uebernommen' in sync_run.stdout"
+      failed_when: false
+
+    - name: Ergebnis anzeigen
+      ansible.builtin.debug:
+        msg: "{{ sync_run.stdout_lines | default(['(keine Ausgabe)']) }}"
+
+  handlers:
+    - name: systemd neu einlesen
+      ansible.builtin.systemd:
+        daemon_reload: true

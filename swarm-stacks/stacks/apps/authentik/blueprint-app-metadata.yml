@@ -1,0 +1,211 @@
+# =============================================================================
+# Authentik-Blueprint: Dashboard-Metadaten (Icons, Beschreibungen, Gruppen)
+# =============================================================================
+# Setzt fuer alle Applications Icon, Beschreibung, Herausgeber und Gruppe.
+# Vor dieser Datei hatte KEINE der neun Anwendungen auch nur eines davon.
+#
+# WARUM URLs UND KEINE HOCHGELADENEN DATEIEN
+#   meta_icon sieht in core/models.py:762 wie ein Django-FileField aus, ist
+#   aber keines: Der Import kommt aus authentik.admin.files.fields, und dort
+#   ist FileField eine reine TextField-Ableitung. Aufgeloest wird der Wert
+#   ueber Backends in der Reihenfolge Static -> Passthrough -> File, und das
+#   Passthrough-Backend gibt Werte mit "fa://", "http:" oder "https://"
+#   unveraendert zurueck (backends/passthrough.py:8-9,26-35,48).
+#
+#   Der Upload-Weg ist in dieser Installation ohnehin defekt: Das File-Backend
+#   verlangt, dass /data oder /data/media ein Mountpoint ist (backends/
+#   file.py:47-57). /data/media ist im Image aber ein SYMLINK auf /media, und
+#   os.path.ismount() liefert fuer Symlinks immer False — Docker hat den
+#   CephFS-Bind deshalb nach /media aufgeloest. Ergebnis: manageable == False,
+#   und ein Icon-Upload ueber die UI scheitert mit ImproperlyConfigured.
+#
+# WOHER DIE ICONS KOMMEN (geaendert 2026-08-16)
+#   Bis heute standen hier jsDelivr-URLs. Das kostete zweierlei: Jeder
+#   Aufruf des Dashboards meldete IP und Referer der Familie an ein fremdes
+#   CDN, und bei dessen Ausfall fehlten die Bilder.
+#
+#   Beides ist erledigt. Die Dateien liegen jetzt im eigenen Netz, auf
+#   assets.hornung-bn.de (stacks/infrastructure/assets/). Am Mechanismus
+#   aendert das nichts: Es sind weiterhin URLs, die das Passthrough-Backend
+#   unveraendert durchreicht — der oben beschriebene, defekte Upload-Weg
+#   bleibt also unberuehrt und wird auch nicht gebraucht.
+#
+# ⚠️ ABHAENGIGKEIT, DIE MAN KENNEN MUSS
+#   Die Icons laedt der BROWSER des Benutzers, nicht der authentik-Server.
+#   Ohne DNS-Eintrag fuer assets.hornung-bn.de (Technitium, ausschliesslich
+#   auf dns1 / 192.168.4.2, Ziel 192.168.4.40-42) bleiben die Kacheln leer.
+#   Und wer von aussen aufs Dashboard schaut, sieht sie ebenfalls nicht —
+#   der Asset-Server ist bewusst nur intern erreichbar. Das war bei den
+#   jsDelivr-URLs anders und ist der Preis dieser Umstellung.
+#
+#   Zurueck auf ein CDN geht per Suchen-Ersetzen von
+#   "https://assets.hornung-bn.de/logos/" auf
+#   "https://cdn.jsdelivr.net/gh/selfhst/icons/svg/".
+#
+# partial-Import: importer.py:279 setzt partial=True. Ein Eintrag mit nur
+# meta_*-Feldern in attrs laesst alles andere unberuehrt — die Verknuepfung
+# zum Provider und bestehende Policy-Bindings bleiben bestehen.
+# =============================================================================
+
+version: 1
+metadata:
+  name: Hornung - Application-Metadaten
+  labels:
+    blueprints.goauthentik.io/instantiate: "true"
+
+entries:
+  # --- Finanzen ---------------------------------------------------------
+  - identifiers:
+      slug: wallos
+    model: authentik_core.application
+    attrs:
+      meta_icon: https://assets.hornung-bn.de/logos/wallos.svg
+      meta_description: Uebersicht ueber laufende Abonnements und wiederkehrende Kosten
+      meta_publisher: Wallos
+      group: Finanzen
+
+  # Eigenentwicklung, es gibt kein Upstream-Logo — deshalb ein
+  # Font-Awesome-Symbol. Die fa://-Praefixe deckt das Passthrough-Backend ab,
+  # PatternFly liefert Font Awesome 5 im Web-Bundle mit.
+  - identifiers:
+      slug: reisekosten
+    model: authentik_core.application
+    attrs:
+      meta_icon: fa://fa-plane
+      meta_description: Erfassung und Abrechnung von Reisekosten
+      meta_publisher: Hornung
+      group: Finanzen
+
+  - identifiers:
+      slug: steuer
+    model: authentik_core.application
+    attrs:
+      meta_icon: fa://fa-calculator
+      meta_description: Steuerliche Auswertung der Reisekosten
+      meta_publisher: Hornung
+      group: Finanzen
+
+  # --- Dokumente --------------------------------------------------------
+  - identifiers:
+      slug: paperless
+    model: authentik_core.application
+    attrs:
+      meta_icon: https://assets.hornung-bn.de/logos/paperless-ngx.svg
+      meta_description: Dokumentenarchiv mit Volltextsuche und OCR
+      meta_publisher: paperless-ngx
+      group: Dokumente
+
+  # Der Verdacht von oben hat sich bestaetigt: mail-archiver.svg gehoerte zu
+  # einem ANDEREN Produkt. selfhst/icons fuehrt in seiner index.json "Mail
+  # Archiver" und "Open Archiver" als zwei getrennte Eintraege — hier stand
+  # also vier Wochen lang das Logo einer fremden Anwendung.
+  #
+  # Jetzt liegt das richtige da. Es ist ein PNG und kein SVG, weil Open
+  # Archiver keines veroeffentlicht (index.json: "SVG": "No"). 25 KB fuer
+  # eine Kachel sind vertretbar; die optische Kontrolle beim ersten
+  # Dashboard-Aufruf lohnt trotzdem.
+  - identifiers:
+      slug: mailarchiver
+    model: authentik_core.application
+    attrs:
+      meta_icon: https://assets.hornung-bn.de/logos/open-archiver.png
+      meta_description: Durchsuchbares Archiv der E-Mail-Postfaecher
+      meta_publisher: Open Archiver
+      group: Dokumente
+
+  # --- Medien -----------------------------------------------------------
+  - identifiers:
+      slug: immich
+    model: authentik_core.application
+    attrs:
+      meta_icon: https://assets.hornung-bn.de/logos/immich.svg
+      meta_description: Foto- und Videobibliothek mit automatischer Sortierung
+      meta_publisher: Immich
+      group: Medien
+
+  - identifiers:
+      slug: frigate-admin
+    model: authentik_core.application
+    attrs:
+      meta_icon: https://assets.hornung-bn.de/logos/frigate.svg
+      meta_description: Kameraueberwachung — Administration
+      meta_publisher: Frigate
+      group: Medien
+
+  # --- Projekte ---------------------------------------------------------
+  - identifiers:
+      slug: taiga
+    model: authentik_core.application
+    attrs:
+      meta_icon: https://assets.hornung-bn.de/logos/taiga.svg
+      meta_description: Projekt- und Aufgabenverwaltung
+      meta_publisher: Taiga
+      group: Projekte
+
+  # --- Ausgeblendet -----------------------------------------------------
+  # Samba ist ein LDAP-Provider ohne Web-Oberflaeche: get_launch_url() liefert
+  # None, die Kachel im Dashboard fuehrt also ins Leere. meta_hide blendet sie
+  # aus, ohne die Anwendung selbst anzutasten — die LDAP-Anbindung laeuft
+  # unveraendert weiter.
+  - identifiers:
+      slug: samba
+    model: authentik_core.application
+    attrs:
+      meta_hide: true
+      meta_description: Dateifreigaben (LDAP-Anbindung, keine Weboberflaeche)
+      meta_publisher: Samba
+
+  # ===========================================================================
+  # MFA-Auswahl: verstaendliche Beschriftungen
+  # ===========================================================================
+  # Bei der Ersteinrichtung des zweiten Faktors bekommt der Benutzer eine
+  # Auswahl praesentiert. Ohne Anpassung stehen dort die technischen
+  # Bezeichnungen "TOTP Device" und "WebAuthn device" — fuer jemanden, der
+  # sich einfach nur anmelden will, sagen die nichts.
+  #
+  # Angezeigt wird das Feld `friendly_name`. Die Zeile darunter ist der
+  # Stage-TYP ("TOTP Authentikator Einrichtungs Stage") und kommt aus
+  # authentiks Uebersetzungen — die laesst sich nicht aendern.
+  - identifiers:
+      name: default-authenticator-totp-setup
+    model: authentik_stages_authenticator_totp.authenticatortotpstage
+    attrs:
+      friendly_name: Authenticator-App auf dem Handy
+
+  - identifiers:
+      name: default-authenticator-webauthn-setup
+    model: authentik_stages_authenticator_webauthn.authenticatorwebauthnstage
+    attrs:
+      friendly_name: Passkey, Fingerabdruck oder Sicherheitsschlüssel
+
+  # ===========================================================================
+  # Flow-Titel: das, was ueber jeder Anmeldemaske steht
+  # ===========================================================================
+  # "Welcome to authentik!" ist fuer Angehoerige, die eigentlich zu Paperless
+  # oder Immich wollen, ein Name ohne Bedeutung — sie sehen ihn aber bei JEDER
+  # Anmeldung. Gleiches beim Abmelden, wo der interne Bezeichner
+  # "Default Invalidation Flow" durchschlug.
+  #
+  # Nicht angetastet: default-provider-invalidation-flow zeigt bereits
+  # "You've logged out of %(app)s." — der Platzhalter setzt den Namen der
+  # jeweiligen Anwendung ein, das ist bereits aussagekraeftig.
+  - identifiers:
+      slug: default-authentication-flow
+    model: authentik_flows.flow
+    attrs:
+      title: Anmeldung — SoWi10
+
+  # Wird nur bei Anmeldung ueber eine externe Quelle durchlaufen (derzeit
+  # keine konfiguriert). Aus Konsistenzgruenden mitgezogen, damit dort nicht
+  # eines Tages wieder "Welcome to authentik!" auftaucht.
+  - identifiers:
+      slug: default-source-authentication
+    model: authentik_flows.flow
+    attrs:
+      title: Anmeldung — SoWi10
+
+  - identifiers:
+      slug: default-invalidation-flow
+    model: authentik_flows.flow
+    attrs:
+      title: Abmeldung — SoWi10

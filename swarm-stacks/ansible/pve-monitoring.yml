@@ -1,0 +1,268 @@
+---
+# =============================================================================
+# node-exporter auf den Proxmox-Hypervisoren (pve01-03)
+# =============================================================================
+# Anlass: Beim Stromausfall am 2026-08-21 blieb ein Ceph-OSD vier Stunden tot,
+# ohne dass etwas Alarm schlug. Die Bare-Metal-Hosts waren der einzige Layer
+# ohne Metriken — die Swarm-VMs, postgres-prod, PBS, Ceph und seit dem RCA auch
+# Synology und USV liefern welche, die Hypervisoren darunter nicht.
+#
+# WAS BISHER SCHON DA WAR (und warum es nicht reicht)
+#   pvestatd pusht alle ~10s per InfluxDB-Line-Protocol nach VictoriaMetrics
+#   (/etc/pve/status.cfg -> grafana.hornung-bn.de:8428). Daraus stammen
+#   memory_memavailable{object="nodes"} und die beiden bestehenden Alerts
+#   pve-host-memory-pressure und pve-host-metrics-stale. Der Push liefert aber
+#   nur eine Handvoll aggregierter Werte: kein CPU-Detail, keine Dateisysteme,
+#   keine Netzwerkzaehler, keine Temperaturen und vor allem kein
+#   node_vmstat_oom_kill. Deshalb hier zusaetzlich ein echter Exporter — der
+#   Push bleibt unberuehrt, beide Quellen ergaenzen sich.
+#
+# PAKET STATT UPSTREAM-BINARY
+#   Debian 13 (trixie) liefert prometheus-node-exporter 1.9.0-1+b4; upstream
+#   steht bei 1.9.x. Der Rueckstand ist ein Patchlevel, dafuer gibt es:
+#   Sicherheitsupdates ueber apt, einen gepflegten, gehaerteten systemd-Unit
+#   und den Systemnutzer `prometheus` — und der APT-Proxy cached das Paket
+#   bereits, waehrend ein GitHub-Download an ihm vorbeiliefe. Ein selbst
+#   verwaltetes Binary muesste all das nachbauen und beim naechsten
+#   Dist-Upgrade von Hand nachgezogen werden. Fuer Standard-Hostmetriken gibt
+#   es keinen Grund dazu.
+#
+# AUFRUF
+#   ansible-playbook -i inventory.ini pve-monitoring.yml
+#
+# PRUEFEN OHNE RISIKO
+#   ansible-playbook -i inventory.ini pve-monitoring.yml --check
+#   curl -s http://192.168.2.10:9100/metrics | grep -c '^node_'
+#
+# GEGENSTUECK IM REPO
+#   stacks/monitoring/prometheus-scrape.yml   -> job pve-node-exporter
+#   stacks/monitoring/alerting/alert-rules.yml -> Gruppe "PVE Hosts"
+#   stacks/monitoring/dashboards/pve-hosts.json
+# =============================================================================
+
+- name: node-exporter auf den Proxmox-Hypervisoren einrichten
+  hosts: pve_nodes
+  become: yes
+  gather_facts: yes
+
+  vars:
+    # Lauscht ausschliesslich auf der LAN-Adresse des Hosts (vmbr0), nicht auf
+    # 0.0.0.0. Damit ist der Exporter weder auf der Storage-VLAN-Adresse
+    # (vmbr0.12) noch auf irgendeinem Gast-Bridge-Port erreichbar. Faellt
+    # vmbr0 aus, startet der Dienst nicht — das faengt der Restart-Drop-in ab.
+    pve_exporter_bind_ip: "{{ ansible_host }}"
+    pve_exporter_port: 9100
+
+    # Textfile-Collector: Ablage fuer Metriken, die kein Collector liefern
+    # kann (geplant: OOM-Zaehler je Gast-cgroup, vzdump-Laufzeiten).
+    # /var/lib/prometheus gehoert dem Paket, das Unterverzeichnis legen wir an.
+    pve_textfile_dir: /var/lib/prometheus/node-exporter
+
+    # Dateisystem-Typen, die der Collector NICHT anfassen soll.
+    # Basis ist die Upstream-Vorgabe, ergaenzt um vier Typen:
+    #   nfs4  — die Synology-Mounts liegen mit `hard,timeo=600` ein; ist das
+    #           NAS weg, blockiert statfs() und der GESAMTE Scrape laeuft in
+    #           den Timeout. Genau dann braucht man CPU und RAM am dringendsten.
+    #   ceph  — /mnt/pve/swarm-shared, gleiches Problem bei MDS-Ausfall.
+    #   fuse  — /etc/pve ist pmxcfs; haengt bei Corosync-Split-Brain.
+    #   Fuellstaende dieser drei sind ohnehin abgedeckt: Synology per SNMP
+    #   (job snmp-synology), CephFS per ceph-mgr (job ceph).
+    pve_fs_types_exclude: >-
+      ^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|efivarfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs|ceph|nfs4?|cifs|smb3|fuse|fuse\..*)$
+
+  pre_tasks:
+    - name: Nur auf Proxmox-Hosts ausfuehren
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Debian'
+        fail_msg: "Kein Debian-Host — dieses Playbook gehoert auf pve01-03."
+
+    - name: APT-Proxy muss konfiguriert sein
+      # Ohne ihn zieht jeder Node einzeln aus dem Internet; das Paket liegt
+      # laengst im apt-cacher-ng. Kein Blocker, aber ein Hinweis ist faellig.
+      ansible.builtin.stat:
+        path: /etc/apt/apt.conf.d/01proxy
+      register: apt_proxy
+
+    - name: Hinweis, falls der APT-Proxy fehlt
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: /etc/apt/apt.conf.d/01proxy fehlt — Paket kommt direkt aus dem Netz."
+      when: not apt_proxy.stat.exists
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # Paket
+    # -------------------------------------------------------------------------
+    - name: prometheus-node-exporter installieren
+      ansible.builtin.apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+      register: exporter_pkg
+
+    - name: Installierte Version festhalten
+      ansible.builtin.command: dpkg-query -W -f='${Version}' prometheus-node-exporter
+      register: exporter_version
+      changed_when: false
+
+    # -------------------------------------------------------------------------
+    # Konfiguration
+    # -------------------------------------------------------------------------
+    - name: Verzeichnis fuer den Textfile-Collector anlegen
+      ansible.builtin.file:
+        path: "{{ pve_textfile_dir }}"
+        state: directory
+        owner: prometheus
+        group: prometheus
+        # 0755, nicht 0775: schreiben duerfen hier nur root-Skripte, lesen
+        # muss der Exporter. Fuer Gast-Metriken braucht es ohnehin root.
+        mode: "0755"
+
+    - name: Startparameter setzen
+      ansible.builtin.copy:
+        dest: /etc/default/prometheus-node-exporter
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          # Ausgerollt von ansible/pve-monitoring.yml — NICHT auf dem Host editieren.
+          #
+          # web.listen-address: bewusst die LAN-IP statt 0.0.0.0. Der Exporter
+          #   gibt Prozesslisten, Mountpunkte und Kernelzaehler preis und hat
+          #   keine Authentifizierung — er soll nur aus 192.168.0.0/16
+          #   erreichbar sein, nicht auf jedem Bridge-Port des Hosts lauschen.
+          # collector.textfile.directory: Ablage fuer eigene Metriken.
+          # collector.filesystem.fs-types-exclude: NFS/CephFS/pmxcfs raus, sonst
+          #   haengt der Scrape mit dem NAS (Begruendung siehe Playbook-Kopf).
+          ARGS="--web.listen-address={{ pve_exporter_bind_ip }}:{{ pve_exporter_port }} \
+          --collector.textfile.directory={{ pve_textfile_dir }} \
+          --collector.filesystem.fs-types-exclude='{{ pve_fs_types_exclude }}'"
+      notify: node-exporter neu starten
+
+    - name: Drop-in-Verzeichnis anlegen
+      # Der Unit selbst gehoert dem Paket und wird beim naechsten apt-Upgrade
+      # ueberschrieben — Aenderungen gehoeren deshalb ins Drop-in.
+      ansible.builtin.file:
+        path: /etc/systemd/system/prometheus-node-exporter.service.d
+        state: directory
+        mode: "0755"
+
+    - name: systemd-Drop-in fuer Startverhalten
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/prometheus-node-exporter.service.d/override.conf
+        mode: "0644"
+        content: |
+          # Ausgerollt von ansible/pve-monitoring.yml — NICHT auf dem Host editieren.
+          [Unit]
+          # Der Dienst bindet an eine feste IP. Existiert vmbr0 beim Start noch
+          # nicht, scheitert das bind(). Gleiche Klasse Bootrennen wie bei
+          # pvestatd/ceph-osd (siehe pmxcfs-Boot-Race) — deshalb warten UND
+          # unbegrenzt nachfassen.
+          After=network-online.target
+          Wants=network-online.target
+          # Kein Aufgeben nach N Fehlversuchen: ein Exporter, der sich nach dem
+          # fuenften Bootversuch selbst stilllegt, ist schlimmer als keiner —
+          # er sieht aus wie ein gesunder Host ohne Last. (Gehoert seit
+          # systemd 229 in [Unit], nicht in [Service].)
+          StartLimitIntervalSec=0
+
+          [Service]
+          Restart=always
+          RestartSec=10
+          # pve01 und pve03 laufen dauerhaft nahe am Speicherlimit (i915-
+          # Livelock-Historie). Der Exporter braucht ~20 MB und ist genau in
+          # dieser Lage die einzige Sicht nach innen — der OOM-Killer soll sich
+          # zuerst an den Speicherfressern bedienen, nicht am Messgeraet.
+          OOMScoreAdjust=-500
+      notify:
+        - systemd neu laden
+        - node-exporter neu starten
+
+    - name: Dienst aktivieren und starten
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Handler jetzt ausfuehren, damit die Verifikation frische Werte sieht
+      ansible.builtin.meta: flush_handlers
+
+    # -------------------------------------------------------------------------
+    # Verifikation
+    # -------------------------------------------------------------------------
+    - name: Port erreichbar?
+      ansible.builtin.wait_for:
+        host: "{{ pve_exporter_bind_ip }}"
+        port: "{{ pve_exporter_port }}"
+        timeout: 30
+      changed_when: false
+
+    - name: Metriken abholen
+      ansible.builtin.uri:
+        url: "http://{{ pve_exporter_bind_ip }}:{{ pve_exporter_port }}/metrics"
+        return_content: yes
+      register: metrics
+      changed_when: false
+
+    - name: Die Metriken pruefen, auf die die Alert-Regeln zugreifen
+      # Kein blosses "Dienst laeuft": genau diese vier Namen stehen in
+      # alert-rules.yml. Fehlt einer, ist eine Regel still wirkungslos —
+      # exakt der Fehler, den frigate-lxc-oom vier Monate lang hatte.
+      ansible.builtin.assert:
+        that:
+          - "'node_vmstat_oom_kill' in metrics.content"
+          - "'node_memory_MemAvailable_bytes' in metrics.content"
+          - "'node_filesystem_avail_bytes' in metrics.content"
+          - "'node_cpu_seconds_total' in metrics.content"
+        fail_msg: "{{ inventory_hostname }}: erwartete Metriken fehlen — Collector deaktiviert?"
+
+    - name: Textfile-Collector aktiv?
+      # node_textfile_scrape_error existiert nur, wenn das Verzeichnis gesetzt
+      # ist. 0 = Verzeichnis lesbar (auch wenn es leer ist).
+      ansible.builtin.assert:
+        that:
+          - "'node_textfile_scrape_error' in metrics.content"
+        fail_msg: "{{ inventory_hostname }}: Textfile-Collector nicht aktiv."
+
+    - name: Nicht auf 0.0.0.0 lauschen
+      ansible.builtin.shell: |
+        set -o pipefail
+        ss -tlnH "sport = :{{ pve_exporter_port }}" | awk '{print $4}'
+      args:
+        executable: /bin/bash
+      register: listen_addr
+      changed_when: false
+
+    - name: Bindeadresse pruefen
+      ansible.builtin.assert:
+        that:
+          - listen_addr.stdout is search(pve_exporter_bind_ip + ':' + pve_exporter_port | string)
+          - listen_addr.stdout is not search('0\.0\.0\.0')
+          - listen_addr.stdout is not search('\*:')
+        fail_msg: "{{ inventory_hostname }}: Exporter lauscht auf {{ listen_addr.stdout }} statt nur auf {{ pve_exporter_bind_ip }}."
+
+    - name: Temperatursensoren vorhanden?
+      # Rein informativ: hwmon ist auf Consumer-Boards nicht garantiert. Das
+      # Dashboard blendet die Kachel andernfalls einfach leer ein.
+      ansible.builtin.set_fact:
+        has_hwmon: "{{ 'node_hwmon_temp_celsius' in metrics.content }}"
+
+    - name: Ergebnis
+      ansible.builtin.debug:
+        msg:
+          - "{{ inventory_hostname }}: prometheus-node-exporter {{ exporter_version.stdout }}"
+          - "lauscht auf {{ listen_addr.stdout }}"
+          - "Metriken: {{ metrics.content | regex_findall('(?m)^node_[a-z_]+') | unique | length }} Namen"
+          - "Temperatursensoren: {{ 'ja' if has_hwmon else 'nein (hwmon liefert nichts)' }}"
+
+  handlers:
+    - name: systemd neu laden
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    - name: node-exporter neu starten
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        state: restarted

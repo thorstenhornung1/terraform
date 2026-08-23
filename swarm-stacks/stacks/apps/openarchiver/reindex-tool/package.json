@@ -1,0 +1,20 @@
+{
+  "name": "openarchiver-reindex-tool",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone reindexer that rebuilds the Open Archiver Meilisearch 'emails' index from PostgreSQL + Ceph RGW S3. Replicates Open Archiver v0.5.0 IndexingService.createEmailDocument exactly (same document shape, same primary key 'id').",
+  "license": "SEE Open Archiver LICENSE",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "reindex": "node src/reindex.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.844.0",
+    "mailparser": "^3.7.4",
+    "meilisearch": "^0.51.0",
+    "pg": "^8.16.3"
+  }
+}

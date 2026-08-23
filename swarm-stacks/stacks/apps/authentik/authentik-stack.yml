@@ -66,6 +66,12 @@ services:
       - source: blueprint_email_verification_${BLUEPRINT_EMAIL_VERIFICATION_HASH:-latest}
         target: /blueprints/custom/email-verification.yaml
         mode: 0444
+      - source: blueprint_password_recovery_${BLUEPRINT_PASSWORD_RECOVERY_HASH:-latest}
+        target: /blueprints/custom/password-recovery.yaml
+        mode: 0444
+      - source: blueprint_app_metadata_${BLUEPRINT_APP_METADATA_HASH:-latest}
+        target: /blueprints/custom/app-metadata.yaml
+        mode: 0444
     secrets:
       - authentik_db_password
       - authentik_secret_key
@@ -177,6 +183,12 @@ services:
       - source: blueprint_email_verification_${BLUEPRINT_EMAIL_VERIFICATION_HASH:-latest}
         target: /blueprints/custom/email-verification.yaml
         mode: 0444
+      - source: blueprint_password_recovery_${BLUEPRINT_PASSWORD_RECOVERY_HASH:-latest}
+        target: /blueprints/custom/password-recovery.yaml
+        mode: 0444
+      - source: blueprint_app_metadata_${BLUEPRINT_APP_METADATA_HASH:-latest}
+        target: /blueprints/custom/app-metadata.yaml
+        mode: 0444
     secrets:
       - authentik_db_password
       - authentik_secret_key
@@ -282,6 +294,10 @@ networks:
 configs:
   blueprint_email_verification_${BLUEPRINT_EMAIL_VERIFICATION_HASH:-latest}:
     file: ./blueprint-email-verification.yml
+  blueprint_password_recovery_${BLUEPRINT_PASSWORD_RECOVERY_HASH:-latest}:
+    file: ./blueprint-password-recovery.yml
+  blueprint_app_metadata_${BLUEPRINT_APP_METADATA_HASH:-latest}:
+    file: ./blueprint-app-metadata.yml
 
 # =============================================================================
 # SECRETS

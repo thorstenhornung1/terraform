@@ -1,0 +1,84 @@
+# =============================================================================
+# email-oauth2-proxy — O365 OAuth2 ⇄ plain-IMAP Bridge (für Open Archiver)
+# =============================================================================
+# Deploy: GitOps via ssh-deploy (webhooks.conf). Image kommt aus GHCR.
+#
+# Zweck: M365 hat Basic-Auth-IMAP tenant-weit blockiert. Dieser Proxy spricht
+# O365 per OAuth2 **Client-Credentials-Grant (app-only)** an (outbound IMAPS,
+# kein eingehender Port, keine fixe IP) und bietet intern ein plain-IMAP an.
+# Open Archiver nutzt dann pro Postfach eine Generic-IMAP-Quelle (single-mailbox)
+# gegen `email-oauth2-proxy:1993` → OAs ownership-RBAC greift → per-Person-Sicht.
+#
+# Consumer (Open Archiver) joinen das externe Overlay `email-oauth2-proxy_imap-network`
+# und verbinden via:  email-oauth2-proxy:1993  (Login = Postfach-Adresse)
+#
+# Secrets: oa_oauth_imap (O365 App client_secret) — extern, bereits angelegt.
+# client_id + tenant_id sind nicht geheim → direkt als ENV.
+# =============================================================================
+
+version: '3.8'
+
+services:
+  email-oauth2-proxy:
+    image: ghcr.io/thorstenhornung1/swarm-stacks/email-oauth2-proxy:latest
+    hostname: email-oauth2-proxy
+    environment:
+      O365_CLIENT_ID: "f2d3d31b-8ce6-4d8c-8b45-1e74aafd6138"
+      O365_TENANT_ID: "f5414e33-f55c-4c0f-8f0c-619c9713f56b"
+      # Postfächer (je ein account-Block, gleiche App via FullAccess-Permission):
+      O365_MAILBOXES: "thorsten@hornung-bn.de,stephanie@hornung-bn.de"
+      PROXY_PORT: "1993"
+    secrets:
+      # externes Secret heißt oa_ouath_imap (Tippfehler beim Anlegen) → als
+      # oa_oauth_imap in den Container mounten, damit der entrypoint es findet.
+      - source: oa_ouath_imap
+        target: oa_oauth_imap
+    networks:
+      imap-network:
+        aliases:
+          - email-oauth2-proxy
+    # Token-Cache transient (CCG: access-tokens ~1h, jederzeit neu holbar)
+    tmpfs:
+      - /cache
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; socket.create_connection(('127.0.0.1',1993),3).close()\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+# =============================================================================
+# NETWORKS — attachable, damit Open Archiver joinen kann
+# =============================================================================
+networks:
+  imap-network:
+    driver: overlay
+    attachable: true
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  oa_ouath_imap:
+    external: true

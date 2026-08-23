@@ -375,10 +375,16 @@ services:
       resources:
         limits:
           cpus: '1.5'
-          memory: 1536M
+          # 1536M -> 2048M (2026-08-16): Der Peak lag mit exakt 1536 MB AUF dem
+          # alten Limit, der Container wurde also aktiv gedrosselt.
+          memory: 2048M
         reservations:
           cpus: '0.1'
-          memory: 256M
+          # 256M -> 1024M (2026-08-16). Gemessen: ist 1042 MB, peak 1536 MB.
+          # Der Swarm-Scheduler kennt NUR reservations — mit 256M rechnete er
+          # mit einem Sechstel des tatsaechlichen Bedarfs, und die fehlenden
+          # ~790 MB waren die Hauptquelle der Ueberbuchung von infra-1.
+          memory: 1024M
       restart_policy:
         condition: any
         delay: 10s

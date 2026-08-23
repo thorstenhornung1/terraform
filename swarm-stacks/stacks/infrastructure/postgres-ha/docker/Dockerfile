@@ -12,7 +12,7 @@
 # - pgvector extension for IMMICH vector search
 # =============================================================================
 
-FROM postgres:16-alpine
+FROM postgres:18-alpine
 
 LABEL maintainer="infrastructure@hornung-bn.de"
 LABEL description="PostgreSQL 16 with Patroni for HA clustering"
