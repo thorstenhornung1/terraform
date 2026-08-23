@@ -267,12 +267,6 @@ services:
       placement:
         constraints:
           - node.labels.app == true
-          # TEMPORAER (2026-08-23): docker-infra-3 ausgeschlossen. Dort blieb
-          # der Task in "Ready" stehen — der Container war erstellt, aber das
-          # Overlay-Attachment kam nicht zustande ("network ... not found").
-          # Auf docker-infra-2 startet derselbe Dienst in unter drei Sekunden.
-          # RUECKBAU nach "systemctl restart docker" auf docker-infra-3.
-          - node.hostname != docker-infra-3
       resources:
         limits:
           cpus: '0.5'
