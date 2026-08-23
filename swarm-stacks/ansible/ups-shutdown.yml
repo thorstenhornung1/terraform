@@ -71,6 +71,17 @@
       - "ct:4303"    # GitHub-Runner
       - "ct:4304"    # GitHub-Runner 2
 
+    # --- Fuer den geplanten Cluster-Shutdown (pve-cluster-shutdown.sh) -------
+    pve_shutdown_swarm_vms:
+      - 4202         # docker-infra-3
+      - 4201         # docker-infra-2
+      - 4200         # docker-infra-1 (Leader zuletzt, spart Neuwahlen)
+    pve_shutdown_dns_guests:
+      - 4100         # dns1
+      - 4101         # dns2
+      - 4102         # dns3
+    pve_shutdown_guest_timeout: 120
+
   pre_tasks:
     - name: Passwort muss uebergeben worden sein
       ansible.builtin.assert:
@@ -303,6 +314,41 @@
     - name: Einmal sofort schieben, damit sofort Daten da sind
       ansible.builtin.command: /usr/local/sbin/ups-metrics-push.sh
       changed_when: false
+
+    # -------------------------------------------------------------------------
+    # Geplanter Cluster-Shutdown
+    # -------------------------------------------------------------------------
+    # Anderer Zweck als die Staffelung: Diese hier ist fuer Umbau, Wartung und
+    # Verkabelung — sofort und vollstaendig, nicht nach Akkustand. Die
+    # Reihenfolge stammt aus dem manuellen Durchlauf vom 2026-08-23; die
+    # Lektionen daraus stehen im Kopf des Skripts.
+    - name: Cluster-Shutdown-Skript ausrollen
+      ansible.builtin.copy:
+        src: files/pve-cluster-shutdown.sh
+        dest: /usr/local/sbin/pve-cluster-shutdown.sh
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Konfiguration des Cluster-Shutdowns ergaenzen
+      ansible.builtin.blockinfile:
+        path: /etc/default/ups-staged-shutdown
+        marker: "# {mark} pve-cluster-shutdown (ansible/ups-shutdown.yml)"
+        block: |
+          # Reihenfolge der HA-Gaeste beim geplanten Shutdown.
+          # NICHT beliebig: Home Assistant fuehrt seine Recorder-Datenbank auf
+          # postgres-prod, muss also vor ihm gehen. Frigate ist unabhaengig.
+          PVE_SHUTDOWN_HA_ORDER="{{ ups_critical_guests | join(' ') }}"
+
+          # Swarm-VMs. Muessen vor den Hypervisoren herunterfahren, weil ihre
+          # CephFS-Mounts Hard-Mounts sind.
+          PVE_SHUTDOWN_SWARM_VMS="{{ pve_shutdown_swarm_vms | join(' ') }}"
+
+          # DNS zuletzt unter den Gaesten — bis dahin kann noch etwas
+          # Namensaufloesung brauchen.
+          PVE_SHUTDOWN_DNS_GUESTS="{{ pve_shutdown_dns_guests | join(' ') }}"
+
+          PVE_SHUTDOWN_GUEST_TIMEOUT={{ pve_shutdown_guest_timeout }}
 
     # -------------------------------------------------------------------------
     # Verifikation
