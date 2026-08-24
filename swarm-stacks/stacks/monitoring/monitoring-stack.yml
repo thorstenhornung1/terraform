@@ -259,6 +259,8 @@ services:
         target: /var/lib/grafana/dashboards-infra/pve-hosts.json
       - source: dashboard_unifi_poe
         target: /var/lib/grafana/dashboards-infra/unifi-poe.json
+      - source: dashboard_synology_nas
+        target: /var/lib/grafana/dashboards-infra/synology-nas.json
       - source: alerting_contact_points
         target: /etc/grafana/provisioning/alerting/contact-points.yml
       - source: alerting_notification_policies
@@ -375,86 +377,112 @@ services:
       disable: true
 
   # ===========================================================================
-  # SNMP EXPORTER — VORUEBERGEHEND DEAKTIVIERT (2026-08-23)
+  # SNMP EXPORTER — Synology DS918+ (und spaeter weitere SNMP-Geraete)
   # ===========================================================================
-  # Die Secrets synology_snmp_auth_password und synology_snmp_priv_password
-  # wurden zur Rotation geloescht. Ein fehlendes Secret laesst NICHT nur diesen
-  # Dienst scheitern, sondern den gesamten Stack-Deploy — docker stack deploy
-  # ist atomar. Dadurch blockierte er Aenderungen an voellig anderen Diensten.
+  # Zweck: Die Synology war bislang genauso unueberwacht wie die PVE-Hosts —
+  # eine Luecke, die im RCA zum Stromausfall vom 2026-08-21 stand. SNMPv3
+  # liefert Plattentemperaturen, Luefterdrehzahlen, RAID-Zustand, CPU- und
+  # Speicherauslastung sowie Netzwerkdurchsatz.
   #
-  # WIEDER AKTIVIEREN: Sobald beide Secrets neu angelegt sind, den Block unten
-  # und die beiden Secret-Deklarationen am Dateiende einkommentieren.
-  # Dabei pruefen: Der Wrapper erwartet priv_protocol AES; steht im DSM DES,
-  # muss eines von beidem angepasst werden.
-  # ===========================================================================
-#   # ===========================================================================
-#   # SNMP EXPORTER — Synology DS918+ (und spaeter weitere SNMP-Geraete)
-#   # ===========================================================================
-#   # Zweck: Die Synology war bislang genauso unueberwacht wie die PVE-Hosts —
-#   # eine Luecke, die im RCA zum Stromausfall vom 2026-08-21 stand. SNMPv3
-#   # liefert Plattentemperaturen, Luefterdrehzahlen, RAID-Zustand, CPU- und
-#   # Speicherauslastung sowie Netzwerkdurchsatz.
-#   #
-#   # AUFBAU: MODULE OEFFENTLICH, ZUGANG GEHEIM
-#   #   snmp-modules.yml (82 KB, Docker Config) traegt die MIB-Definitionen der
-#   #   Module "synology" und "if_mib" aus dem offiziellen Generator. Nichts
-#   #   davon ist geheim, es gehoert versioniert ins Repo. Die vollstaendige
-#   #   snmp.yml waere 2 MB gross und spraengte das 500-KB-Limit fuer Docker
-#   #   Configs — deshalb nur die beiden benoetigten Module.
-#   #
-#   #   Die SNMPv3-Zugangsdaten baut snmp-entrypoint.sh zur Laufzeit aus zwei
-#   #   Docker Secrets zusammen. Anders als UnPoller kennt der snmp_exporter
-#   #   kein file://-Praefix fuer Einzelwerte; er liest Zugangsdaten nur aus
-#   #   einer Konfigurationsdatei. Die entstehende Datei liegt in tmpfs und
-#   #   beruehrt nie ein Volume.
-#   snmp-exporter:
-#     image: prom/snmp-exporter:v0.30.1
-#     hostname: snmp-exporter
-#     entrypoint: /snmp-entrypoint.sh
-#     environment:
-#       SNMP_USERNAME: "grafana"
-#       TZ: "Europe/Berlin"
-#     configs:
-#       - source: snmp_modules
-#         target: /etc/snmp_exporter/snmp-modules.yml
-#         mode: 0444
-#       - source: snmp_entrypoint
-#         target: /snmp-entrypoint.sh
-#         mode: 0555
-#     secrets:
-#       - synology_snmp_auth_password
-#       - synology_snmp_priv_password
-#     tmpfs:
-#       - /tmp:size=1m,mode=0700
-#     networks:
-#       - monitoring-network
-#     deploy:
-#       mode: replicated
-#       replicas: 1
-#       placement:
-#         constraints:
-#           - node.labels.app == true
-#       resources:
-#         limits:
-#           cpus: '0.25'
-#           memory: 128M
-#         reservations:
-#           cpus: '0.05'
-#           memory: 32M
-#       restart_policy:
-#         condition: any
-#         delay: 30s
-#         window: 120s
-#       update_config:
-#         parallelism: 1
-#         delay: 10s
-#         order: stop-first
-#     healthcheck:
-#       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9116/-/healthy >/dev/null 2>&1 || exit 1"]
-#       interval: 60s
-#       timeout: 10s
-#       retries: 3
-#       start_period: 30s
+  # HISTORIE
+  #   2026-08-23 deaktiviert: Die beiden Secrets wurden zur Rotation geloescht.
+  #   Ein fehlendes Secret laesst NICHT nur diesen Dienst scheitern, sondern den
+  #   gesamten Stack-Deploy — docker stack deploy ist atomar. Dadurch blockierte
+  #   er Aenderungen an voellig anderen Diensten.
+  #   2026-08-24 reaktiviert: Secrets neu angelegt, und im DSM steht jetzt
+  #   Privacy=AES statt DES. Damit passt das Geraet zu dem, was
+  #   snmp-entrypoint.sh baut (SHA/AES). Vorher scheiterte die Anmeldung
+  #   kommentarlos — SNMPv3 quittiert einen Protokoll-Mismatch nicht, es
+  #   antwortet schlicht nicht.
+  #
+  # AUFBAU: MODULE OEFFENTLICH, ZUGANG GEHEIM
+  #   snmp-modules.yml (106 KB, Docker Config) traegt die MIB-Definitionen aus
+  #   der offiziellen snmp.yml (snmp_exporter v0.30.1). Nichts davon ist
+  #   geheim, es gehoert versioniert ins Repo. Die vollstaendige snmp.yml waere
+  #   2 MB gross und spraengte das 500-KB-Limit fuer Docker Configs — deshalb
+  #   nur die neun tatsaechlich genutzten Module (synology, if_mib, hrStorage,
+  #   hrDevice, hrSystem, system, ucd_system_stats, ucd_memory, ucd_la_table).
+  #
+  #   ERZEUGT VON .gen-snmp-modules.py — nicht von Hand editieren. Das Skript
+  #   dokumentiert jede Abweichung vom Upstream mitsamt Begruendung: die
+  #   Absenkung von max_repetitions fuer hrStorage/hrDevice, das Eindampfen
+  #   von hrDevice und die Umstellung von OctetString auf DisplayString, ohne
+  #   die die Platten als diskID="0x4469736B2031" statt "Disk 1" ankommen.
+  #
+  #   Die Modulnamen kollidieren paarweise NICHT in ihren Metriknamen — das ist
+  #   Voraussetzung fuer den Multi-Modul-Scrape (?module=a&module=b), weil der
+  #   Exporter die Ergebnisse ohne unterscheidendes Label konkateniert und
+  #   Prometheus doppelte Serien sonst als Scrape-Fehler zurueckweist. Der
+  #   Generator bricht ab, wenn eine Kollision entstuende.
+  #
+  #   Die SNMPv3-Zugangsdaten baut snmp-entrypoint.sh zur Laufzeit aus zwei
+  #   Docker Secrets zusammen. Anders als UnPoller kennt der snmp_exporter
+  #   kein file://-Praefix fuer Einzelwerte; er liest Zugangsdaten nur aus
+  #   einer Konfigurationsdatei. Die entstehende Datei liegt in tmpfs und
+  #   beruehrt nie ein Volume.
+  snmp-exporter:
+    image: prom/snmp-exporter:v0.30.1
+    hostname: snmp-exporter
+    entrypoint: /snmp-entrypoint.sh
+    # module-concurrency: Der Scrape-Job fragt neun Module in EINEM Request ab.
+    # Mit dem Default 1 laufen deren Walks streng nacheinander. 4 parallele
+    # Walks halten den Scrape bei 1,6s (gemessen 2026-08-24, 2296 Serien),
+    # ohne die DS918+ zu ueberfahren.
+    command:
+      - --snmp.module-concurrency=4
+    environment:
+      SNMP_USERNAME: "grafana"
+      TZ: "Europe/Berlin"
+    configs:
+      # source MUSS der Deklarationsname sein (snmp_modules), nicht der
+      # Hash-Name aus dem name:-Feld. Ein `source: snmp_modules_<hash>` erzeugt
+      # "undefined config" und laesst den GESAMTEN Stack-Deploy scheitern.
+      - source: snmp_modules
+        target: /etc/snmp_exporter/snmp-modules.yml
+        mode: 0444
+      - source: snmp_entrypoint
+        target: /snmp-entrypoint.sh
+        mode: 0555
+    secrets:
+      - synology_snmp_auth_password
+      - synology_snmp_priv_password
+    tmpfs:
+      - /tmp:size=1m,mode=0700
+    networks:
+      - monitoring-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.app == true
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 48M
+      restart_policy:
+        condition: any
+        delay: 30s
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9116/-/healthy >/dev/null 2>&1 || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      # start_period grosszuegig: Das Parsen der 117-KB-Moduldatei plus der
+      # erste Scrape brauchen spuerbar laenger als ein leerer HTTP-Server. Ein
+      # zu knapper Wert killt den Container VOR dem ersten erfolgreichen
+      # Scrape und erzeugt einen Restart-Loop, der wie ein Konfigfehler
+      # aussieht. Er muss ausserdem groesser sein als der monitor-Wert eines
+      # etwaigen update_config, sonst rollt Swarm still zurueck.
+      start_period: 120s
 
   # ===========================================================================
   # UNPOLLER — UniFi-Controller (UDM Pro) als Metrikquelle
@@ -697,7 +725,7 @@ services:
           memory: 256M
         reservations:
           cpus: '0.05'
-          memory: 64M
+          memory: 192M
       restart_policy:
         condition: any
         delay: 10s
@@ -776,6 +804,14 @@ configs:
     name: dashboard_unifi_poe_${UNIFI_POE_HASH:-latest}
     file: ./dashboards/unifi-poe.json
 
+  # NAS-Dashboard. Quelle ist der Scrape-Job snmp-synology gegen den
+  # snmp-exporter in diesem Stack. Erzeugt von dashboards/.gen-synology-nas.py;
+  # dort stehen auch die Begruendungen fuer die nicht offensichtlichen
+  # Abfragen (hrSystemUptime statt sysUpTime, Speicher ohne Cache, nur eth1).
+  dashboard_synology_nas:
+    name: dashboard_synology_nas_${SYNOLOGY_NAS_HASH:-latest}
+    file: ./dashboards/synology-nas.json
+
   alerting_contact_points:
     name: alerting_contact_points_${CONTACT_POINTS_HASH:-latest}
     file: ./alerting/contact-points.yml
@@ -835,11 +871,15 @@ secrets:
   unpoller_unifi_password_v2:
     external: true
 
-  # synology_snmp_auth_password:      # deaktiviert, siehe SNMP-Block oben
-  #   external: true
+  # SNMPv3-Zugangsdaten der Synology (Benutzer "grafana", SHA/AES).
+  # Angelegt ueber die Portainer-UI — nie per `docker secret create`, das
+  # haengt ein Trailing-Newline an. snmp-entrypoint.sh schneidet zwar per
+  # `tr -d` ab, aber darauf sollte sich niemand verlassen muessen.
+  synology_snmp_auth_password:
+    external: true
 
-  # synology_snmp_priv_password:      # deaktiviert, siehe SNMP-Block oben
-  #   external: true
+  synology_snmp_priv_password:
+    external: true
 
   grafana_monitoring_admin_password:
     external: true

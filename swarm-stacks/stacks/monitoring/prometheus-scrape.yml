@@ -199,15 +199,34 @@ scrape_configs:
   # auth=synology_v3 verweist auf den Eintrag, den snmp-entrypoint.sh zur
   # Laufzeit aus den beiden Docker Secrets baut.
   #
-  # 120s Intervall: SNMP-Walks ueber 248 Metriken sind traege, und
-  # Temperaturen aendern sich nicht im Sekundentakt.
+  # 120s Intervall: SNMP-Walks sind traege, und Temperaturen aendern sich nicht
+  # im Sekundentakt. Gemessen am 2026-08-24 brauchen alle neun Module zusammen
+  # 1,6 s (2296 Serien) — das 60s-Timeout ist reichlich Reserve fuer den Fall,
+  # dass die DS918+ unter Last langsamer antwortet.
+  #
+  # ACHTUNG bei rate()-Ausdruecken auf diesen Metriken: Bei 120s Intervall
+  # braucht ein Fenster mindestens 4-5 Minuten, sonst liegen zu wenige Punkte
+  # darin und der Ausdruck liefert stumm nichts. Im Dashboard steht ueberall
+  # [10m].
   - job_name: snmp-synology
     scrape_interval: 120s
     scrape_timeout: 60s
     metrics_path: /snmp
     params:
       auth: [synology_v3]
-      module: [synology, if_mib]
+      # Alle neun Module wurden am 2026-08-24 einzeln gegen das Geraet
+      # geprueft; jedes liefert Daten. ip_mib fehlt bewusst: Darauf antwortet
+      # die DS918+ mit 0 PDUs.
+      module:
+        - synology          # Vendor-OIDs: Temperaturen, Disk-/RAID-Status, SMART
+        - if_mib            # Netzwerkdurchsatz
+        - hrStorage         # Volume-Belegung und Swap
+        - hrDevice          # CPU-Last je Kern, Geraetestatus
+        - hrSystem          # Uptime (NICHT sysUpTime, siehe unten)
+        - system            # sysName/sysDescr/sysLocation
+        - ucd_system_stats  # CPU-Verteilung
+        - ucd_memory        # RAM und Swap
+        - ucd_la_table      # Load Average
     static_configs:
       - targets:
           - 192.168.2.3
@@ -220,6 +239,21 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: snmp-exporter:9116
+    # -------------------------------------------------------------------------
+    # Fluechtige Container-Interfaces wegwerfen
+    # -------------------------------------------------------------------------
+    # Von den 22 Interfaces der DS918+ sind 15 Docker-veth-Paare und ein
+    # VM-tap — mit Namen wie "docker-27f81084", die sich bei jedem
+    # Container-Neustart aendern. Ohne diesen Filter waechst die Zahl toter
+    # Zeitreihen mit jedem Container-Restart dauerhaft an, und die
+    # Interface-Panels stehen voller Namen, die nichts bedeuten.
+    #
+    # Metriken ohne ifName-Label sind nicht betroffen: Der leere String
+    # trifft dieses Muster nicht (Prometheus verankert Regexe vollstaendig).
+    metric_relabel_configs:
+      - source_labels: [ifName]
+        regex: '(docker|veth|tap|br-).*'
+        action: drop
 
   # ---------------------------------------------------------------------------
   # UnPoller — UniFi-Controller (UDM Pro)
