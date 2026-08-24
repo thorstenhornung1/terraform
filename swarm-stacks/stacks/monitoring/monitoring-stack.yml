@@ -261,6 +261,12 @@ services:
         target: /var/lib/grafana/dashboards-infra/unifi-poe.json
       - source: dashboard_synology_nas
         target: /var/lib/grafana/dashboards-infra/synology-nas.json
+      - source: dashboard_synology_smart
+        target: /var/lib/grafana/dashboards-infra/synology-smart.json
+      - source: dashboard_synology_net
+        target: /var/lib/grafana/dashboards-infra/synology-net.json
+      - source: dashboard_synology_storage
+        target: /var/lib/grafana/dashboards-infra/synology-storage.json
       - source: alerting_contact_points
         target: /etc/grafana/provisioning/alerting/contact-points.yml
       - source: alerting_notification_policies
@@ -811,6 +817,27 @@ configs:
   dashboard_synology_nas:
     name: dashboard_synology_nas_${SYNOLOGY_NAS_HASH:-latest}
     file: ./dashboards/synology-nas.json
+
+  # Die drei NAS-Detail-Dashboards. Alle drei entstehen aus
+  # dashboards/.gen-synology-detail.py; dort steht auch, welche Metrikgruppen
+  # bewusst NICHT verwendet werden und warum (iSCSI durchgehend 0, hrDevice
+  # ohne Geraetekennung, Broadcast-Zaehler nie befuellt).
+  #
+  # Der Schluessel unter source: ist der Deklarationsname hier links, NICHT
+  # der Name mit Hash darunter. Steht dort der Hash-Name, loest Docker die
+  # Config nicht auf, meldet "undefined config" und der ganze Stack-Deploy
+  # bricht ab — nicht nur dieses eine Dashboard.
+  dashboard_synology_smart:
+    name: dashboard_synology_smart_${SYNOLOGY_SMART_HASH:-latest}
+    file: ./dashboards/synology-smart.json
+
+  dashboard_synology_net:
+    name: dashboard_synology_net_${SYNOLOGY_NET_HASH:-latest}
+    file: ./dashboards/synology-net.json
+
+  dashboard_synology_storage:
+    name: dashboard_synology_storage_${SYNOLOGY_STORAGE_HASH:-latest}
+    file: ./dashboards/synology-storage.json
 
   alerting_contact_points:
     name: alerting_contact_points_${CONTACT_POINTS_HASH:-latest}

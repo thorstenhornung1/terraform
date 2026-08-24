@@ -1,0 +1,1544 @@
+{
+  "uid": "synology-storage",
+  "title": "Synology DS918+ — Speicher und E/A",
+  "description": "Speicherpool, Volume, Dateisysteme und Ein-/Ausgabelast der Synology DS918+ (192.168.2.3). Quelle ist der Scrape-Job snmp-synology.\n\nKein iSCSI: es gibt genau eine LUN, deren Leistungswerte (Latenz, IOPS, Durchsatz, Warteschlange) ueber die gesamte Vorhaltezeit konstant 0 sind. Der einzige Wert ungleich 0 ist bis auf Rundung identisch mit raidFreeSize des Volumes und steht dort bereits. Erzeugt von .gen-synology-detail.py — Aenderungen dort vornehmen, nicht im UI.",
+  "tags": [
+    "synology",
+    "nas",
+    "storage",
+    "snmp"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Pool und Volume",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "state-timeline",
+      "title": "RAID-Zustand",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "timeFrom": "24h",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 85,
+            "spanNulls": true,
+            "insertNulls": false,
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            }
+          },
+          "mappings": [
+            {
+              "options": {
+                "1": {
+                  "text": "Normal",
+                  "color": "green",
+                  "index": 0
+                },
+                "2": {
+                  "text": "Reparatur laeuft",
+                  "color": "yellow",
+                  "index": 1
+                },
+                "3": {
+                  "text": "Migration laeuft",
+                  "color": "yellow",
+                  "index": 2
+                },
+                "4": {
+                  "text": "Erweiterung laeuft",
+                  "color": "yellow",
+                  "index": 3
+                },
+                "5": {
+                  "text": "Wird geloescht",
+                  "color": "yellow",
+                  "index": 4
+                },
+                "6": {
+                  "text": "Wird erstellt",
+                  "color": "yellow",
+                  "index": 5
+                },
+                "7": {
+                  "text": "RAID-Sync laeuft",
+                  "color": "yellow",
+                  "index": 6
+                },
+                "8": {
+                  "text": "Paritaetspruefung",
+                  "color": "yellow",
+                  "index": 7
+                },
+                "11": {
+                  "text": "Degradiert",
+                  "color": "red",
+                  "index": 8
+                },
+                "12": {
+                  "text": "Abgestuerzt",
+                  "color": "red",
+                  "index": 9
+                },
+                "13": {
+                  "text": "Data-Scrubbing",
+                  "color": "yellow",
+                  "index": 10
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "never",
+        "rowHeight": 0.7,
+        "alignValue": "center",
+        "perPage": 20,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "raidStatus{job=\"snmp-synology\"}",
+          "legendFormat": "{{raidName}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "description": "Zwei Zeilen: der Speicherpool und das darauf liegende Volume. Beide stehen im Normalfall auf 1. Die gelben Zustaende (Reparatur, Migration, Erweiterung, Data-Scrubbing) sind Arbeitsvorgaenge und kein Fehler — sie erklaeren aber, warum das NAS in dieser Zeit langsam ist. Rot ab 11 bedeutet degradiert oder abgestuerzt."
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Volume 1 belegt",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "orange",
+                "value": 90
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100 * (raidTotalSize{job=\"snmp-synology\",raidName=\"Volume 1\"} - raidFreeSize{job=\"snmp-synology\",raidName=\"Volume 1\"}) / raidTotalSize{job=\"snmp-synology\",raidName=\"Volume 1\"}",
+          "legendFormat": "",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "description": "Deckt sich mit der hrStorage-Angabe fuer /volume1 — zwei unabhaengige SNMP-Tabellen, die dasselbe sagen. Bewusst NICHT auf den Speicherpool angewandt: der steht rechnerisch immer bei 100 %, siehe Tabelle unten."
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Volume 1 frei",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 536870912000
+              },
+              {
+                "color": "green",
+                "value": 1099511627776
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "raidFreeSize{job=\"snmp-synology\",raidName=\"Volume 1\"}",
+          "legendFormat": "",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "description": "Absolut statt prozentual, weil bei 17,5 TiB Gesamtgroesse ein Prozentpunkt schon 175 GiB sind. Rot unter 500 GiB, gruen ab 1 TiB."
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Tage bis voll",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "d",
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 60
+              },
+              {
+                "color": "yellow",
+                "value": 180
+              },
+              {
+                "color": "green",
+                "value": 365
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "scalar(raidFreeSize{job=\"snmp-synology\",raidName=\"Volume 1\"}) / ((scalar(deriv(hrStorageUsed{job=\"snmp-synology\",hrStorageDescr=\"/volume1\"}[24h])) * scalar(hrStorageAllocationUnits{job=\"snmp-synology\",hrStorageDescr=\"/volume1\"})) > 0) / 86400",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "description": "Freier Platz geteilt durch das Wachstum der letzten 24 h. Der Filter > 0 ist Absicht: schrumpft das Volume gerade, zeigt das Panel KEINEN Wert statt einer negativen Tageszahl.\n\nDie Zahl ist eine lineare Fortschreibung eines Tagesmittels und keine Prognose — ein einzelner grosser Kopiervorgang zieht sie stark nach unten. Ausserdem laeuft der Scrape-Job erst seit dem 2026-08-23, die Datenbasis ist also noch schmal und wird mit der Zeit belastbarer."
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Speicherpool gegen Volume",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(Gesamt|Frei)$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Belegt bzw. zugeteilt"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Reserveplatten"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "countRows": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": []
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "raidTotalSize{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "raidFreeSize{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100 * (raidTotalSize{job=\"snmp-synology\"} - raidFreeSize{job=\"snmp-synology\"}) / raidTotalSize{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "raidHotspareCnt{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "D"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "raidName",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "Time 8": true,
+              "Time 9": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true,
+              "job 3": true,
+              "job 4": true,
+              "job 5": true,
+              "job 6": true,
+              "job 7": true,
+              "job 8": true,
+              "job 9": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "instance 3": true,
+              "instance 4": true,
+              "instance 5": true,
+              "instance 6": true,
+              "instance 7": true,
+              "instance 8": true,
+              "instance 9": true,
+              "device": true,
+              "device 1": true,
+              "device 2": true,
+              "device 3": true,
+              "device 4": true,
+              "device 5": true,
+              "device 6": true,
+              "device 7": true,
+              "device 8": true,
+              "device 9": true,
+              "raidIndex": true,
+              "raidIndex 1": true,
+              "raidIndex 2": true,
+              "raidIndex 3": true,
+              "raidIndex 4": true,
+              "raidIndex 5": true,
+              "raidIndex 6": true,
+              "raidIndex 7": true,
+              "raidIndex 8": true,
+              "raidIndex 9": true
+            },
+            "renameByName": {
+              "raidName": "Einheit",
+              "Value #A": "Gesamt",
+              "Value #B": "Frei",
+              "Value #C": "Belegt bzw. zugeteilt",
+              "Value #D": "Reserveplatten"
+            }
+          }
+        }
+      ],
+      "description": "Die Spalte heisst absichtlich \"Belegt bzw. zugeteilt\", weil sie fuer die beiden Zeilen Verschiedenes bedeutet.\n\nStorage Pool 1 steht bei 100 % und meldet 188 MiB frei von 18,18 TiB. Das ist KEIN Platzmangel: der Pool ist vollstaendig an Volume 1 zugeteilt, so wie es sein soll. Erst wenn ein zweites Volume angelegt werden soll, wird diese Zahl relevant.\n\nVolume 1 bei 89,7 % ist die Zahl, auf die es ankommt — das ist der tatsaechlich belegte Platz. Reserveplatten 0 heisst: faellt eine Platte aus, springt nichts automatisch ein, die Wiederherstellung beginnt erst nach dem Tausch."
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "/volume1 — belegt im Verlauf",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 6,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": 600000,
+            "pointSize": 4,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "hrStorageUsed{job=\"snmp-synology\",hrStorageDescr=\"/volume1\"} * on(hrStorageIndex) group_left() hrStorageAllocationUnits{job=\"snmp-synology\",hrStorageDescr=\"/volume1\"}",
+          "legendFormat": "belegt",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "hrStorageSize{job=\"snmp-synology\",hrStorageDescr=\"/volume1\"} * on(hrStorageIndex) group_left() hrStorageAllocationUnits{job=\"snmp-synology\",hrStorageDescr=\"/volume1\"}",
+          "legendFormat": "Gesamtgroesse",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "B"
+        }
+      ],
+      "description": "Belegung und Gesamtgroesse in Bytes. Die Blockgroesse wird aus hrStorageAllocationUnits geholt und nicht als 16384 fest eingetragen — sonst rechnete das Panel falsch, sobald ein Volume mit anderer Blockgroesse dazukommt.\n\nDer Abstand zwischen beiden Kurven ist der freie Platz. Eine Stufe nach oben ist ein Kopiervorgang, ein Absacken eine Loeschung oder ein abgelaufener Snapshot."
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Dateisysteme",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "bargauge",
+      "title": "Belegung je Dateisystem",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 0,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "orange",
+                "value": 90
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "color",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "sizing": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100 * hrStorageUsed{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"} / (hrStorageSize{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"} > 0)",
+          "legendFormat": "{{hrStorageDescr}}",
+          "range": false,
+          "instant": true,
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "description": "Neun Zeilen statt 46. Die DS918+ meldet 46 hrStorage-Eintraege, aber 30 davon sind Bind-Mounts desselben btrfs-Dateisystems unter /volume1/@appdata/ContainerManager/all_shares/*, dazu /volume1/@docker und ein Snapshot-Pfad. Alle tragen exakt dieselbe Groesse und Belegung wie /volume1 — ungefiltert stuende hier 31-mal die Zahl 89,7 untereinander.\n\nDer Filter hrStorageDescr!~\"/volume1/.+\" laesst /volume1 selbst stehen und wirft alles darunter weg. Der Praefix-Filter hrStorageDescr=~\"/.*\" haelt zusaetzlich die Arbeitsspeicher-Eintraege heraus, die hrStorage ebenfalls fuehrt (Physical memory, Cached memory, Swap space) — die gehoeren ins Uebersichts-Dashboard, nicht in eine Dateisystemliste."
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Dateisysteme",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 10,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(Gesamt|Belegt|Frei)$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Belegt %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "max",
+                "value": 100
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 80
+                    },
+                    {
+                      "color": "orange",
+                      "value": 90
+                    },
+                    {
+                      "color": "red",
+                      "value": 95
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Blockgroesse"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 105
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "countRows": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": []
+        },
+        "sortBy": [
+          {
+            "displayName": "Belegt",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "hrStorageSize{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"} * hrStorageAllocationUnits{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "hrStorageUsed{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"} * hrStorageAllocationUnits{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "(hrStorageSize{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"} - hrStorageUsed{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"}) * hrStorageAllocationUnits{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100 * hrStorageUsed{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"} / (hrStorageSize{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"} > 0)",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "hrStorageAllocationUnits{job=\"snmp-synology\",hrStorageDescr=~\"/.*\",hrStorageDescr!~\"/volume1/.+\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "E"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "hrStorageDescr",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "Time 8": true,
+              "Time 9": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true,
+              "job 3": true,
+              "job 4": true,
+              "job 5": true,
+              "job 6": true,
+              "job 7": true,
+              "job 8": true,
+              "job 9": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "instance 3": true,
+              "instance 4": true,
+              "instance 5": true,
+              "instance 6": true,
+              "instance 7": true,
+              "instance 8": true,
+              "instance 9": true,
+              "device": true,
+              "device 1": true,
+              "device 2": true,
+              "device 3": true,
+              "device 4": true,
+              "device 5": true,
+              "device 6": true,
+              "device 7": true,
+              "device 8": true,
+              "device 9": true,
+              "hrStorageIndex": true,
+              "hrStorageIndex 1": true,
+              "hrStorageIndex 2": true,
+              "hrStorageIndex 3": true,
+              "hrStorageIndex 4": true,
+              "hrStorageIndex 5": true,
+              "hrStorageIndex 6": true,
+              "hrStorageIndex 7": true,
+              "hrStorageIndex 8": true,
+              "hrStorageIndex 9": true
+            },
+            "renameByName": {
+              "hrStorageDescr": "Dateisystem",
+              "Value #A": "Gesamt",
+              "Value #B": "Belegt",
+              "Value #C": "Frei",
+              "Value #D": "Belegt %",
+              "Value #E": "Blockgroesse"
+            }
+          }
+        }
+      ],
+      "description": "Dieselben neun Dateisysteme wie im Balkenpanel links, aber mit absoluten Zahlen. Die Spalte Blockgroesse steht hier, weil sie erklaert, wie die Byte-Werte zustande kommen: hrStorage zaehlt Bloecke, nicht Bytes. /volume1 rechnet mit 16 KiB, die tmpfs-Dateisysteme mit 4 KiB.\n\nDie Einheit bytes ist einzeln je Spalte gesetzt und nicht als Tabellen-Vorgabe — sonst bekaeme auch die Blockgroesse-Spalte eine sinnlose Byte-Formatierung und die Prozentspalte stuende in Bytes da."
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "E/A je Platte",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Datendurchsatz je Platte",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 6,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": 600000,
+            "pointSize": 4,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "rate(storageIONReadX{job=\"snmp-synology\"}[10m])",
+          "legendFormat": "lesen {{storageIODevice}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "- rate(storageIONWrittenX{job=\"snmp-synology\"}[10m])",
+          "legendFormat": "schreiben {{storageIODevice}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "B"
+        }
+      ],
+      "description": "Lesen nach oben, Schreiben nach unten — das Minus vor der Schreibrate ist Darstellung, kein Rechenfehler.\n\nBenutzt werden die X-Varianten der Zaehler. Die kurzen Fassungen storageIONRead und storageIONWritten sind Counter32 und stehen bereits bei 55 bis 75 % von 2^32; sie laufen also regelmaessig ueber. Die X-Fassungen sind Counter64.\n\nDass nvme0n1 und nvme1n1 identisch schreiben, ist richtig so: der SSD-Cache ist gespiegelt. Dass sda deutlich weniger schreibt als sdb bis sdd, liegt an SHR mit gemischten Plattengroessen — sda ist die 4-TB-Platte unter drei 8-TB-Platten und traegt nur den unteren Bereich des Verbunds."
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "E/A-Vorgaenge je Platte",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "iops",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 6,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": 600000,
+            "pointSize": 4,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "rate(storageIOReads{job=\"snmp-synology\"}[10m])",
+          "legendFormat": "lesen {{storageIODevice}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "- rate(storageIOWrites{job=\"snmp-synology\"}[10m])",
+          "legendFormat": "schreiben {{storageIODevice}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "B"
+        }
+      ],
+      "description": "Vorgaenge statt Bytes, wieder Lesen oben und Schreiben unten. Der Vergleich mit dem Durchsatzpanel links zeigt die mittlere Anfragegroesse: viele Vorgaenge bei wenig Durchsatz bedeuten kleine, verstreute Zugriffe — genau das, was Festplatten ausbremst und wofuer der SSD-Cache da ist."
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Auslastung je Platte",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 4,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": 600000,
+            "pointSize": 4,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "storageIOLA1{job=\"snmp-synology\"}",
+          "legendFormat": "{{storageIODevice}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "description": "storageIOLA1 ist das 1-Minuten-Mittel der Geraeteauslastung, vergleichbar mit der Spalte %util aus iostat — der Anteil der Zeit, in dem mindestens ein Vorgang anstand. Dauerhaft nahe 100 heisst, dass die Platte die Warteschlange nicht mehr abarbeitet.\n\nDie Werte kommen bereits als Prozentzahl aus der MIB und werden nicht umgerechnet."
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "E/A des Volumes",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 6,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": 600000,
+            "pointSize": 4,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "rate(spaceIONReadX{job=\"snmp-synology\"}[10m])",
+          "legendFormat": "lesen {{spaceIODevice}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "- rate(spaceIONWrittenX{job=\"snmp-synology\"}[10m])",
+          "legendFormat": "schreiben {{spaceIODevice}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "B"
+        }
+      ],
+      "description": "Dieselbe Messung eine Ebene hoeher: dm-2 ist das Device-Mapper-Geraet unter /volume1, also die Sicht der Anwendungen auf den gesamten Verbund. Der Vergleich mit der Summe der Einzelplatten zeigt, was RAID-Paritaet und SSD-Cache zusaetzlich an Schreiblast erzeugen — deshalb stehen die beiden Panels nebeneinander und sind bewusst nicht zusammengerechnet."
+    }
+  ],
+  "links": [
+    {
+      "title": "Uebersicht NAS",
+      "type": "link",
+      "url": "/d/synology-nas/",
+      "tags": [],
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "tooltip": ""
+    },
+    {
+      "title": "Platten und SMART",
+      "type": "link",
+      "url": "/d/synology-smart/",
+      "tags": [],
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "tooltip": ""
+    },
+    {
+      "title": "Netzwerk",
+      "type": "link",
+      "url": "/d/synology-net/",
+      "tags": [],
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "tooltip": ""
+    }
+  ]
+}

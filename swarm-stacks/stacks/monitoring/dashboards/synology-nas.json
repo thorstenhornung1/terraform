@@ -1336,7 +1336,14 @@
           "refId": "A"
         }
       ],
-      "description": "Nur die echten Dateisysteme. Die DS918+ meldet 39 Eintraege, davon rund 30 Bind-Mounts derselben btrfs-Dateisysteme unter /volume1/@appdata/ContainerManager/all_shares/*. Die tragen alle identische Zahlen — ungefiltert stuende hier 30-mal derselbe Balken. Der Regex ist in PromQL vollstaendig verankert, '/volume1' trifft deshalb nicht die Unterpfade."
+      "description": "Nur die echten Dateisysteme. Die DS918+ meldet 39 Eintraege, davon rund 30 Bind-Mounts derselben btrfs-Dateisysteme unter /volume1/@appdata/ContainerManager/all_shares/*. Die tragen alle identische Zahlen — ungefiltert stuende hier 30-mal derselbe Balken. Der Regex ist in PromQL vollstaendig verankert, '/volume1' trifft deshalb nicht die Unterpfade.",
+      "links": [
+        {
+          "title": "Details: Speicher und E/A",
+          "url": "/d/synology-storage/?${__url_time_range}",
+          "targetBlank": false
+        }
+      ]
     },
     {
       "id": 20,
@@ -1679,7 +1686,14 @@
           }
         }
       ],
-      "description": "Storage Pool 1 zeigt hier nur rund 197 MB frei — das ist KEIN Warnzeichen. Der Pool ist vollstaendig an Volume 1 vergeben; freier Platz entsteht dort und nicht im Pool. Eine Belegungswarnung darf deshalb nur auf das Volume schauen."
+      "description": "Storage Pool 1 zeigt hier nur rund 197 MB frei — das ist KEIN Warnzeichen. Der Pool ist vollstaendig an Volume 1 vergeben; freier Platz entsteht dort und nicht im Pool. Eine Belegungswarnung darf deshalb nur auf das Volume schauen.",
+      "links": [
+        {
+          "title": "Details: Speicher und E/A",
+          "url": "/d/synology-storage/?${__url_time_range}",
+          "targetBlank": false
+        }
+      ]
     },
     {
       "id": 22,
@@ -1778,7 +1792,14 @@
           "refId": "A"
         }
       ],
-      "description": "Die Bezeichner kommen nur lesbar an, weil die Moduldatei den diskID-Lookup als DisplayString deklariert. Mit der Upstream-Vorgabe OctetString stuende hier diskID=\"0x4469736B2031\"."
+      "description": "Die Bezeichner kommen nur lesbar an, weil die Moduldatei den diskID-Lookup als DisplayString deklariert. Mit der Upstream-Vorgabe OctetString stuende hier diskID=\"0x4469736B2031\".",
+      "links": [
+        {
+          "title": "Details: Platten und SMART",
+          "url": "/d/synology-smart/?${__url_time_range}",
+          "targetBlank": false
+        }
+      ]
     },
     {
       "id": 24,
@@ -2109,7 +2130,14 @@
           }
         }
       ],
-      "description": "Restlebensdauer liefern nur die beiden NVMe-Cache-SSDs. Festplatten melden -1 im Sinne von 'nicht anwendbar'; der Filter >= 0 laesst deren Zelle deshalb leer, statt -1 als Messwert auszugeben."
+      "description": "Restlebensdauer liefern nur die beiden NVMe-Cache-SSDs. Festplatten melden -1 im Sinne von 'nicht anwendbar'; der Filter >= 0 laesst deren Zelle deshalb leer, statt -1 als Messwert auszugeben.",
+      "links": [
+        {
+          "title": "Details: Platten und SMART",
+          "url": "/d/synology-smart/?${__url_time_range}",
+          "targetBlank": false
+        }
+      ]
     },
     {
       "id": 25,
@@ -2964,7 +2992,14 @@
           }
         }
       ],
-      "description": "Aushandlung 0 heisst, dass der Treiber keine Geschwindigkeit meldet — typisch fuer virtuelle Schnittstellen und fuer eth0, an dem kein Kabel steckt."
+      "description": "Aushandlung 0 heisst, dass der Treiber keine Geschwindigkeit meldet — typisch fuer virtuelle Schnittstellen und fuer eth0, an dem kein Kabel steckt.",
+      "links": [
+        {
+          "title": "Details: Netzwerk",
+          "url": "/d/synology-net/?${__url_time_range}",
+          "targetBlank": false
+        }
+      ]
     },
     {
       "id": 34,
@@ -3241,6 +3276,42 @@
     }
   ],
   "links": [
+    {
+      "title": "Platten und SMART",
+      "type": "link",
+      "url": "/d/synology-smart/",
+      "tags": [],
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "tooltip": ""
+    },
+    {
+      "title": "Netzwerk",
+      "type": "link",
+      "url": "/d/synology-net/",
+      "tags": [],
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "tooltip": ""
+    },
+    {
+      "title": "Speicher und E/A",
+      "type": "link",
+      "url": "/d/synology-storage/",
+      "tags": [],
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "tooltip": ""
+    },
     {
       "title": "Ceph / Storage",
       "type": "dashboards",

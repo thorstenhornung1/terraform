@@ -1,0 +1,1709 @@
+{
+  "uid": "synology-smart",
+  "title": "Synology DS918+ — Platten und SMART",
+  "description": "Plattenzustand und SMART-Attribute der Synology DS918+ (192.168.2.3). Quelle ist der Scrape-Job snmp-synology. SMART liefert nur die vier SATA-Platten (/dev/sda bis /dev/sdd); die beiden NVMe-Cache-SSDs erscheinen ausschliesslich in den Panels aus der DSM-Plattentabelle. Erzeugt von .gen-synology-detail.py — Aenderungen dort vornehmen, nicht im UI.",
+  "tags": [
+    "synology",
+    "nas",
+    "storage",
+    "snmp",
+    "smart"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Zustand der Platten",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "state-timeline",
+      "title": "Plattenzustand",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "timeFrom": "24h",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 85,
+            "spanNulls": true,
+            "insertNulls": false,
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            }
+          },
+          "mappings": [
+            {
+              "options": {
+                "1": {
+                  "text": "Normal",
+                  "color": "green",
+                  "index": 0
+                },
+                "2": {
+                  "text": "Initialisiert",
+                  "color": "green",
+                  "index": 1
+                },
+                "3": {
+                  "text": "Nicht initialisiert",
+                  "color": "yellow",
+                  "index": 2
+                },
+                "4": {
+                  "text": "Systempartition defekt",
+                  "color": "red",
+                  "index": 3
+                },
+                "5": {
+                  "text": "Abgestuerzt",
+                  "color": "red",
+                  "index": 4
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "never",
+        "rowHeight": 0.7,
+        "alignValue": "center",
+        "perPage": 20,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskStatus{job=\"snmp-synology\"}",
+          "legendFormat": "{{diskID}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "description": "Eine Zeile je Platte ueber 24 h, unabhaengig vom gewaehlten Zeitbereich. Sechs Zeilen: vier SATA-Platten und zwei NVMe-Cache-SSDs. Die Zahlen der Synology-MIB sind auf Klartext abgebildet — 1 und 2 sind beide unauffaellig, erst ab 3 wird es eng. Kommt eine Platte hinzu, waechst das Panel von selbst mit."
+    },
+    {
+      "id": 3,
+      "type": "state-timeline",
+      "title": "Plattengesundheit",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "timeFrom": "24h",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 85,
+            "spanNulls": true,
+            "insertNulls": false,
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            }
+          },
+          "mappings": [
+            {
+              "options": {
+                "1": {
+                  "text": "Normal",
+                  "color": "green",
+                  "index": 0
+                },
+                "2": {
+                  "text": "Warnung",
+                  "color": "yellow",
+                  "index": 1
+                },
+                "3": {
+                  "text": "Kritisch",
+                  "color": "red",
+                  "index": 2
+                },
+                "4": {
+                  "text": "Versagend",
+                  "color": "red",
+                  "index": 3
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "never",
+        "rowHeight": 0.7,
+        "alignValue": "center",
+        "perPage": 20,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskHealthStatus{job=\"snmp-synology\"}",
+          "legendFormat": "{{diskID}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "description": "Bewusst getrennt von der Zustandsanzeige links: diskStatus und diskHealthStatus benutzen dieselben Zahlen fuer verschiedene Dinge — die 2 heisst hier \"Warnung\", dort \"Initialisiert\". In einem gemeinsamen Panel waere jede Wertzuordnung fuer eine der beiden Reihen falsch."
+    },
+    {
+      "id": 4,
+      "type": "row",
+      "title": "Fruehwarnzeichen",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "panels": []
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "SMART-Fehlerzaehler je Platte (Rohwerte)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 14,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(?!Platte$).*$"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "countRows": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": []
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 5)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 197)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 198)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 187)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 188)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 199)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 10)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "G"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "diskSMARTInfoDevName",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "Time 8": true,
+              "Time 9": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true,
+              "job 3": true,
+              "job 4": true,
+              "job 5": true,
+              "job 6": true,
+              "job 7": true,
+              "job 8": true,
+              "job 9": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "instance 3": true,
+              "instance 4": true,
+              "instance 5": true,
+              "instance 6": true,
+              "instance 7": true,
+              "instance 8": true,
+              "instance 9": true,
+              "device": true,
+              "device 1": true,
+              "device 2": true,
+              "device 3": true,
+              "device 4": true,
+              "device 5": true,
+              "device 6": true,
+              "device 7": true,
+              "device 8": true,
+              "device 9": true
+            },
+            "renameByName": {
+              "diskSMARTInfoDevName": "Platte",
+              "Value #A": "Ersetzte Sektoren",
+              "Value #B": "Schwebende Sektoren",
+              "Value #C": "Nicht korrigierbar (offline)",
+              "Value #D": "Gemeldet unkorrigierbar",
+              "Value #E": "Befehls-Zeitueberschreitungen",
+              "Value #F": "UDMA-CRC-Fehler",
+              "Value #G": "Wiederanlaufversuche"
+            }
+          }
+        }
+      ],
+      "description": "Absolute Zaehler seit Werk, keine Raten — eine 16 heisst, dass die Platte in ihrem Leben 16 Sektoren ersetzt hat. Ausschlaggebend ist nicht die Hoehe, sondern ob die Zahl STEIGT; dafuer ist der Verlauf unter \"Fehlerzaehler im Verlauf\" da. Gefiltert wird ueber diskSMARTAttrId, nicht ueber den Attributnamen: die IDs sind genormt, die Namen nicht — /dev/sdb meldet Head_Health (18), wo die anderen End-to-End_Error (184) melden. Nur die vier SATA-Platten liefern SMART; die NVMe-Cache-SSDs fehlen hier zwangslaeufig."
+    },
+    {
+      "id": 6,
+      "type": "bargauge",
+      "title": "Fehlerhafte Sektoren (DSM)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 5,
+        "x": 14,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": 0,
+          "max": 100,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "color",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "sizing": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskBadSector{job=\"snmp-synology\"} >= 0",
+          "legendFormat": "{{diskID}}",
+          "range": false,
+          "instant": true,
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "description": "Der >= 0 Filter ist noetig: die beiden Cache-SSDs melden -1 fuer \"nicht anwendbar\". Ohne Filter stuenden sie als Messwert unter null im Balken. Die Zahlen decken sich mit dem SMART-Attribut Reallocated_Sector_Ct — zwei unabhaengige SNMP-Tabellen, die dasselbe sagen."
+    },
+    {
+      "id": 7,
+      "type": "bargauge",
+      "title": "Restlebensdauer SSD-Cache",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 5,
+        "x": 19,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0,
+          "max": 100,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 20
+              },
+              {
+                "color": "green",
+                "value": 50
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "color",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "sizing": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskRemainLife{job=\"snmp-synology\"} >= 0",
+          "legendFormat": "{{diskID}}",
+          "range": false,
+          "instant": true,
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "description": "Nur die beiden NVMe-Cache-SSDs liefern hier echte Prozentwerte; die vier Festplatten melden -1 fuer \"nicht anwendbar\" und werden vom Filter ausgeschlossen. Ohne ihn erschiene -1 als Messwert."
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Abstand zum Grenzwert",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Normalisierte Werte gegen Grenzwert",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 14,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ID"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 55
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(Aktuell|Schlechtester|Grenzwert)$"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "countRows": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": []
+        },
+        "sortBy": [
+          {
+            "displayName": "Schlechtester",
+            "desc": false
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "(diskSMARTAttrCurrent{job=\"snmp-synology\"} and (diskSMARTAttrThreshold{job=\"snmp-synology\"} > 0)) * on(diskSMARTInfoIndex) group_left(diskSMARTAttrName) diskSMARTAttrName{job=\"snmp-synology\"} * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskSMARTAttrWorst{job=\"snmp-synology\"} != 253",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskSMARTAttrThreshold{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskSMARTAttrId{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "D"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "diskSMARTInfoIndex",
+            "mode": "inner"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "Time 8": true,
+              "Time 9": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true,
+              "job 3": true,
+              "job 4": true,
+              "job 5": true,
+              "job 6": true,
+              "job 7": true,
+              "job 8": true,
+              "job 9": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "instance 3": true,
+              "instance 4": true,
+              "instance 5": true,
+              "instance 6": true,
+              "instance 7": true,
+              "instance 8": true,
+              "instance 9": true,
+              "device": true,
+              "device 1": true,
+              "device 2": true,
+              "device 3": true,
+              "device 4": true,
+              "device 5": true,
+              "device 6": true,
+              "device 7": true,
+              "device 8": true,
+              "device 9": true,
+              "diskSMARTInfoIndex": true,
+              "diskSMARTInfoIndex 1": true,
+              "diskSMARTInfoIndex 2": true,
+              "diskSMARTInfoIndex 3": true,
+              "diskSMARTInfoIndex 4": true,
+              "diskSMARTInfoIndex 5": true,
+              "diskSMARTInfoIndex 6": true,
+              "diskSMARTInfoIndex 7": true,
+              "diskSMARTInfoIndex 8": true,
+              "diskSMARTInfoIndex 9": true
+            },
+            "renameByName": {
+              "diskSMARTInfoDevName": "Platte",
+              "diskSMARTAttrName": "Attribut",
+              "Value #A": "Aktuell",
+              "Value #B": "Schlechtester",
+              "Value #C": "Grenzwert",
+              "Value #D": "ID"
+            }
+          }
+        }
+      ],
+      "description": "Bei SMART ist hoeher besser: Current und Worst sind auf 0..253 normiert, die Platte gilt als verbraucht, sobald Current den Grenzwert unterschreitet. Worst ist der tiefste je erreichte Stand und damit die eigentlich interessante Spalte — danach ist sortiert.\n\nDrei Filter sind noetig, damit die Tabelle nicht luegt: Threshold > 0 wirft die Attribute ohne echten Grenzwert heraus (sonst erschiene Temperature_Celsius, dessen \"Aktuell\" die Temperatur in Grad ist und kein Gesundheitswert — die kaelteste Platte stuende dann oben, als waere sie die kranke). Worst != 253 wirft den SMART-Sentinel fuer \"nie aktualisiert\" heraus. Der inner join laesst nur Zeilen stehen, die beides ueberlebt haben.\n\nEin kleiner Abstand allein ist KEIN Alarm: End-to-End_Error steht bei Current 100 gegen Grenzwert 99 und ist damit kerngesund. Deshalb stehen hier drei Spalten nebeneinander statt einer Abstandszahl."
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Fehlerzaehler im Verlauf",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 14,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": 600000,
+            "pointSize": 4,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 5)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "ersetzte Sektoren {{diskSMARTInfoDevName}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 187)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "unkorrigierbar {{diskSMARTInfoDevName}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 199)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "UDMA-CRC {{diskSMARTInfoDevName}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "C"
+        }
+      ],
+      "description": "Waagerecht ist gut. Jede Stufe nach oben bedeutet einen neuen Fehler und ist ein Grund, die Platte im Auge zu behalten — unabhaengig davon, wie hoch der absolute Wert steht. Bewusst nur die drei aussagekraeftigsten Zaehler, damit die Stufen sichtbar bleiben."
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Betrieb und Verschleiss",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Betriebsdaten je Platte",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Betriebsstunden"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "h"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 43800
+                    },
+                    {
+                      "color": "orange",
+                      "value": 61320
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(?!Platte$|Betriebsstunden$).*$"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "countRows": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": []
+        },
+        "sortBy": [
+          {
+            "displayName": "Betriebsstunden",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 9)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 12)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 4)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 193)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (diskSMARTInfoDevName) ((diskSMARTAttrRaw{job=\"snmp-synology\"} and on(diskSMARTInfoIndex) (diskSMARTAttrId{job=\"snmp-synology\"} == 192)) * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "E"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "diskSMARTInfoDevName",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "Time 8": true,
+              "Time 9": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true,
+              "job 3": true,
+              "job 4": true,
+              "job 5": true,
+              "job 6": true,
+              "job 7": true,
+              "job 8": true,
+              "job 9": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "instance 3": true,
+              "instance 4": true,
+              "instance 5": true,
+              "instance 6": true,
+              "instance 7": true,
+              "instance 8": true,
+              "instance 9": true,
+              "device": true,
+              "device 1": true,
+              "device 2": true,
+              "device 3": true,
+              "device 4": true,
+              "device 5": true,
+              "device 6": true,
+              "device 7": true,
+              "device 8": true,
+              "device 9": true
+            },
+            "renameByName": {
+              "diskSMARTInfoDevName": "Platte",
+              "Value #A": "Betriebsstunden",
+              "Value #B": "Einschaltzyklen",
+              "Value #C": "Start/Stopp",
+              "Value #D": "Kopf-Ladezyklen",
+              "Value #E": "Not-Parkvorgaenge"
+            }
+          }
+        }
+      ],
+      "description": "Betriebsstunden faerben sich ab 5 Jahren (43800 h) gelb und ab 7 Jahren (61320 h) orange — das sind Erfahrungswerte fuer NAS-Platten, keine Herstellerangaben. Kopf-Ladezyklen sind bei Seagate-Platten auf einige Hunderttausend ausgelegt; Not-Parkvorgaenge (Power-Off_Retract) zaehlen ungeplante Abschaltungen und passen zur Zahl der Stromausfaelle."
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Temperatur je Platte",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": 600000,
+            "pointSize": 4,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskTemperature{job=\"snmp-synology\"}",
+          "legendFormat": "{{diskID}}",
+          "range": true,
+          "instant": false,
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "description": "Aus der DSM-Plattentabelle, deshalb alle sechs Geraete — die SMART-Tabelle kennt nur die vier SATA-Platten. Die Werte decken sich mit dem SMART-Attribut Temperature_Celsius (194). Fuer NAS-Festplatten gilt 60 Grad als Obergrenze; die MIB liefert keinen Grenzwert mit."
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Alle SMART-Attribute",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "panels": []
+    },
+    {
+      "id": 15,
+      "type": "table",
+      "title": "SMART-Attribute vollstaendig",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ID"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 55
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "1": {
+                        "text": "in Ordnung",
+                        "color": "green",
+                        "index": 0
+                      }
+                    },
+                    "type": "value"
+                  },
+                  {
+                    "options": {
+                      "match": "null",
+                      "result": {
+                        "text": "-",
+                        "index": 1
+                      }
+                    },
+                    "type": "special"
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 95
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rohwert"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "noValue",
+                "value": "abgeschnitten"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(Aktuell|Schlechtester|Grenzwert)$"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "countRows": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": []
+        },
+        "sortBy": [
+          {
+            "displayName": "Platte",
+            "desc": false
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskSMARTAttrCurrent{job=\"snmp-synology\"} * on(diskSMARTInfoIndex) group_left(diskSMARTAttrName) diskSMARTAttrName{job=\"snmp-synology\"} * on(diskSMARTInfoIndex) group_left(diskSMARTInfoDevName) diskSMARTInfoDevName{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskSMARTAttrWorst{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskSMARTAttrThreshold{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskSMARTAttrRaw{job=\"snmp-synology\"} < 2147483647",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskSMARTAttrId{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "diskSMARTAttrStatus{job=\"snmp-synology\"}",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table",
+          "refId": "F"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "diskSMARTInfoIndex",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "Time 8": true,
+              "Time 9": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true,
+              "job 3": true,
+              "job 4": true,
+              "job 5": true,
+              "job 6": true,
+              "job 7": true,
+              "job 8": true,
+              "job 9": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "instance 3": true,
+              "instance 4": true,
+              "instance 5": true,
+              "instance 6": true,
+              "instance 7": true,
+              "instance 8": true,
+              "instance 9": true,
+              "device": true,
+              "device 1": true,
+              "device 2": true,
+              "device 3": true,
+              "device 4": true,
+              "device 5": true,
+              "device 6": true,
+              "device 7": true,
+              "device 8": true,
+              "device 9": true,
+              "diskSMARTInfoIndex": true,
+              "diskSMARTInfoIndex 1": true,
+              "diskSMARTInfoIndex 2": true,
+              "diskSMARTInfoIndex 3": true,
+              "diskSMARTInfoIndex 4": true,
+              "diskSMARTInfoIndex 5": true,
+              "diskSMARTInfoIndex 6": true,
+              "diskSMARTInfoIndex 7": true,
+              "diskSMARTInfoIndex 8": true,
+              "diskSMARTInfoIndex 9": true
+            },
+            "renameByName": {
+              "diskSMARTInfoDevName": "Platte",
+              "diskSMARTAttrName": "Attribut",
+              "Value #E": "ID",
+              "Value #A": "Aktuell",
+              "Value #B": "Schlechtester",
+              "Value #C": "Grenzwert",
+              "Value #D": "Rohwert",
+              "Value #F": "Status"
+            }
+          }
+        }
+      ],
+      "description": "Alle 92 Attribute der vier SATA-Platten. Zwei Eigenheiten sind hier absichtlich sichtbar gelassen statt versteckt:\n\nRohwert leer, beschriftet mit \"abgeschnitten\": der Wert steht auf 2147483647 und damit auf der Obergrenze von SNMP-Integer32 — der Zaehler ist abgeschnitten, nicht gemessen. Betroffen sind Total_LBAs_Written und Total_LBAs_Read auf allen vier Platten sowie Seek_Error_Rate auf sda und sdc.\n\nSchlechtester 253: SMART-Sentinel fuer \"nie aktualisiert\", typisch bei Head_Flying_Hours und den Total_LBAs-Attributen.\n\nStatus stand bei allen 92 Attributen ueber die gesamte Vorhaltezeit auf 1. Die Spalte ist eine Absicherung, kein Messinstrument — wenn dort je etwas anderes steht, ist das das Signal."
+    }
+  ],
+  "links": [
+    {
+      "title": "Uebersicht NAS",
+      "type": "link",
+      "url": "/d/synology-nas/",
+      "tags": [],
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "tooltip": ""
+    },
+    {
+      "title": "Netzwerk",
+      "type": "link",
+      "url": "/d/synology-net/",
+      "tags": [],
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "tooltip": ""
+    },
+    {
+      "title": "Speicher und E/A",
+      "type": "link",
+      "url": "/d/synology-storage/",
+      "tags": [],
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "tooltip": ""
+    }
+  ]
+}

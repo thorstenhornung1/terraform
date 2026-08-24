@@ -232,6 +232,22 @@ def hide(names):
         "excludeByName": {n: True for n in names}, "renameByName": {}}}
 
 
+def with_link(panel, title, uid):
+    """Haengt einen Verweis auf ein Detail-Dashboard an ein Panel.
+
+    Erreichbar ueber das Panel-Menue und den Titel. ${__url_time_range} gibt
+    den eingestellten Zeitbereich weiter — ohne das landet man im
+    Detail-Dashboard auf dessen Vorgabe und sieht einen anderen Ausschnitt
+    als den, aus dem man gerade kam.
+
+    Die Detail-Dashboards entstehen in .gen-synology-detail.py.
+    """
+    panel["links"] = [{"title": title,
+                       "url": f"/d/{uid}/?${{__url_time_range}}",
+                       "targetBlank": False}]
+    return panel
+
+
 panels = []
 
 # =========================================================== Ueberblick
@@ -373,7 +389,7 @@ Y = 10
 panels.append(row("Speicher", Y))
 Y = 11
 
-panels.append(bargauge(
+panels.append(with_link(bargauge(
     "Belegung je Dateisystem",
     f'100 * hrStorageUsed{{{J},hrStorageDescr=~"/|/volume[0-9]+"}}'
     f' / hrStorageSize{{{J},hrStorageDescr=~"/|/volume[0-9]+"}}',
@@ -386,7 +402,8 @@ panels.append(bargauge(
          "/volume1/@appdata/ContainerManager/all_shares/*. Die tragen alle "
          "identische Zahlen — ungefiltert stuende hier 30-mal derselbe Balken. "
          "Der Regex ist in PromQL vollstaendig verankert, '/volume1' trifft "
-         "deshalb nicht die Unterpfade."))
+         "deshalb nicht die Unterpfade."),
+    "Details: Speicher und E/A", "synology-storage"))
 
 panels.append(ts(
     "/volume1 — belegt und Gesamtgröße", [
@@ -401,7 +418,7 @@ panels.append(ts(
          "multipliziert. Die drei Metriken tragen identische Labels, die "
          "Multiplikation findet ihre Partner also ohne on()/group_left."))
 
-panels.append(table(
+panels.append(with_link(table(
     "Speicherpool und Volume", [
         tgt(f"raidStatus{{{J}}}", instant=True, fmt="table", ref="A"),
         tgt(f"raidTotalSize{{{J}}}", instant=True, fmt="table", ref="B"),
@@ -431,22 +448,24 @@ panels.append(table(
     desc="Storage Pool 1 zeigt hier nur rund 197 MB frei — das ist KEIN "
          "Warnzeichen. Der Pool ist vollstaendig an Volume 1 vergeben; freier "
          "Platz entsteht dort und nicht im Pool. Eine Belegungswarnung darf "
-         "deshalb nur auf das Volume schauen."))
+         "deshalb nur auf das Volume schauen."),
+    "Details: Speicher und E/A", "synology-storage"))
 
 # =========================================================== Platten
 Y = 18
 panels.append(row("Platten", Y))
 Y = 19
 
-panels.append(ts(
+panels.append(with_link(ts(
     "Plattentemperaturen", [tgt(f"diskTemperature{{{J}}}", "{{diskID}}")],
     {"h": 8, "w": 12, "x": 0, "y": Y}, unit="celsius", dec=0, fill=0, minv=20,
     legend_calcs=["min", "mean", "max", "lastNotNull"], width=2,
     desc="Die Bezeichner kommen nur lesbar an, weil die Moduldatei den "
          "diskID-Lookup als DisplayString deklariert. Mit der Upstream-Vorgabe "
-         "OctetString stuende hier diskID=\"0x4469736B2031\"."))
+         "OctetString stuende hier diskID=\"0x4469736B2031\"."),
+    "Details: Platten und SMART", "synology-smart"))
 
-panels.append(table(
+panels.append(with_link(table(
     "Plattenzustand", [
         tgt(f"diskStatus{{{J}}}", instant=True, fmt="table", ref="A"),
         tgt(f"diskHealthStatus{{{J}}}", instant=True, fmt="table", ref="B"),
@@ -492,7 +511,8 @@ panels.append(table(
                  {"color": "green", "value": 50}]}}]}],
     desc="Restlebensdauer liefern nur die beiden NVMe-Cache-SSDs. Festplatten "
          "melden -1 im Sinne von 'nicht anwendbar'; der Filter >= 0 laesst "
-         "deren Zelle deshalb leer, statt -1 als Messwert auszugeben."))
+         "deren Zelle deshalb leer, statt -1 als Messwert auszugeben."),
+    "Details: Platten und SMART", "synology-smart"))
 
 # =========================================================== CPU / Last / RAM
 Y = 27
@@ -580,7 +600,7 @@ panels.append(ts(
          "verwirft bereits der Scrape-Job, weil ihre Namen bei jedem "
          "Neustart wechseln."))
 
-panels.append(table(
+panels.append(with_link(table(
     "Schnittstellen", [
         tgt(f"ifOperStatus{{{J}}}", instant=True, fmt="table", ref="A"),
         tgt(f"ifHighSpeed{{{J}}}", instant=True, fmt="table", ref="B"),
@@ -606,7 +626,8 @@ panels.append(table(
                         {"id": "decimals", "value": 0}]}],
     desc="Aushandlung 0 heisst, dass der Treiber keine Geschwindigkeit meldet — "
          "typisch fuer virtuelle Schnittstellen und fuer eth0, an dem kein "
-         "Kabel steckt."))
+         "Kabel steckt."),
+    "Details: Netzwerk", "synology-net"))
 
 # =========================================================== Geraet
 Y = 50
@@ -640,6 +661,20 @@ dash = {
     "graphTooltip": 1,
     "panels": panels,
     "links": [
+        # Detail-Dashboards zuerst — sie sind der haeufigste naechste Schritt
+        # von hier aus. Erzeugt in .gen-synology-detail.py.
+        {"title": "Platten und SMART", "type": "link", "url": "/d/synology-smart/",
+         "tags": [], "asDropdown": False, "icon": "external link",
+         "includeVars": False, "keepTime": True, "targetBlank": False,
+         "tooltip": ""},
+        {"title": "Netzwerk", "type": "link", "url": "/d/synology-net/",
+         "tags": [], "asDropdown": False, "icon": "external link",
+         "includeVars": False, "keepTime": True, "targetBlank": False,
+         "tooltip": ""},
+        {"title": "Speicher und E/A", "type": "link", "url": "/d/synology-storage/",
+         "tags": [], "asDropdown": False, "icon": "external link",
+         "includeVars": False, "keepTime": True, "targetBlank": False,
+         "tooltip": ""},
         {"title": "Ceph / Storage", "type": "dashboards", "tags": ["ceph"],
          "asDropdown": False, "icon": "external link", "includeVars": False,
          "keepTime": True, "targetBlank": False, "tooltip": "", "url": ""},
