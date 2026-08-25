@@ -247,6 +247,8 @@ services:
         target: /etc/grafana/provisioning/datasources/datasources.yml
       - source: grafana_dashboards_provisioning
         target: /etc/grafana/provisioning/dashboards/dashboards.yml
+      - source: dashboard_home_overview
+        target: /var/lib/grafana/dashboards-leitstand/home-overview.json
       - source: dashboard_home_energy
         target: /var/lib/grafana/dashboards/home-energy-correlation.json
       - source: dashboard_ceph_storage
@@ -750,6 +752,108 @@ services:
       retries: 3
       start_period: 15s
 
+  # ===========================================================================
+  # SWARM-EXPORTER — Zustand des Swarm selbst (2026-08-25)
+  # ===========================================================================
+  # Anlass: Nach der Netzstoerung um 03:01 hing
+  # paperless-stack_paperless-webserver VIER STUNDEN in `Pending` ("no suitable
+  # node ... insufficient resources on 1 node"). Keine Metrik zeigte das —
+  # {__name__=~"swarm_.*|docker_.*|container_.*"} lieferte 0 Serien. Aufgefallen
+  # ist es nur, weil zufaellig eine Blackbox-Probe von aussen 404 sah.
+  #
+  # Kein Docker-Socket! Der Exporter liest ueber den docker-socket-proxy aus
+  # dem traefik-Stack (tecnativa, POST gesperrt, NODES/SERVICES/TASKS
+  # freigeschaltet). Ein gemounteter /var/run/docker.sock waere
+  # Root-Aequivalent auf dem Host — die Begruendung steht ausfuehrlich im Kopf
+  # von swarm-exporter.py.
+  #
+  # KOPPLUNG an traefik_traefik_internal, gleiches Muster und gleicher
+  # Trade-off wie openarchiver_default weiter unten: Wird der traefik-Stack je
+  # per `stack rm` entfernt, schlaegt der monitoring-Deploy mit "network not
+  # found" fehl. Dann diesen Dienst, den Netzblock und den Scrape-Job
+  # swarm-exporter mit entfernen.
+
+  swarm-exporter:
+    # Generisches Basis-Image + Skript als Config: Es gibt nichts zu bauen und
+    # keine Registry im Pfad. Eine Skriptaenderung geht denselben GitOps-Weg
+    # wie ein Dashboard — commit, push, fertig.
+    image: python:3.12-alpine
+    hostname: swarm-exporter
+    command: ["python", "-u", "/app/swarm-exporter.py"]
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      # Dieselbe Version, auf die Traefik im traefik-Stack pinnt. Die Engine
+      # (29.7.2) meldet MinAPIVersion 1.40 — 1.45 liegt komfortabel darueber.
+      DOCKER_API_VERSION: "1.45"
+      LISTEN_PORT: "9975"
+      REFRESH_INTERVAL: "15"
+    configs:
+      - source: swarm_exporter_script
+        target: /app/swarm-exporter.py
+        mode: 0444
+    networks:
+      # BEIDE Netze, aus verschiedenen Gruenden — wie beim cert-controller:
+      #   traefik_traefik_internal — der docker-socket-proxy (internal:true)
+      #   monitoring-network       — damit vmagent scrapen kann
+      - monitoring-network
+      - traefik_traefik_internal
+    deploy:
+      mode: replicated
+      # GENAU EINER. Der Exporter beschreibt den Cluster als Ganzes; zwei
+      # Instanzen lieferten jede Serie doppelt (bei drei Managern dreifach)
+      # und VictoriaMetrics saehe fuer jede Serie zwei Schreiber.
+      replicas: 1
+      placement:
+        max_replicas_per_node: 1
+        constraints:
+          # Der Socket-Proxy laeuft global auf allen dreien; die Einschraenkung
+          # auf Manager ist trotzdem richtig, weil nur ein Manager die
+          # Swarm-API ueberhaupt beantwortet. Heute sind alle drei Nodes
+          # Manager — die Regel bleibt korrekt, wenn das einmal nicht mehr gilt.
+          - node.role == manager
+      # Kein Volume, kein RBD, kein Watchdog: Der Dienst ist vollstaendig
+      # zustandslos (die beiden Zaehler leben im Speicher). Faellt sein Node
+      # aus, plant Swarm ihn von selbst woanders ein — genau deshalb ist er
+      # replicated und nicht an ein Label geheftet.
+      resources:
+        limits:
+          cpus: '0.20'
+          memory: 64M
+        reservations:
+          cpus: '0.02'
+          # GEMESSEN, nicht geraten (2026-08-25, Dauerlauf gegen den echten
+          # Cluster mit 54 Diensten und 83 Tasks):
+          #   cgroup stabil 17,3 MiB, VmHWM 27,6 MB
+          #   742 Serien, 64 KB /metrics, 81 ms je Durchlauf
+          # 32M deckt den Hochwasserstand, 64M das Doppelte. Gleiche
+          # Groessenordnung und dieselbe 32M/64M-Wahl wie beim
+          # docker-socket-proxy im traefik-Stack (dort 3-14 MB, peak 15-18).
+          # Mehr waere an dieser Stelle teuer: docker-infra-3 hatte am
+          # 2026-08-25 zeitweise nur noch 31 MB frei.
+          memory: 32M
+      restart_policy:
+        condition: any
+        delay: 10s
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        # stop-first: Bei start-first braucht Swarm die Reservierung waehrend
+        # des Updates DOPPELT auf demselben Node — auf einem vollen Node
+        # scheitert das Update dann still. Ein Exporter darf 10 s fehlen.
+        order: stop-first
+    healthcheck:
+      # Eigener Healthcheck, weil python:3.12-alpine keinen mitbringt. Prueft
+      # /metrics, nicht nur den Port: Antwortet der Server mit dem
+      # Fehler-Rendering, ist das immer noch HTTP 200 — dafuer gibt es
+      # swarm_exporter_refresh_ok und die Alarmregel darauf.
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:9975/metrics',timeout=5).read(64)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+
 # =============================================================================
 # CONFIGS (Docker Configs — immutable, content-hash naming)
 # =============================================================================
@@ -765,6 +869,14 @@ configs:
   grafana_dashboards_provisioning:
     name: grafana_dashboards_prov_${DASHBOARDS_HASH:-latest}
     file: ./dashboards.yml
+
+  # Ebene 1 — der Leitstand. Erzeugt aus dashboards/.gen-home-overview.py,
+  # NICHT von Hand bearbeiten: Der Provider 'leitstand' laeuft mit
+  # allowUiUpdates:false, eine UI-Aenderung waere nach 30 s wieder weg.
+  # Aenderung: Generator anpassen -> python3 .gen-home-overview.py > home-overview.json
+  dashboard_home_overview:
+    name: dashboard_home_overview_${HOME_OVERVIEW_HASH:-latest}
+    file: ./dashboards/home-overview.json
 
   dashboard_home_energy:
     name: dashboard_home_energy_${HOME_ENERGY_CORRELATION_HASH:-latest}
@@ -871,6 +983,19 @@ configs:
     name: alloy_config_${ALLOY_CONFIG_HASH:-latest}
     file: ./alloy-config.conf
 
+  # ACHTUNG, EINMALIGE VORAUSSETZUNG: Der Hash-Glob in
+  # .github/workflows/deploy-stacks.yml kannte bis 2026-08-25 nur
+  # yml/sh/conf/cfg/json — *.py war NICHT dabei. Ohne die dort ergaenzte Zeile
+  # bliebe der Name bei `..._latest` stehen; Docker-Configs sind unveraenderlich,
+  # also liefe nach der ersten Ausbringung still ewig die erste Fassung des
+  # Skripts weiter. Genau die Falle, die der Kopfkommentar dieses Stacks fuer
+  # .cfg am 2026-04-21 schon einmal beschreibt.
+  # Gegenprobe im Betrieb: swarm_exporter_build_info traegt den SHA256 der
+  # tatsaechlich laufenden Datei.
+  swarm_exporter_script:
+    name: swarm_exporter_script_${SWARM_EXPORTER_HASH:-latest}
+    file: ./swarm-exporter.py
+
 # =============================================================================
 # NETWORKS
 # =============================================================================
@@ -889,6 +1014,14 @@ networks:
   # mit "network not found" fehl — dann diesen Block + den blackbox-tika Job +
   # die tika-down Alert-Regel entfernen.
   openarchiver_default:
+    external: true
+
+  # KOPPLUNG (2026-08-25): swarm-exporter liest die Swarm-API ueber den
+  # docker-socket-proxy, der in diesem Netz haengt. Es ist internal:true —
+  # der Exporter kommt darueber nirgendwo anders hin. Gleicher Trade-off wie
+  # openarchiver_default darueber: Verschwindet der traefik-Stack, scheitert
+  # der monitoring-Deploy mit "network not found".
+  traefik_traefik_internal:
     external: true
 
 # =============================================================================

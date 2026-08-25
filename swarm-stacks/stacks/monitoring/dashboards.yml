@@ -24,3 +24,23 @@ providers:
     options:
       path: /var/lib/grafana/dashboards-infra
       foldersFromFilesStructure: false
+
+  # Ebene 1 (Leitstand) bewusst in einem EIGENEN Ordner und mit eigenem
+  # Provider — die Ebenentrennung aus docs/LEITSTAND-DESIGN-EEMUA-201.md soll
+  # in der Navigation sichtbar sein. Ebene 1 ist genau EIN Dashboard; alles
+  # andere ist Ebene 2 oder tiefer und gehoert nach "Infrastructure".
+  #
+  # allowUiUpdates: false — anders als bei den uebrigen Providern. home-overview
+  # wird aus .gen-home-overview.py erzeugt; eine UI-Bearbeitung waere beim
+  # naechsten Deploy still weg. Die alte Fassung stand mit Version 30 in
+  # grafana.db und existierte nirgends in Git.
+  - name: leitstand
+    orgId: 1
+    folder: "Leitstand"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards-leitstand
+      foldersFromFilesStructure: false

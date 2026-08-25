@@ -487,3 +487,58 @@ scrape_configs:
         target_label: __param_target
       - target_label: __address__
         replacement: blackbox-exporter:9115
+
+  # ---------------------------------------------------------------------------
+  # Swarm-Exporter — Zustand des Swarm selbst (2026-08-25)
+  # ---------------------------------------------------------------------------
+  # Schliesst die Luecke aus dem Vorfall vom 2026-08-25 03:01: Nach der
+  # Netzstoerung hing paperless-stack_paperless-webserver VIER STUNDEN in
+  # `Pending` ("no suitable node ... insufficient resources on 1 node") und
+  # keine einzige Metrik zeigte es — {__name__=~"swarm_.*|docker_.*|
+  # container_.*"} lieferte 0 Serien. Bemerkt wurde es nur, weil zufaellig eine
+  # Blackbox-Probe von aussen 404 sah; ein Dienst ohne oeffentlichen Endpunkt
+  # waere unbemerkt tot geblieben.
+  #
+  # Der Exporter laeuft mit replicas:1 (mehr wuerde jede Serie doppelt
+  # liefern). Der Zugriff geht ueber den docker-socket-proxy des traefik-Stacks
+  # — KEIN gemounteter Docker-Socket, der waere Root-Aequivalent auf dem Host.
+  #
+  # Kein instance-Label ueberschreiben: Der VIP-Name ist stabil, waehrend der
+  # Task bei Node-Ausfall umzieht. Wuerde hier die Node-IP stehen, entstuende
+  # bei jedem Umzug eine neue Zeitreihe.
+  - job_name: swarm-exporter
+    static_configs:
+      - targets:
+          - swarm-exporter:9975
+        labels:
+          instance: swarm-exporter
+
+  # ---------------------------------------------------------------------------
+  # Grafana — Selbstueberwachung des Alarmsystems (2026-08-25)
+  # ---------------------------------------------------------------------------
+  # Vorher lieferte {__name__=~"grafana_.*"} 0 Serien und `up` kannte kein Ziel
+  # grafana. Damit war UNMESSBAR, ob die Alarmregeln ueberhaupt ausgewertet
+  # werden und ob Telegram die Nachrichten annimmt — das Alarmsystem selbst war
+  # der groesste blinde Fleck.
+  #
+  # Interessant sind vor allem:
+  #   grafana_alerting_alerts{state=...}                   Regeln je Zustand
+  #   grafana_alerting_rule_evaluation_failures_total      Regel wird nicht ausgewertet
+  #   grafana_alerting_notification_requests_failed_total  Telegram lehnt ab
+  #   grafana_alerting_notification_latency_seconds        Zustellung schleppt
+  #
+  # KEINE Authentifizierung noetig: /metrics ist in Grafana 12 per Default offen
+  # (metrics.enabled=true, metrics.basic_auth_username leer) und im Stack ist
+  # keine GF_METRICS_*-Variable gesetzt. Nachgeprueft am 2026-08-25 direkt am
+  # laufenden Container: 3675 grafana_*-Zeilen ohne Anmeldung. Der Endpunkt ist
+  # nur ueber monitoring-network erreichbar, nicht ueber Traefik — es wird also
+  # nichts nach aussen geoeffnet. Wird spaeter doch ein Token gesetzt
+  # (GF_METRICS_BASIC_AUTH_USERNAME/-PASSWORD), muss hier ein basic_auth-Block
+  # dazu; das Passwort gehoert dann als Docker-Secret in den Stack, nicht
+  # hierher.
+  - job_name: grafana
+    static_configs:
+      - targets:
+          - grafana:3000
+        labels:
+          instance: grafana

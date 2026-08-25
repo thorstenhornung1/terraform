@@ -1,0 +1,1421 @@
+{
+  "uid": "home-overview",
+  "title": "Home — Infrastructure Overview",
+  "description": "Leitstand (Ebene 1) nach docs/LEITSTAND-DESIGN-EEMUA-201.md. Gegliedert nach der Abhaengigkeitskette: Strom -> Messweg -> Plattform -> Kapazitaet -> Dienste. Farbe bedeutet Abweichung; ein farbloses Bild ist ein gesundes Bild. Generiert aus .gen-home-overview.py — nicht in der UI bearbeiten.",
+  "tags": [
+    "leitstand",
+    "ebene-1",
+    "overview"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 0,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Alle Dashboards",
+      "type": "dashboards",
+      "tags": [],
+      "asDropdown": true,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "tooltip": "",
+      "url": ""
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "alertlist",
+      "title": "Anstehende Alarme",
+      "description": "Nur anstehende Alarme, info ausgeschlossen, nach Schwere sortiert. Zielwert laut Alarmdesign: hoechstens 2 gleichzeitig, 0 laenger als 72 h. Steht hier '+ N weitere', ist nicht die Anlage lauter geworden — dann ist das Alarmsystem ueber seinem Zielwert. Erledigte Alarme: Zeile 'Zuletzt erledigt' unten aufklappen.",
+      "gridPos": {
+        "h": 7,
+        "w": 10,
+        "x": 0,
+        "y": 0
+      },
+      "links": [
+        {
+          "title": "Alle Alarmregeln",
+          "url": "/alerting/list",
+          "targetBlank": false
+        }
+      ],
+      "options": {
+        "alertInstanceLabelFilter": "{severity!=\"info\"}",
+        "alertName": "",
+        "dashboardAlerts": false,
+        "dashboardTitle": "",
+        "datasource": "",
+        "folder": "",
+        "groupBy": [],
+        "groupMode": "default",
+        "maxItems": 5,
+        "sortOrder": 3,
+        "stateFilter": {
+          "firing": true,
+          "pending": false,
+          "noData": false,
+          "normal": false,
+          "error": true,
+          "recovering": false
+        },
+        "viewMode": "list",
+        "showInstances": true,
+        "showOptions": "current",
+        "tags": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Strom",
+      "description": "Eaton Ellipse PRO 650 an der Synology. Die Restlaufzeit gilt fuer die aktuelle Last — bei ~190 W sind es rund 5 Minuten. ACHTUNG: SNMP und Home Assistant lesen denselben NUT-Daemon auf der Synology; sie sind KEINE unabhaengige Bestaetigung. Faellt die Synology aus, sind beide Wege gleichzeitig blind.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 7,
+        "x": 10,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "(max(upsInfoStatus{upsInfoStatus=\"OL\"}) or vector(0))",
+          "legendFormat": "Netz",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "max(upsBatteryRuntimeValue)/60",
+          "legendFormat": "Restlaufzeit",
+          "instant": true,
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "max(upsInfoRealPowerValue)",
+          "legendFormat": "Last",
+          "instant": true,
+          "range": false,
+          "refId": "C"
+        }
+      ],
+      "links": [
+        {
+          "title": "USV — Stromversorgung",
+          "url": "/d/ups-power?${__url_time_range}",
+          "targetBlank": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "BATTERIE",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "Netz",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Vertraue ich dieser Anzeige?",
+      "description": "Diese Kachel misst den Messweg selbst. Ein Leitstand, der seinen eigenen Ausfall nicht anzeigen kann, ist gefaehrlicher als keiner. PVE-Push-Alter > 120 s heisst: die Hypervisor-Panels zeigen Vergangenheit. Verworfene Logzeilen > 5 % heissen: der Log-Kanal ist tot, obwohl up=1 meldet. NICHT abgedeckt: Grafana wird selbst nicht gescrapt, und es gibt keine Swarm-Task-Metriken — ein Dienst, der nicht eingeplant werden kann, ist hier unsichtbar.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 7,
+        "x": 17,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "count(up==0) or vector(0)",
+          "legendFormat": "Ziele down (von 38)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "max(time()-timestamp(cpustat_avg1{object=\"nodes\"}))",
+          "legendFormat": "PVE-Push-Alter",
+          "instant": true,
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "(100*sum(rate(loki_discarded_samples_total[30m]))/sum(rate(loki_distributor_lines_received_total[30m]))) or vector(0)",
+          "legendFormat": "Logzeilen verworfen",
+          "instant": true,
+          "range": false,
+          "refId": "C"
+        }
+      ],
+      "links": [
+        {
+          "title": "VictoriaMetrics",
+          "url": "/d/victoriametrics?${__url_time_range}",
+          "targetBlank": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Ceph",
+      "description": "Health 0=OK, 1=WARN, 2=ERR, -1=Manager nicht erreichbar. Alle Cluster-Metriken kommen ausschliesslich vom AKTIVEN MGR; die beiden Standbys melden up=1, liefern aber nur 7 statt 875 Serien. Deshalb ueberall max()/sum() ueber instance.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "max(ceph_health_status) or vector(-1)",
+          "legendFormat": "Health",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "(3 - sum(ceph_osd_up)) or vector(-1)",
+          "legendFormat": "OSDs down (von 3)",
+          "instant": true,
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "(sum(ceph_pg_total)-sum(ceph_pg_clean)) or vector(-1)",
+          "legendFormat": "PGs nicht clean",
+          "instant": true,
+          "range": false,
+          "refId": "C"
+        }
+      ],
+      "links": [
+        {
+          "title": "Ceph Storage Cluster",
+          "url": "/d/ceph-storage-drill-down?${__url_time_range}",
+          "targetBlank": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "MGR WEG",
+                  "color": "red",
+                  "index": 0
+                },
+                "0": {
+                  "text": "OK",
+                  "index": 1
+                },
+                "1": {
+                  "text": "WARN",
+                  "color": "orange",
+                  "index": 2
+                },
+                "2": {
+                  "text": "ERR",
+                  "color": "red",
+                  "index": 3
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 5,
+      "type": "bargauge",
+      "title": "Hypervisoren — RAM",
+      "description": "Belegter Arbeitsspeicher der drei Proxmox-Hosts. Quelle ist der node-exporter auf dem Blech (hat up{} und ist damit ausfallerkennbar), NICHT der pvestatd-Push. pve01 und pve03 haben nur 15 GB und sind dauerhaft hoch belegt — das ist der Normalzustand, nicht der Alarm.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100*(1-node_memory_MemAvailable_bytes{job=\"pve-node-exporter\"}/node_memory_MemTotal_bytes{job=\"pve-node-exporter\"})",
+          "legendFormat": "{{host}}",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "links": [
+        {
+          "title": "Proxmox Hypervisoren",
+          "url": "/d/pve-hosts?${__url_time_range}",
+          "targetBlank": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 88
+              },
+              {
+                "color": "red",
+                "value": 93
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "sizing": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "type": "bargauge",
+      "title": "Swarm-Nodes — RAM",
+      "description": "Ist-Belegung der drei Swarm-VMs. Wichtig: Der Swarm-SCHEDULER sieht diesen Wert NICHT — er plant ausschliesslich gegen die Summe der reservations und gegen eine Node-Kapazitaet, die beim Start des Docker-Daemons eingefroren wurde. Ein Node kann hier harmlos aussehen und trotzdem keinen neuen Dienst mehr aufnehmen.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100*(1-node_memory_MemAvailable_bytes{job=\"node-exporter\",instance=~\"docker-infra-.*\"}/node_memory_MemTotal_bytes{job=\"node-exporter\",instance=~\"docker-infra-.*\"})",
+          "legendFormat": "{{instance}}",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "links": [
+        {
+          "title": "Node Exporter Full",
+          "url": "/d/rYdddlPWk?${__url_time_range}",
+          "targetBlank": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 85
+              },
+              {
+                "color": "red",
+                "value": 92
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "sizing": "auto"
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Datenbank",
+      "description": "Eine einzelne PostgreSQL-VM (4600), kein Patroni-Cluster mehr. Es gibt KEINE Replikation — pg_replication_lag_seconds liefert auf einem Primary strukturell immer 0 und ist deshalb hier bewusst nicht dargestellt.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "min_over_time(pg_up{instance=\"postgres-prod\"}[3m])",
+          "legendFormat": "postgres-prod",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100*sum(pg_stat_activity_count)/max(pg_settings_max_connections)",
+          "legendFormat": "Verbindungen (von 100)",
+          "instant": true,
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(pg_stat_database_xact_commit[5m]))",
+          "legendFormat": "Transaktionen/s",
+          "instant": true,
+          "range": false,
+          "refId": "C"
+        }
+      ],
+      "links": [
+        {
+          "title": "PostgreSQL — postgres-prod",
+          "url": "/d/postgres-prod-singlevm?${__url_time_range}",
+          "targetBlank": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "laeuft",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 8,
+      "type": "bargauge",
+      "title": "Kapazitaet — wo laeuft es zuerst voll?",
+      "description": "NICHT enthalten: 'Storage Pool 1' der Synology steht bei 99,999 % — das ist der NORMALZUSTAND (vollstaendig an das Volume vergeben) und kein Alarm. Ebenso weggelassen: der Frigate-Aufnahmespeicher, weil er dieselbe Platte misst wie Synology Volume 1. pbs_used erscheint unter zwei Datastore-Namen mit identischen Werten — deshalb max(), nicht sum().",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 10,
+        "x": 0,
+        "y": 12
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100*(1-raidFreeSize{raidName=\"Volume 1\"}/raidTotalSize{raidName=\"Volume 1\"})",
+          "legendFormat": "Synology Volume 1",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100*max(pbs_used)/max(pbs_size)",
+          "legendFormat": "PBS Datastore",
+          "instant": true,
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "max(100*(1-node_filesystem_avail_bytes{mountpoint=\"/srv/data\"}/node_filesystem_size_bytes{mountpoint=\"/srv/data\"}))",
+          "legendFormat": "/srv/data (voller Node)",
+          "instant": true,
+          "range": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100*max(ceph_cluster_total_used_bytes)/max(ceph_cluster_total_bytes)",
+          "legendFormat": "Ceph Cluster",
+          "instant": true,
+          "range": false,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "max(100*(1-node_filesystem_avail_bytes{mountpoint=\"/mnt/cephfs\"}/node_filesystem_size_bytes{mountpoint=\"/mnt/cephfs\"}))",
+          "legendFormat": "CephFS",
+          "instant": true,
+          "range": false,
+          "refId": "E"
+        }
+      ],
+      "links": [
+        {
+          "title": "Synology DS918+",
+          "url": "/d/synology-nas?${__url_time_range}",
+          "targetBlank": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "sizing": "auto"
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Dienste — von aussen geprueft",
+      "description": "Blackbox-Proben auf die oeffentlichen Endpunkte. HTTP 302 und 401 sind NORMAL (Weiterleitung auf Login bzw. Authentik) — nur probe_success zaehlt. Diese Zeile ist bei Anwendungen ohne HTTP-Endpunkt blind: am 2026-08-25 war Paperless vier Stunden weg, und nur diese Probe hat es bemerkt.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 14,
+        "x": 10,
+        "y": 12
+      },
+      "links": [
+        {
+          "title": "VictoriaMetrics",
+          "url": "/d/victoriametrics?${__url_time_range}",
+          "targetBlank": false
+        }
+      ],
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "expr": "probe_success{job=~\"blackbox-.*\"}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "expr": "probe_http_status_code{job=~\"blackbox-.*\"}",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "expr": "(probe_ssl_earliest_cert_expiry-time())/86400",
+          "refId": "C"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "instance",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true,
+              "job 3": true,
+              "__name__": true,
+              "__name__ 1": true,
+              "__name__ 2": true,
+              "__name__ 3": true
+            },
+            "renameByName": {
+              "instance": "Ziel",
+              "Value #A": "Zustand",
+              "Value #B": "HTTP",
+              "Value #C": "Zert. Tage"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Zustand"
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Zustand"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "AUSGEFALLEN",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "erreichbar",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Zert. Tage"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "unit",
+                "value": "d"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 7
+                    },
+                    {
+                      "color": "text",
+                      "value": 21
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "HTTP"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "Zustand",
+            "desc": false
+          }
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Sicherung",
+      "description": "Alter der juengsten Sicherung ueber alle LEBENDEN Gaeste. Der Join gegen system_uptime blendet 12 Karteileichen aus — Eintraege geloeschter Gaeste, bis zu 241 Tage alt, die sich nie wieder aendern. OFFEN: pbs_snapshot_vm_last_verify steht bei fast allen lebenden Gaesten auf 0 — die aktuellen Sicherungen sind unverifiziert.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 18
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "max((time()-pbs_snapshot_vm_last_timestamp) and on(vm_id) label_replace(system_uptime{object=~\"qemu|lxc\"},\"vm_id\",\"$1\",\"vmid\",\"(.+)\"))/3600",
+          "legendFormat": "aeltestes Backup (Ziel < 48 h)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100*max(pbs_used)/max(pbs_size)",
+          "legendFormat": "PBS belegt",
+          "instant": true,
+          "range": false,
+          "refId": "B"
+        }
+      ],
+      "links": [
+        {
+          "title": "Proxmox Backup Server",
+          "url": "/d/pbs-overview?${__url_time_range}",
+          "targetBlank": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 48
+              },
+              {
+                "color": "red",
+                "value": 72
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Kameras",
+      "description": "Die Inferenzzeit ist der EINZIGE verlaessliche Hinweis auf einen haengenden Detektor. detection_fps ist bewegungsabhaengig und nachts legitim 0 — daraus laesst sich kein Defekt ableiten.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 18
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "max(frigate_detector_inference_speed_seconds)*1000",
+          "legendFormat": "Inferenzzeit (normal ~28 ms)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "count(frigate_camera_fps > 0) or vector(0)",
+          "legendFormat": "Kameras liefern Bild (von 3)",
+          "instant": true,
+          "range": false,
+          "refId": "B"
+        }
+      ],
+      "links": [
+        {
+          "title": "Frigate NVR Detail",
+          "url": "/d/frigate-detail?${__url_time_range}",
+          "targetBlank": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 60
+              },
+              {
+                "color": "red",
+                "value": 120
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Netz",
+      "description": "Die PoE-Metrik existiert nur fuer Ports MIT Last — ein abgeschalteter Port verschwindet, statt auf 0 zu fallen. Die Summe sinkt also, wenn Geraete ausfallen. Faellt 'DNS-Resolver erreichbar' auf 0, erreicht die zugehoerige Telegram-Meldung ihr Ziel womoeglich nicht mehr.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 18
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "count(unpoller_device_uptime_seconds==0) or vector(0)",
+          "legendFormat": "UniFi-Geraete offline (von 15)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "sum(unpoller_device_port_poe_watts) or vector(0)",
+          "legendFormat": "PoE-Leistung",
+          "instant": true,
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "count(max_over_time(probe_success{job=\"blackbox-dns\"}[3m]) == 1) or vector(0)",
+          "legendFormat": "DNS-Resolver erreichbar (von 3)",
+          "instant": true,
+          "range": false,
+          "refId": "C"
+        }
+      ],
+      "links": [
+        {
+          "title": "UniFi — PoE und Netzwerkgeraete",
+          "url": "/d/unifi-poe?${__url_time_range}",
+          "targetBlank": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Zuletzt erledigt — aufklappen",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "collapsed": true,
+      "panels": [
+        {
+          "id": 13,
+          "type": "alertlist",
+          "title": "Erledigte Alarme",
+          "description": "Alarme, die von selbst zurueckgegangen sind. Absichtlich eingeklappt: Ein erledigter Alarm verlangt keine Handlung und wuerde die Handlungsliste oben verwaessern. Trotzdem hier, weil er eine Frage beantwortet, die die Alarmliste nicht beantwortet — war das schon einmal da? Faustregel aus dem Alarmdesign: Was regelmaessig binnen 8 h ohne Eingriff verschwindet, ist Statistik und kein Alarm.",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 24
+          },
+          "links": [],
+          "options": {
+            "alertInstanceLabelFilter": "",
+            "alertName": "",
+            "dashboardAlerts": false,
+            "dashboardTitle": "",
+            "datasource": "",
+            "folder": "",
+            "groupBy": [],
+            "groupMode": "default",
+            "maxItems": 20,
+            "sortOrder": 3,
+            "stateFilter": {
+              "firing": false,
+              "pending": false,
+              "noData": false,
+              "normal": true,
+              "error": false,
+              "recovering": true
+            },
+            "viewMode": "list",
+            "showInstances": true,
+            "showOptions": "current",
+            "tags": []
+          }
+        }
+      ]
+    }
+  ]
+}

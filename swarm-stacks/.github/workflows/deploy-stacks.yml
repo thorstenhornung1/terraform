@@ -280,7 +280,14 @@ jobs:
               # without docker stack rm (zero-downtime).
               ENV_FILE=$(mktemp)
               shopt -s globstar nullglob 2>/dev/null || true
-              for cfg_file in "$stack_dir"/*.yml "$stack_dir"/*.sh "$stack_dir"/*.conf "$stack_dir"/*.cfg "$stack_dir"/*.json "$stack_dir"/**/*.json "$stack_dir"/**/*.yml "$stack_dir"/**/*.sh "$stack_dir"/**/*.conf "$stack_dir"/**/*.cfg; do
+              # *.py NUR auf oberster Ebene, bewusst ohne **-Variante:
+              # stacks/apps/openarchiver/reindex-pr/ enthaelt einen
+              # node_modules-Baum mit hunderten Python-Dateien (node-gyp), die
+              # sonst alle gehasht wuerden. Auf oberster Ebene stehen nur
+              # stacks/monitoring/swarm-exporter.py und die lightrag-Helfer;
+              # die Generatoren (.gen-*.py) sind Dotfiles und werden von *
+              # ohnehin nicht erfasst.
+              for cfg_file in "$stack_dir"/*.yml "$stack_dir"/*.sh "$stack_dir"/*.conf "$stack_dir"/*.cfg "$stack_dir"/*.json "$stack_dir"/*.py "$stack_dir"/**/*.json "$stack_dir"/**/*.yml "$stack_dir"/**/*.sh "$stack_dir"/**/*.conf "$stack_dir"/**/*.cfg; do
                 [ -f "$cfg_file" ] || continue
                 cfg_basename=$(basename "$cfg_file")
                 # Skip the stack compose file itself
