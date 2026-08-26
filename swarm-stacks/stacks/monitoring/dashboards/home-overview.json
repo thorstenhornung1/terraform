@@ -714,7 +714,7 @@
       "id": 8,
       "type": "bargauge",
       "title": "Kapazitaet — wo laeuft es zuerst voll?",
-      "description": "NICHT enthalten: 'Storage Pool 1' der Synology steht bei 99,999 % — das ist der NORMALZUSTAND (vollstaendig an das Volume vergeben) und kein Alarm. Ebenso weggelassen: der Frigate-Aufnahmespeicher, weil er dieselbe Platte misst wie Synology Volume 1. pbs_used erscheint unter zwei Datastore-Namen mit identischen Werten — deshalb max(), nicht sum().",
+      "description": "Der SSD-Verschleiss steht bewusst hier und nicht im Alarmkanal: Er bewegt sich um wenige Prozent im Monat, und ein taeglicher Alarm darueber traegt keine neue Information. NICHT enthalten: 'Storage Pool 1' der Synology steht bei 99,999 % — das ist der NORMALZUSTAND (vollstaendig an das Volume vergeben) und kein Alarm. Ebenso weggelassen: der Frigate-Aufnahmespeicher, weil er dieselbe Platte misst wie Synology Volume 1. pbs_used erscheint unter zwei Datastore-Namen mit identischen Werten — deshalb max(), nicht sum().",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
@@ -785,6 +785,18 @@
           "instant": true,
           "range": false,
           "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "100 - min(diskRemainLife{job=\"snmp-synology\"} >= 0)",
+          "legendFormat": "SSD-Verschleiss (Cache)",
+          "instant": true,
+          "range": false,
+          "refId": "F"
         }
       ],
       "links": [

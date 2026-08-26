@@ -3370,13 +3370,39 @@ groups:
       # --- Restlebensdauer -----------------------------------------------------
       # Geht per E-MAIL, nicht Telegram: Eine sinkende Restlebensdauer verlangt
       # keine Handlung in der naechsten Stunde, sondern eine Beschaffung in den
-      # naechsten Wochen. Telegram ist fuer Dinge da, die jetzt jemanden erreichen
-      # muessen.
+      # naechsten Wochen.
+      #
+      # SCHWELLE 15 STATT 30 (2026-08-26)
+      #   Mit 30 % stand die Regel bei 28 % Ist-Wert dauerhaft an und erzeugte
+      #   ueber die E-Mail-Route eine Meldung pro TAG — fuer einen Zustand, der
+      #   sich um wenige Prozent pro MONAT bewegt. Das ist ein chronischer Alarm
+      #   im Sinne von docs/ALARM-DESIGN-EEMUA-191.md Abschnitt 4.3: keine
+      #   Stoerung mehr, sondern eine akzeptierte Abweichung. Solche gehoeren
+      #   aus dem Alarmkanal heraus und ins Dashboard.
+      #
+      #   Bei 28 % ist nichts zu tun. Bei 15 % lohnt die Beschaffung, und genau
+      #   dann soll die Meldung kommen — einmal, nicht taeglich. Der Verlauf
+      #   davor steht auf dem Leitstand (Panel "Daten"), wo er hingehoert:
+      #   sichtbar, wenn man hinsieht, ohne jemanden zu unterbrechen.
+      #
+      #   Die Wiederholung steuert die E-Mail-Route in notification-policies.yml
+      #   (repeat_interval 720h = monatlich). Zeitskala des Alarms und Zeitskala
+      #   des Zustands muessen zusammenpassen.
+      #
+      # VERGLEICH IN DER BEDINGUNG, NICHT IN PromQL (2026-08-26)
+      #   Vorher stand `< 30` im Ausdruck. Damit lieferte die Query im
+      #   Gesundzustand NICHTS — "gesund" und "SNMP tot" waren ununterscheidbar
+      #   (Abschnitt 6.1). Jetzt liefert sie immer den Ist-Wert, der Vergleich
+      #   sitzt im threshold-Schritt.
+      #
+      #   noDataState bleibt bewusst OK: Ein Ausfall des SNMP-Exporters ist
+      #   bereits durch `synology-snmp-down` (critical) abgedeckt. Hier
+      #   zusaetzlich zu alarmieren waere das Duplikat-Muster aus Abschnitt 6.4.
       #
       # Der Filter >= 0 ist zwingend: Festplatten melden -1 fuer "nicht anwendbar".
       # Ohne ihn feuerte die Regel dauerhaft fuer alle vier HDDs.
   - uid: synology-disk-wearout
-    title: Synology SSD-Restlebensdauer sinkt
+    title: Synology SSD-Restlebensdauer niedrig
     condition: C
     data:
     - refId: A
@@ -3385,7 +3411,7 @@ groups:
         to: 0
       datasourceUid: victoriametrics
       model:
-        expr: min by (diskID) (diskRemainLife{job="snmp-synology"} >= 0) < 30
+        expr: min by (diskID) (diskRemainLife{job="snmp-synology"} >= 0)
         instant: true
         refId: A
     - refId: C
@@ -3398,11 +3424,13 @@ groups:
         expression: A
         conditions:
         - evaluator:
-            type: gt
+            type: lt
             params:
-            - 0
+            - 15
         refId: C
-    for: 1h
+    # 6h statt 1h: Bei einem Zustand, der sich ueber Monate bewegt, ist eine
+    # Stunde Bestaetigungszeit Theater. 6h filtert SNMP-Ausreisser zuverlaessig.
+    for: 6h
     noDataState: OK
     execErrState: OK
     labels:
@@ -3410,7 +3438,7 @@ groups:
       notify: email
     annotations:
       summary: "Synology {{ $labels.diskID }} hat noch {{ $value }} Prozent Restlebensdauer"
-      description: "Betrifft die Cache-SSDs; Festplatten melden -1 und sind hier ausgenommen. Unter 30 Prozent lohnt es, den Ersatz einzuplanen — unter 10 wird es dringend. Wichtig vorher zu klaeren: Ist der Cache als Read-only oder Read-Write eingerichtet? Bei Read-Write kann ein Ausfall Daten kosten, die noch nicht auf die Platten geschrieben sind; bei Read-only ist er folgenlos."
+      description: "Betrifft die Cache-SSDs; Festplatten melden -1 und sind hier ausgenommen. Ab hier lohnt die Beschaffung — die Meldung wiederholt sich monatlich, nicht taeglich. Wichtig vorher zu klaeren: Ist der Cache als Read-only oder Read-Write eingerichtet? Bei Read-Write kann ein Ausfall Daten kosten, die noch nicht auf die Platten geschrieben sind; bei Read-only ist er folgenlos. Der Verlauf steht auf dem Leitstand im Panel \"Daten\"."
 
       # --- Volume-Belegung -----------------------------------------------------
       # ABSOLUT statt prozentual. Bei 17,45 TiB waeren 85 Prozent noch 2,6 TB frei

@@ -33,6 +33,39 @@ policies:
       # (2026-06-13: repeat 1h→4h, group_interval 2m→5m — echte Notlagen kommen
       # weiter sofort, aber ein dauer-feuernder critical wiederholt nicht im
       # Minutentakt). Kein Mute, behält Entwarnung.
+      # E-Mail statt Telegram: fuer Befunde, die wichtig sind, aber keine
+      # sofortige Handlung verlangen — etwa eine Cache-SSD, deren Restlebensdauer
+      # sinkt. Telegram ist fuer Dinge da, die JETZT jemanden erreichen muessen;
+      # alles andere verrauscht den Kanal und macht ihn mit der Zeit unwirksam.
+      #
+      # Angesteuert ueber das Label notify=email an der Regel, nicht ueber die
+      # severity — so bleibt die Dringlichkeit unabhaengig vom Zustellweg
+      # beschreibbar. Steht VOR den severity-Routen, weil continue:false gilt und
+      # die erste passende Route gewinnt.
+      - receiver: email-homelab
+        matchers:
+          - notify = email
+        group_by:
+          - grafana_folder
+        group_wait: 5m
+        group_interval: 1h
+        # MONATLICH, nicht taeglich (2026-08-26).
+        #
+        # Hier landen Befunde, die sich auf einer Zeitskala von WOCHEN bis
+        # MONATEN bewegen — der erste ist die Restlebensdauer der Cache-SSD.
+        # Mit 24h erzeugte ein Wert, der sich um wenige Prozent im Monat
+        # aendert, rund 30 identische Mails, in denen nie etwas Neues stand.
+        # Das ist genau die Alarm-Ermuedung, gegen die die Route gebaut wurde:
+        # Wer eine Mail taeglich unveraendert bekommt, filtert sie weg — und
+        # uebersieht dann die eine, in der sich der Wert bewegt hat.
+        #
+        # Die Regel gibt die Zeitskala vor, nicht der Zustellweg: Ein Alarm,
+        # dessen Ursache Monate braucht, wird monatlich erinnert. Braucht ein
+        # kuenftiger E-Mail-Befund eine kuerzere Wiederholung, gehoert er nicht
+        # hierher, sondern bekommt eine eigene Route.
+        repeat_interval: 720h
+        continue: false
+      
       - receiver: telegram-critical
         matchers:
           - severity = critical

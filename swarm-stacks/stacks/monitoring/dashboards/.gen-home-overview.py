@@ -290,10 +290,22 @@ P.append(bargauge(
             "Ceph Cluster", "D"),
         tgt('max(100*(1-node_filesystem_avail_bytes{mountpoint="/mnt/cephfs"}'
             '/node_filesystem_size_bytes{mountpoint="/mnt/cephfs"}))', "CephFS", "E"),
+        # Als VERSCHLEISS statt Restlebensdauer, damit die Skala mit den
+        # uebrigen Balken zusammenpasst: groesser = naeher am Ende. 28 %
+        # Restlebensdauer sind 72 % verschlissen.
+        # Steht hier, weil es genau NICHT in den Alarmkanal gehoert: Der Wert
+        # bewegt sich um wenige Prozent im Monat. Der Alarm greift erst bei
+        # 15 % Rest (= 85 % hier) und erinnert dann monatlich; alles davor ist
+        # Beobachtung, keine Handlung.
+        tgt('100 - min(diskRemainLife{job="snmp-synology"} >= 0)',
+            "SSD-Verschleiss (Cache)", "F"),
     ],
     {"h": 6, "w": 10, "x": 0, "y": 12},
     thr=steps(warn=80, crit=90),
-    desc=("NICHT enthalten: 'Storage Pool 1' der Synology steht bei 99,999 % — "
+    desc=("Der SSD-Verschleiss steht bewusst hier und nicht im Alarmkanal: Er "
+          "bewegt sich um wenige Prozent im Monat, und ein taeglicher Alarm "
+          "darueber traegt keine neue Information. "
+          "NICHT enthalten: 'Storage Pool 1' der Synology steht bei 99,999 % — "
           "das ist der NORMALZUSTAND (vollstaendig an das Volume vergeben) und "
           "kein Alarm. Ebenso weggelassen: der Frigate-Aufnahmespeicher, weil "
           "er dieselbe Platte misst wie Synology Volume 1. "
