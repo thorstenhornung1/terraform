@@ -1,0 +1,213 @@
+---
+# =============================================================================
+# Logweiterleitung der Proxmox-Hypervisoren nach Loki (pve01-03)
+# =============================================================================
+# Anlass: Beim Aufräumen der Loki-Ingestion am 2026-08-25 fiel auf, dass die
+# drei Hypervisoren als einzige Schicht ÜBERHAUPT NICHT nach Loki loggen.
+# `systemctl is-enabled rsyslog` meldet auf allen dreien `not-found` — rsyslog
+# ist nicht deaktiviert, es ist gar nicht installiert. Proxmox VE nutzt seit
+# Version 8 ausschliesslich journald.
+#
+# Damit fehlt genau die Schicht, in der ein Stromausfall, ein OOM-Kill oder ein
+# Ceph-OSD-Abbruch zuerst sichtbar wird. Der node-exporter aus pve-monitoring.yml
+# liefert Metriken, aber keine Meldungen: `node_vmstat_oom_kill` sagt DASS ein
+# Prozess starb, nicht WELCHER und woran.
+#
+# WARUM `.notice` UND NICHT `*.*`
+#   Der Projektstandard fuer LXCs (siehe .claude/CLAUDE.md) ist `*.*`. Fuer die
+#   Hypervisoren waere das falsch. Gemessen am 2026-08-26 ueber eine Stunde:
+#
+#     Host    alles    ab notice   Anteil
+#     pve01    8905      605        6 %
+#     pve03   10634      529        4 %
+#
+#   87 % des Volumens sind SSH-Session-Rauschen: systemd (session opened/closed),
+#   sshd-session und systemd-logind. Auf pve03 sind das ~40 Sessions je Minute,
+#   erzeugt von Watchdogs, `qm guest exec`, Monitoring-Skripten und Ansible
+#   selbst. Diese Meldungen stehen auf severity `info` und tragen keinen
+#   Diagnosewert — sie bleiben lokal im Journal, wo sie fuer eine Forensik
+#   weiterhin greifbar sind.
+#
+#   Mit `*.*` wuerde die Aufnahme von Loki von 7,05 auf ~14,9 Zeilen/s steigen
+#   (+111 %) — fuer Inhalt, den niemand liest. Mit `.notice` sind es ueber alle
+#   drei Hosts rund 0,46 Zeilen/s, also +6,5 %. Alles ab notice aufwaerts kommt
+#   durch: notice, warning, err, crit, alert, emerg.
+#
+#   Wer doch einmal alles braucht, aendert `pve_log_severity` auf `*` — die
+#   Regel unten ist bewusst ueber eine Variable gebaut.
+#
+# WAS DAS AN PLATTE KOSTET
+#   rsyslog schreibt zusaetzlich lokal nach /var/log/syslog. Bei ~10k Zeilen/h
+#   sind das rund 250 MB je Woche, die Debians logrotate nach vier Generationen
+#   abraeumt. Auf den Hosts sind 39-46 GB frei; journald belegt heute schon 4 GB.
+#   Bewusst NICHT abgeschaltet: Wer den Hypervisor im Notfall ohne Netz
+#   debuggt, ist froh ueber eine flache Datei neben dem Journal.
+#
+# ZEITSTEMPEL — DER FALLSTRICK, DER LOKI EINEN TAG LANG BLIND MACHTE
+#   rsyslog sendet RFC3164, und RFC3164 traegt KEINE Zeitzone. Alloy las den
+#   Zeitstempel bis zum 2026-08-25 als UTC und verwarf jede Zeile eines
+#   CEST-Hosts als "too_far_in_future" — 97,7 % aller Zeilen, bei up=1 und
+#   normal laufendem Empfangszaehler. Behoben mit
+#   `use_incoming_timestamp = false` in stacks/monitoring/alloy-config.conf.
+#   Diese Hosts haengen also an derselben Voraussetzung; ohne den Fix kaeme
+#   von hier nichts an.
+#
+# AUFRUF
+#   ansible-playbook -i inventory.ini pve-logging.yml
+#
+# PRUEFEN OHNE RISIKO
+#   ansible-playbook -i inventory.ini pve-logging.yml --check --diff
+#
+# GEGENSTUECK IM REPO
+#   stacks/monitoring/alloy-config.conf   -> Syslog-Empfaenger auf :1514
+#   stacks/monitoring/monitoring-stack.yml -> Dienst alloy (ingress 1514)
+# =============================================================================
+
+- name: Logweiterleitung der Proxmox-Hypervisoren nach Loki
+  hosts: pve_nodes
+  become: yes
+  gather_facts: yes
+
+  vars:
+    # Ziel ist der DNS-Name, nicht eine Node-IP: er loest per Round-Robin auf
+    # alle drei Swarm-Nodes auf, und Alloy publiziert :1514 im Ingress-Modus.
+    # Damit erreicht jeder Node den Listener, egal wo der Dienst gerade laeuft.
+    pve_loki_host: loki.hornung-bn.de
+    pve_loki_port: 1514
+    # `notice` = severity <= 5. Siehe Kopfkommentar. Auf `*` setzen, wenn
+    # wirklich alles gebraucht wird.
+    pve_log_severity: notice
+
+  tasks:
+
+    - name: rsyslog installieren
+      # Der APT-Proxy (apt-cacher.hornung-bn.de:3142) ist auf allen drei Hosts
+      # bereits konfiguriert, das Paket kommt also aus dem Cache.
+      ansible.builtin.apt:
+        name: rsyslog
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+      notify: rsyslog neu starten
+
+    - name: Weiterleitungsregel nach Loki
+      ansible.builtin.copy:
+        dest: /etc/rsyslog.d/60-loki.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Verwaltet von ansible/pve-logging.yml — NICHT von Hand aendern.
+          #
+          # Nur ab `{{ pve_log_severity }}`: 87 % des Volumens auf diesen Hosts
+          # sind SSH-Session-Meldungen auf severity info. Die bleiben im
+          # lokalen Journal (journalctl), wo sie fuer eine Forensik greifbar
+          # sind, ohne Loki zu fluten. Begruendung und Messwerte stehen im
+          # Kopf von ansible/pve-logging.yml.
+          #
+          # ACHTUNG — die naheliegende Schreibweise ist FALSCH:
+          #
+          #     *.notice  @@loki.hornung-bn.de:1514      # TCP
+          #     *.notice  @loki.hornung-bn.de:1514       # UDP
+          #
+          # Das sind ZWEI Aktionen, die rsyslog BEIDE ausfuehrt — jede Zeile
+          # kommt doppelt an. Nachgemessen am 2026-08-26: die Pruefzeile jedes
+          # Hosts erschien zweimal in Loki. Ein echter Rueckfall braucht
+          # `action.execOnlyWhenPreviousIsSuspended="on"`; die UDP-Aktion
+          # laeuft dann nur, wenn die TCP-Aktion als suspended gilt.
+          #
+          # (Dieselbe doppelte Schreibweise steht im LXC-Standardprovisioning
+          # in .claude/CLAUDE.md — dort gilt der Befund genauso.)
+
+          # Primaerer Weg: TCP mit Platten-Queue. Faellt Loki oder das Netz aus,
+          # puffert rsyslog bis 64 MB und liefert danach nach, statt still zu
+          # verwerfen — genau dann, wenn die Meldungen am interessantesten sind.
+          *.{{ pve_log_severity }}  action(
+              type="omfwd"
+              target="{{ pve_loki_host }}"
+              port="{{ pve_loki_port }}"
+              protocol="tcp"
+              queue.type="linkedlist"
+              queue.filename="loki_fwd"
+              queue.maxdiskspace="64m"
+              queue.saveonshutdown="on"
+              action.resumeRetryCount="-1"
+              name="loki_tcp"
+          )
+
+          # Rueckfallebene: laeuft NUR, wenn die TCP-Aktion suspendiert ist.
+          # Ein Verlust einzelner Zeilen ist besser als gar keine.
+          *.{{ pve_log_severity }}  action(
+              type="omfwd"
+              target="{{ pve_loki_host }}"
+              port="{{ pve_loki_port }}"
+              protocol="udp"
+              action.execOnlyWhenPreviousIsSuspended="on"
+              name="loki_udp_fallback"
+          )
+      notify: rsyslog neu starten
+
+    - name: rsyslog aktivieren und starten
+      ansible.builtin.systemd:
+        name: rsyslog
+        enabled: yes
+        state: started
+      # Im Check-Modus wurde das Paket nicht wirklich installiert, der Dienst
+      # existiert also noch nicht. Ohne diese Bedingung bricht `--check` hier
+      # ab und man sieht die uebrigen Aenderungen nie.
+      when: not ansible_check_mode
+
+    # -- ab hier nur noch Verifikation --------------------------------------
+    # Alle folgenden Tasks setzen einen laufenden rsyslog voraus und werden im
+    # Check-Modus uebersprungen.
+
+    - name: Handler jetzt ausfuehren, damit die Pruefung die neue Konfiguration sieht
+      ansible.builtin.meta: flush_handlers
+
+    - name: Konfiguration syntaktisch pruefen
+      ansible.builtin.command: rsyslogd -N1
+      register: rsyslog_check
+      changed_when: false
+      failed_when: rsyslog_check.rc != 0
+      when: not ansible_check_mode
+
+    - name: Laeuft rsyslog?
+      ansible.builtin.systemd:
+        name: rsyslog
+      register: rsyslog_state
+      when: not ansible_check_mode
+
+    - name: Erreicht der Host den Loki-Listener?
+      # Scheitert das hier, liegt es NICHT an diesem Playbook, sondern am
+      # Alloy-Dienst oder am Routing Mesh — dann `docker service ps
+      # monitoring_alloy` auf einem Swarm-Node ansehen.
+      ansible.builtin.wait_for:
+        host: "{{ pve_loki_host }}"
+        port: "{{ pve_loki_port }}"
+        timeout: 10
+        state: started
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Pruefzeile absetzen
+      # Eindeutiger Text, damit sie in Loki wiederzufinden ist. `-p daemon.notice`,
+      # weil eine Zeile unterhalb der Schwelle den Test wertlos machen wuerde.
+      ansible.builtin.command: >
+        logger -p daemon.notice -t pve-logging-check
+        "pve-logging.yml Pruefzeile {{ inventory_hostname }} {{ ansible_date_time.iso8601 }}"
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Ergebnis
+      when: not ansible_check_mode
+      ansible.builtin.debug:
+        msg:
+          - "{{ inventory_hostname }}: rsyslog {{ rsyslog_state.status.ActiveState }}"
+          - "leitet *.{{ pve_log_severity }} an {{ pve_loki_host }}:{{ pve_loki_port }} weiter"
+          - "Gegenprobe in Grafana (Loki): {host=\"{{ inventory_hostname }}\"} |= \"pve-logging-check\""
+
+  handlers:
+    - name: rsyslog neu starten
+      ansible.builtin.systemd:
+        name: rsyslog
+        state: restarted
