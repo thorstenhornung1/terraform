@@ -1,0 +1,617 @@
+{
+  "annotations": { "list": [] },
+  "description": "ZFS-Replikation (pvesr) zwischen den PVE-Hosts. Quelle: Textfile-Collector pvesr-metrics.py (ansible/pve-replication-monitoring.yml) ueber den Job pve-node-exporter. postgres-prod (4600), Home Assistant (100) und Frigate (4502) haengen fuer PVE-HA an diesen Replikaten — ein Rueckstand hier ist verlorenes RPO im Failover-Fall. Fehlertexte stehen in Loki: {host=~\"pve0[123]\"} |= \"replication\".",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Proxmox Hypervisoren",
+      "type": "link",
+      "url": "/d/pve-hosts"
+    }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Replikationsjobs mit fail_count > 0. PVE wiederholt mit Backoff (5/10/15/30min) und mailt beim ersten Fehlschlag. Ein einzelner Fehler waehrend der naechtlichen Wartung heilt sich selbst; der Alert pvesr-job-failing feuert erst ab 3 Fehlversuchen in Folge.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "count(pvesr_job_fail_count > 0) or vector(0)",
+          "refId": "A"
+        }
+      ],
+      "title": "Jobs im Fehler",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Groesster Sync-Rueckstand aller aktiven Jobs, gemessen in Vielfachen des jeweiligen Job-Intervalls (*/1 wie */15 vergleichbar). Normal: um 1 (ein Job steht immer irgendwo in seinem Intervall). Deaktivierte Jobs zaehlen nicht. Alert pvesr-job-stale ab 10.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null },
+              { "color": "orange", "value": 5 },
+              { "color": "red", "value": 10 }
+            ]
+          },
+          "unit": "none",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 0 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "max((time() - pvesr_job_last_sync_timestamp_seconds) / pvesr_job_schedule_seconds * (1 - pvesr_job_disabled))",
+          "refId": "A"
+        }
+      ],
+      "title": "Max. Sync-Rückstand (Zyklen)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Alter des Wartungs-Markers /etc/pve/.pvesr-maint-paused-*.json. Die Rolle proxmox_maintenance pausiert Jobs gegen den rebootenden Node und setzt diesen Marker; pvesr_resume entfernt ihn. Ein Marker aelter als 2h heisst: die Wartung hat die Jobs nicht reaktiviert (Alert pvesr-maintenance-pause-leaked).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "options": { "0": { "index": 0, "text": "keine" } },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 7200 }
+            ]
+          },
+          "unit": "s",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 5, "x": 10, "y": 0 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "max(pvesr_maintenance_pause_age_seconds)",
+          "refId": "A"
+        }
+      ],
+      "title": "Wartungspause",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Per pvesr disable stillgelegte Jobs. Absichtliche Stilllegungen (VM 112) sind kein Fehlerzustand — deshalb bewusst ohne Farbe. Haengengebliebene Wartungspausen zeigt die Kachel links.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "text", "value": null }]
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 15, "y": 0 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "sum(pvesr_job_disabled) or vector(0)",
+          "refId": "A"
+        }
+      ],
+      "title": "Jobs deaktiviert",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Alter der aeltesten pvesr.prom ueber alle Hosts. Der Timer schreibt minuetlich; ueber 900s heisst: Collector oder pvesh liefert nicht mehr (Alert pvesr-metrics-stale). Faellt das Skript aus, altert bewusst die Datei, statt leere 'alles gut'-Werte zu zeigen.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null },
+              { "color": "red", "value": 900 }
+            ]
+          },
+          "unit": "s",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 5, "x": 19, "y": 0 },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "max(time() - node_textfile_mtime_seconds{job=\"pve-node-exporter\", file=\"/var/lib/prometheus/node-exporter/pvesr.prom\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Collector-Frische",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Ist-Zustand aller Replikationsjobs. Quelle = Node, auf dem der Gast laeuft; Ziel = Node mit dem Replikat. Rueckstand in Vielfachen des Job-Intervalls; bei deaktivierten Jobs steht dort 0 (zaehlen nicht).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "inspect": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "text", "value": null }]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Fehlversuche" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "text", "value": null },
+                    { "color": "red", "value": 1 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Rückstand (Zyklen)" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              { "id": "decimals", "value": 1 },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "text", "value": null },
+                    { "color": "orange", "value": 5 },
+                    { "color": "red", "value": 10 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Dauer (s)" },
+            "properties": [
+              { "id": "decimals", "value": 1 },
+              { "id": "unit", "value": "s" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "deaktiviert" },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "0": { "index": 0, "text": "–" },
+                      "1": { "index": 1, "text": "ja" }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Intervall (s)" },
+            "properties": [{ "id": "unit", "value": "s" }]
+          }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 4 },
+      "id": 6,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Fehlversuche" }]
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "pvesr_job_fail_count",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "(time() - pvesr_job_last_sync_timestamp_seconds) / pvesr_job_schedule_seconds * (1 - pvesr_job_disabled)",
+          "format": "table",
+          "instant": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "pvesr_job_duration_seconds",
+          "format": "table",
+          "instant": true,
+          "refId": "C"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "pvesr_job_disabled",
+          "format": "table",
+          "instant": true,
+          "refId": "D"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "pvesr_job_schedule_seconds",
+          "format": "table",
+          "instant": true,
+          "refId": "E"
+        }
+      ],
+      "transformations": [
+        { "id": "merge", "options": {} },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "instance": true,
+              "job": true,
+              "role": true
+            },
+            "indexByName": {
+              "id": 0,
+              "guest": 1,
+              "host": 2,
+              "target": 3,
+              "Value #E": 4,
+              "Value #A": 5,
+              "Value #B": 6,
+              "Value #C": 7,
+              "Value #D": 8
+            },
+            "renameByName": {
+              "Value #A": "Fehlversuche",
+              "Value #B": "Rückstand (Zyklen)",
+              "Value #C": "Dauer (s)",
+              "Value #D": "deaktiviert",
+              "Value #E": "Intervall (s)",
+              "guest": "VM/CT",
+              "host": "Quelle",
+              "id": "Job",
+              "target": "Ziel"
+            }
+          }
+        }
+      ],
+      "title": "Replikationsjobs — Ist-Zustand",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Sync-Rueckstand je Job in Vielfachen des Job-Intervalls. Wartungs-Reboots zeichnen sich als kurze Berge ab (Job pausiert oder Ziel weg, holt danach auf). Dauerhafter Anstieg = Job kommt nie durch.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null },
+              { "color": "red", "value": 10 }
+            ]
+          },
+          "unit": "none",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "id": 7,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "(time() - pvesr_job_last_sync_timestamp_seconds) / pvesr_job_schedule_seconds * (1 - pvesr_job_disabled)",
+          "legendFormat": "{{id}} → {{target}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Sync-Rückstand je Job (Zyklen)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Aufeinanderfolgende Fehlversuche je Job. PVE wiederholt mit Backoff und setzt bei Erfolg auf 0 zurueck. Der Alert pvesr-job-failing greift ab 3.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null },
+              { "color": "red", "value": 3 }
+            ]
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "id": 8,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "pvesr_job_fail_count",
+          "legendFormat": "{{id}} → {{target}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Fehlversuche je Job",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Dauer des letzten Sync-Laufs je Job. Ein schleichender Anstieg heisst wachsende Deltas (Gast schreibt mehr) oder ein leidendes Zielsystem — beides lohnt einen Blick, bevor Jobs in Timeouts laufen.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "text", "value": null }]
+          },
+          "unit": "s",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "id": 9,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "pvesr_job_duration_seconds",
+          "legendFormat": "{{id}} → {{target}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Sync-Dauer je Job",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Alter des Wartungs-Markers ueber die Zeit. Normalbild: kurze Saegezaehne waehrend der naechtlichen Wartung (23:00-Fenster), sonst 0. Ein durchlaufender Anstieg = pvesr_resume ist nie gelaufen.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null },
+              { "color": "red", "value": 7200 }
+            ]
+          },
+          "unit": "s",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "id": 10,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "max(pvesr_maintenance_pause_age_seconds)",
+          "legendFormat": "Marker-Alter",
+          "refId": "A"
+        }
+      ],
+      "title": "Wartungspause (Marker-Alter)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": ["proxmox", "replikation", "infrastructure"],
+  "templating": { "list": [] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Proxmox Replikation (pvesr)",
+  "uid": "pve-replication",
+  "version": 1,
+  "weekStart": ""
+}

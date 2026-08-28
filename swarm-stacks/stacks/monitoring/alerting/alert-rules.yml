@@ -3691,3 +3691,261 @@ groups:
       # Bytes, nicht sein Anteil am Ganzen.
       # Stand 2026-08-24: 1,81 TiB frei. Die Warnschwelle liegt darunter und
       # feuert deshalb heute nicht.
+
+# =============================================================================
+# PVE Replikation (pvesr) — ZFS-Replikate zwischen den Hypervisoren
+# =============================================================================
+# Anlass 2026-08-28: Der naechtliche Wartungs-Reboot von pve03 (Daily
+# Maintenance 23:00) liess die minuetlichen Jobs 4502-1/4400-1 ins Reboot-
+# Fenster laufen — sichtbar nur als pvescheduler-Mail, Metriken gab es keine.
+# postgres-prod (4600), Home Assistant (100) und Frigate (4502) haengen fuer
+# PVE-HA an diesen Replikaten: ein stiller Ausfall = veraltetes Failover-Ziel.
+# Datenquelle: Textfile-Collector pvesr-metrics.py (minuetlicher Timer auf
+# pve01-03, ansible/pve-replication-monitoring.yml), Scrape ueber den Job
+# pve-node-exporter. Dashboard: pve-replication.json.
+# Geplante Wartung erzeugt hier KEINE Alarme: die Rolle proxmox_maintenance
+# pausiert Jobs gegen den rebootenden Node (pvesr_pause/pvesr_resume) und
+# hinterlaesst dabei einen Marker, den Regel 4 gegen Vergessen absichert.
+- orgId: 1
+  name: PVE Replikation
+  folder: Infrastructure
+  interval: 60s
+  rules:
+
+      # --- Job schlaegt wiederholt fehl ---
+      # fail_count zaehlt Fehlversuche in Folge; PVE wiederholt mit Backoff
+      # (naechster Versuch nach 5/10/15/30min) und setzt bei Erfolg auf 0.
+      # Schwelle 3 heisst also ~30min Dauerfehler — der Einmal-Fehler eines
+      # Reboot-Fensters (fail_count 1, heilt beim naechsten Versuch) und die
+      # dokumentierte Rest-Race der Wartungspause (ein bei Disable schon
+      # laufender Sync) bleiben unter der Schwelle. Baseline 2026-08-28:
+      # alle Jobs fail_count=0.
+      # warning/Digest bewusst: das Replikat altert in Minuten, nicht der
+      # Dienst — der Sofort-Fall (postgres-Replikat) hat Regel 3.
+  - uid: pvesr-job-failing
+    title: PVE Replikationsjob schlaegt wiederholt fehl
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: victoriametrics
+      model:
+        expr: max by (id, guest, target) (pvesr_job_fail_count)
+        instant: true
+        refId: A
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: A
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 2
+        refId: C
+    for: 0s
+    keep_firing_for: 30m
+    noDataState: OK
+    execErrState: OK
+    labels:
+      severity: warning
+    annotations:
+      summary: "Replikationsjob {{ $labels.id }} (Gast {{ $labels.guest }} → {{ $labels.target }}): {{ $values.A.Value }} Fehlversuche in Folge"
+      description: "Fehlertext im Syslog des Quell-Nodes bzw. Loki: {host=~\"pve0[123]\"} |= \"replication\". Status: pvesr status auf dem Quell-Node. Haeufigste Ursachen: Ziel-Node down (pve-host-down pruefen), SSH-Known-Hosts nach Node-Neuinstallation, volle tank-Pools. Manuell anstossen: pvesr schedule-now {{ $labels.id }}."
+
+      # --- Job laeuft nicht mehr (Rueckstand in Zyklen) ---
+      # Rueckstand = (jetzt - last_sync) / Job-Intervall, deaktivierte Jobs
+      # zaehlen ueber den Faktor (1 - disabled) nicht. Die Normierung auf
+      # Zyklen statt Sekunden macht EINE Schwelle fuer */1- wie */15-Jobs
+      # moeglich (keine hartkodierten Job-Schwellen). Baseline 2026-08-28:
+      # aktive Jobs 0,5-1,2 Zyklen (ein Job steht immer irgendwo in seinem
+      # Intervall; kurz ueber 1 waehrend eines laufenden Syncs ist normal).
+      # Schwelle 10: */1-Frigate nach 10min, postgres */5 nach 50min,
+      # HA */15 nach 2,5h — jeweils weit ausserhalb jeder Wartung, aber vor
+      # dem Tagesskalen-Blindflug. Faengt auch den Fall, den fail_count NICHT
+      # sieht: pvescheduler tot oder Job haengt (kein Versuch = kein Fehler).
+      # Die Query liefert im Gesundzustand fuer jeden aktiven Job einen Wert
+      # (EEMUA-Regel: Vergleich in der Threshold-Bedingung, nicht in PromQL).
+  - uid: pvesr-job-stale
+    title: PVE Replikationsjob laeuft nicht mehr (Sync-Rueckstand)
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: victoriametrics
+      model:
+        expr: (time() - pvesr_job_last_sync_timestamp_seconds) / pvesr_job_schedule_seconds * (1 - pvesr_job_disabled)
+        instant: true
+        refId: A
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: A
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 10
+        refId: C
+    for: 0s
+    keep_firing_for: 30m
+    noDataState: OK
+    execErrState: OK
+    labels:
+      severity: warning
+    annotations:
+      summary: "Replikationsjob {{ $labels.id }} (Gast {{ $labels.guest }} → {{ $labels.target }}) ist {{ $values.A.Value }} Intervalle im Rueckstand"
+      description: "Der Job versucht es nicht mehr oder kommt nie durch — fail_count kann dabei 0 bleiben (pvescheduler tot, Job haengt). Pruefen auf dem Quell-Node: pvesr status; systemctl status pvescheduler; laufender Sync: ps aux | grep 'pvesr run'. Wartungspause-Marker: ls /etc/pve/.pvesr-maint-paused-*.json (siehe Regel pvesr-maintenance-pause-leaked)."
+
+      # --- postgres-prod-Replikat veraltet (HA-Failover-Ziel) ---
+      # Gleiche Formel wie pvesr-job-stale, nur guest=4600 und critical:
+      # postgres-prod ist per Proxmox-HA auf genau diese Replikate angewiesen
+      # (docs/POSTGRES-SINGLE-VM-HA-MIGRATION-PLAN.md, akzeptiertes RPO ~5min
+      # bei */5). Schwelle 24 Zyklen = 2h: ein Failover wuerde dann 2h
+      # Datenbank-Schreibarbeit ALLER Apps verwerfen — das rechtfertigt
+      # Sofort-Telegram statt Digest (Verschleppungs-Argument wie bei
+      # pve-host-memory-pressure). Bewusst zusaetzlich zur warning-Regel:
+      # die eskaliert hier, sie ersetzt nicht.
+  - uid: pvesr-postgres-replica-stale
+    title: postgres-prod ZFS-Replikat veraltet (HA-Failover-Ziel)
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: victoriametrics
+      model:
+        expr: (time() - pvesr_job_last_sync_timestamp_seconds{guest="4600"}) / pvesr_job_schedule_seconds * (1 - pvesr_job_disabled)
+        instant: true
+        refId: A
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: A
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 24
+        refId: C
+    for: 0s
+    keep_firing_for: 30m
+    noDataState: OK
+    execErrState: OK
+    labels:
+      severity: critical
+    annotations:
+      summary: "postgres-prod-Replikat {{ $labels.id }} → {{ $labels.target }} ist {{ $values.A.Value }} Intervalle (>2h) veraltet"
+      description: "Das ZFS-Replikat der VM 4600 auf {{ $labels.target }} altert — ein Proxmox-HA-Failover wuerde jetzt >2h Schreibarbeit aller App-Datenbanken verwerfen. Pruefen auf pve02: pvesr status; zfs list -t snapshot tank/vm-4600-disk-0 | tail. Fehlertext: journalctl -u pvescheduler | tail bzw. Loki {host=\"pve02\"} |= \"replication\". Solange der Rueckstand steht, keine HA-Migration der VM 4600 ausloesen."
+
+      # --- Wartungspause vergessen ---
+      # Die Rolle proxmox_maintenance pausiert vor einem Reboot alle Jobs
+      # gegen den Node und schreibt einen Marker nach /etc/pve
+      # (.pvesr-maint-paused-<node>.json, pmxcfs = clusterweit); pvesr_resume
+      # entfernt ihn nach der Recovery. Bewusst KEIN always-Block im
+      # Playbook: kommt der Node nicht wieder, sollen die Jobs pausiert
+      # bleiben — dieser Alert ist das Sicherheitsnetz dagegen, dass das
+      # Reaktivieren dauerhaft unterbleibt. Schwelle 2h: die komplette
+      # Wartung eines Nodes (apt + Reboot + Ceph-Rejoin) liegt deutlich
+      # darunter. Im Gesundzustand liefert die Query konstant 0 (Metrik
+      # existiert auf jedem Node), ein absichtliches pvesr disable ohne
+      # Marker (VM 112) feuert hier nie.
+  - uid: pvesr-maintenance-pause-leaked
+    title: PVE Replikation nach Wartung nicht reaktiviert
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: victoriametrics
+      model:
+        expr: max(pvesr_maintenance_pause_age_seconds)
+        instant: true
+        refId: A
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: A
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 7200
+        refId: C
+    for: 0s
+    keep_firing_for: 30m
+    noDataState: OK
+    execErrState: OK
+    labels:
+      severity: warning
+    annotations:
+      summary: "pvesr-Wartungspause ist seit {{ $values.A.Value }}s aktiv — Resume ist nie gelaufen"
+      description: "Marker ansehen: cat /etc/pve/.pvesr-maint-paused-*.json (enthaelt Job-IDs und Zeitstempel). Wenn der gewartete Node wieder gesund ist: je Job pvesr enable <id>, dann Marker loeschen. Kommt der Node absichtlich nicht wieder, Jobs auf neues Ziel umziehen und Marker loeschen. Ein 10-Tage-Wert bedeutet: Marker-Datei unlesbar/korrupt (pvesr-metrics.py meldet das so)."
+
+      # --- Collector liefert nicht mehr ---
+      # Fehlersemantik von pvesr-metrics.py: schlaegt pvesh fehl, wird die
+      # .prom-Datei NICHT angefasst und altert — genau das misst diese Regel
+      # ueber node_textfile_mtime_seconds (file-Label ist der VOLLE Pfad).
+      # Timer schreibt minuetlich, Schwelle 900s = 15 verpasste Laeufe.
+      # Ohne diese Regel waere ein toter Collector unsichtbar: die Job-Serien
+      # blieben einfach auf dem letzten Stand stehen bzw. verschwaenden nach
+      # der Staleness still (noData→OK bei Regel 1-3). Node komplett down
+      # melden pve-host-down/pve-host-metrics-stale — hier noDataState OK.
+  - uid: pvesr-metrics-stale
+    title: pvesr-Metriken veralten (Collector liefert nicht)
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: victoriametrics
+      model:
+        expr: time() - node_textfile_mtime_seconds{job="pve-node-exporter", file="/var/lib/prometheus/node-exporter/pvesr.prom"}
+        instant: true
+        refId: A
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: A
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 900
+        refId: C
+    for: 0s
+    keep_firing_for: 30m
+    noDataState: OK
+    execErrState: OK
+    labels:
+      severity: warning
+    annotations:
+      summary: "pvesr.prom auf {{ $labels.host }} ist {{ $values.A.Value }}s alt — Collector oder pvesh liefert nicht"
+      description: "Auf {{ $labels.host }}: systemctl status pvesr-metrics.timer pvesr-metrics.service; letzter Fehler: journalctl -u pvesr-metrics.service -n 20. Handtest: /usr/local/sbin/pvesr-metrics.py && tail -3 /var/lib/prometheus/node-exporter/pvesr.prom. Ausgerollt von ansible/pve-replication-monitoring.yml."

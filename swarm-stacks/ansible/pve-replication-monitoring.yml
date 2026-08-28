@@ -1,0 +1,172 @@
+---
+# =============================================================================
+# pvesr-Replikationsmetriken auf den Proxmox-Hypervisoren (pve01-03)
+# =============================================================================
+# Anlass: Am 2026-08-27 rebootete die Daily Maintenance pve03 planmaessig —
+# die minuetlichen Replikationsjobs 4502-1 und 4400-1 liefen ins Reboot-
+# Fenster und pvescheduler verschickte Fehl-Mails. Das eigentliche Problem
+# dahinter: pvesr hatte bis dahin KEINE einzige Metrik. postgres-prod (4600),
+# Home Assistant (100) und Frigate (4502) verlassen sich fuer PVE-HA auf die
+# ZFS-Replikate; ein stiller Replikationsausfall heisst veraltetes
+# Failover-Ziel (RPO-Verlust), und niemand erfaehrt davon.
+#
+# Dieses Playbook rollt einen Textfile-Collector aus (Muster:
+# post-boot-resilience.yml): ein Python-Skript schreibt minuetlich
+# /var/lib/prometheus/node-exporter/pvesr.prom, der bestehende Job
+# pve-node-exporter (pve-monitoring.yml) scrapt die Datei automatisch mit.
+# Bewusst textfile statt Push: faellt das Skript aus, altert die Datei und
+# node_textfile_mtime_seconds macht den Ausfall sichtbar — ein Push
+# verschwaende einfach still.
+#
+# AUFRUF
+#   ansible-playbook -i inventory.ini pve-replication-monitoring.yml
+#
+# GEGENSTUECK IM REPO
+#   files/pvesr-metrics.py                     -> das Collector-Skript
+#   stacks/monitoring/alerting/alert-rules.yml -> Gruppe "PVE Replikation"
+#   stacks/monitoring/dashboards/pve-replication.json
+#   (ansible-Repo) roles/proxmox_maintenance/tasks/pvesr_pause.yml -> Marker
+# =============================================================================
+
+- name: pvesr-Metriken-Collector auf den Proxmox-Hypervisoren einrichten
+  hosts: pve_nodes
+  become: true
+  gather_facts: false
+
+  vars:
+    pve_textfile_dir: /var/lib/prometheus/node-exporter
+    victoriametrics_url: http://192.168.4.40:8428
+
+  tasks:
+    - name: Voraussetzung pruefen — Textfile-Verzeichnis existiert
+      # Das Verzeichnis legt pve-monitoring.yml an. Fehlt es, laeuft dieses
+      # Playbook ins Leere: das Skript schriebe eine Datei, die nie gescrapt
+      # wird, und alle Alerts blieben still wirkungslos.
+      ansible.builtin.stat:
+        path: "{{ pve_textfile_dir }}"
+      register: textfile_dir
+
+    - name: Abbrechen, wenn pve-monitoring.yml noch nicht gelaufen ist
+      ansible.builtin.assert:
+        that: textfile_dir.stat.isdir | default(false)
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ pve_textfile_dir }} fehlt —
+          zuerst pve-monitoring.yml ausrollen.
+
+    - name: Collector-Skript ausrollen
+      ansible.builtin.copy:
+        src: files/pvesr-metrics.py
+        dest: /usr/local/sbin/pvesr-metrics.py
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: systemd-Service anlegen
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/pvesr-metrics.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=pvesr-Replikationsmetriken fuer den node-exporter schreiben
+          Documentation=file:///usr/local/sbin/pvesr-metrics.py
+          # pvesh braucht pmxcfs (/etc/pve) — gleiche Bootrennen-Klasse wie
+          # pvestatd/ceph-osd (siehe pmxcfs-Boot-Race).
+          After=pve-cluster.service
+          Wants=pve-cluster.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/pvesr-metrics.py
+          TimeoutStartSec=90
+          StandardOutput=journal
+          StandardError=journal
+      notify: systemd neu einlesen
+
+    - name: systemd-Timer anlegen
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/pvesr-metrics.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=pvesr-Replikationsmetriken minuetlich erneuern
+
+          [Timer]
+          # Zwei Minuten nach dem Boot: pmxcfs und pvedaemon stehen dann
+          # sicher, und der erste Wert kommt frueh genug, dass ein durch den
+          # Reboot verdeckter Replikationsfehler nicht lange unsichtbar bleibt.
+          OnBootSec=2min
+          # Minuetlich, passend zum engsten Job-Schedule (*/1 bei Frigate).
+          # Der Lauf kostet einen lokalen API-Call, kein SSH, kein ZFS.
+          OnUnitActiveSec=60
+          RandomizedDelaySec=10
+
+          [Install]
+          WantedBy=timers.target
+      notify: systemd neu einlesen
+
+    - name: Handler ausfuehren
+      ansible.builtin.meta: flush_handlers
+
+    - name: Timer aktivieren
+      ansible.builtin.systemd:
+        name: pvesr-metrics.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Einmalig ausfuehren
+      ansible.builtin.command: /usr/local/sbin/pvesr-metrics.py
+      changed_when: true
+
+    # -------------------------------------------------------------------------
+    # Verifikation — wie in pve-monitoring.yml: genau die Metriknamen pruefen,
+    # auf denen die Alert-Regeln stehen. Fehlt einer, ist eine Regel still
+    # wirkungslos (die frigate-lxc-oom-Lektion).
+    # -------------------------------------------------------------------------
+    - name: Metriken vom Exporter abholen
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:9100/metrics"
+        return_content: true
+      register: metrics
+      changed_when: false
+
+    - name: Immer vorhandene Metriknamen pruefen
+      # pvesr_job_count und pvesr_maintenance_pause_age_seconds haben auf
+      # JEDEM Node einen Wert — auch auf einem Node ohne eigene Quell-Jobs
+      # (pve03). Die Job-Serien selbst existieren nur auf Quell-Nodes und
+      # werden clusterweit gegen VictoriaMetrics geprueft (naechster Task).
+      ansible.builtin.assert:
+        that:
+          - "'pvesr_job_count' in metrics.content"
+          - "'pvesr_maintenance_pause_age_seconds' in metrics.content"
+          - "'node_textfile_scrape_error 0' in metrics.content"
+        fail_msg: "{{ inventory_hostname }}: pvesr.prom wird nicht exportiert."
+
+    - name: Job-Metriken in VictoriaMetrics angekommen?
+      # Ende-zu-Ende ueber die ganze Kette (Skript -> Exporter -> vmagent ->
+      # VictoriaMetrics). Scrape-Intervall ist 30s, daher Wiederholung.
+      ansible.builtin.uri:
+        url: "{{ victoriametrics_url }}/api/v1/query?query=pvesr_job_fail_count"
+        return_content: true
+      register: vm_query
+      until: (vm_query.json.data.result | default([]) | length) > 0
+      retries: 8
+      delay: 15
+      changed_when: false
+      run_once: true
+
+    - name: Ergebnis
+      ansible.builtin.debug:
+        msg: >-
+          VictoriaMetrics liefert
+          {{ vm_query.json.data.result | length }} pvesr-Job-Serien.
+      run_once: true
+
+  handlers:
+    - name: systemd neu einlesen
+      ansible.builtin.systemd:
+        daemon_reload: true

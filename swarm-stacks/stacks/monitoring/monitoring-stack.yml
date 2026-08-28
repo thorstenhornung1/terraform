@@ -259,6 +259,8 @@ services:
         target: /var/lib/grafana/dashboards-infra/ups-power.json
       - source: dashboard_pve_hosts
         target: /var/lib/grafana/dashboards-infra/pve-hosts.json
+      - source: dashboard_pve_replication
+        target: /var/lib/grafana/dashboards-infra/pve-replication.json
       - source: dashboard_unifi_poe
         target: /var/lib/grafana/dashboards-infra/unifi-poe.json
       - source: dashboard_synology_nas
@@ -912,6 +914,16 @@ configs:
   dashboard_pve_hosts:
     name: dashboard_pve_hosts_${PVE_HOSTS_HASH:-latest}
     file: ./dashboards/pve-hosts.json
+
+  # Replikations-Dashboard (pvesr). Quelle ist der Textfile-Collector
+  # pvesr-metrics.py (ansible/pve-replication-monitoring.yml) auf dem Blech,
+  # gescrapt ueber denselben Job pve-node-exporter. Anlass: der Wartungs-
+  # Reboot vom 2026-08-27 zeigte, dass Replikationsfehler nur als Mail
+  # sichtbar waren — postgres-prod/HA/Frigate haengen fuer PVE-HA an diesen
+  # Replikaten.
+  dashboard_pve_replication:
+    name: dashboard_pve_replication_${PVE_REPLICATION_HASH:-latest}
+    file: ./dashboards/pve-replication.json
 
   # PoE- und Netzwerkgeraete-Dashboard. Quelle ist der unpoller-Service in
   # diesem Stack. Die Port-zu-Geraet-Zuordnung entsteht per Join ueber
