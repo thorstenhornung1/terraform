@@ -24,7 +24,15 @@ contactPoints:
         settings:
           bottoken: "${TELEGRAM_BOT_TOKEN}"
           chatid: "762113742"
-          parse_mode: ""
+          # 🔴 "None" MUSS explizit stehen: parse_mode "" faellt auf HTML
+          # zurueck, und ein rohes "<" im Alarmtext (z. B. "5m-Mittel < 1.25"
+          # bei pve-host-memory-pressure) macht daraus Telegram 400 Bad
+          # Request. Vorfall 26.-28.08.2026: ~95 % aller Sends scheiterten
+          # zwei Tage still — auch der Waechter-Alert "Zustellung an
+          # Telegram schlaegt fehl" haengt an diesem Contact-Point und kam
+          # deshalb nie an. Alarmtexte sind Technik-Prosa mit <, >, & —
+          # Entity-Parsing hat hier nichts verloren.
+          parse_mode: "None"
           disable_web_page_preview: true
           # Edge-Case: Wenn eine Series nach Filter-Änderung komplett aus dem
           # Query-Result fällt (statt Threshold zu unterschreiten), kann Grafana
@@ -44,7 +52,9 @@ contactPoints:
         settings:
           bottoken: "${TELEGRAM_BOT_TOKEN}"
           chatid: "762113742"
-          parse_mode: ""
+          # "None" explizit — siehe telegram-critical: "" faellt auf HTML
+          # zurueck und rohe <, >, & im Alarmtext ergeben Telegram 400.
+          parse_mode: "None"
           disable_web_page_preview: true
           disable_notification: true
           # Siehe telegram-critical: Edge-Case "Template-Literal bei RESOLVED"
