@@ -1,0 +1,49 @@
+# =============================================================================
+# Authentik-Blueprint: Voller Logout (Single Logout) fuer die Wallos-Provider
+# =============================================================================
+# Anlass 2026-08-28: Logout aus Wallos leitete korrekt zu Authentiks
+# end-session-Endpoint, aber der Provider stand auf
+# default-provider-invalidation-flow ("You've logged out of <application>").
+# Der beendet NUR die App-Sitzung — die SSO-Browser-Session lebt weiter, und
+# der naechste Klick auf "Login mit Authentik" ging ohne Passwortabfrage
+# durch (Beweis im id_token: auth_time blieb der urspruengliche Login).
+# Genau das verhindert den Benutzerwechsel am geteilten Geraet.
+#
+# Fix: invalidation_flow -> default-invalidation-flow. Der erzeugt das echte
+# action:logout-Event und beendet die Authentik-Session.
+#
+# ⚠️ BEWUSSTE KONSEQUENZ (User-Entscheidung 2026-08-28): Das ist Single
+# Logout. Ein Logout aus Wallos (Test UND Prod) meldet den Browser von
+# Authentik insgesamt ab — der naechste Login JEDER Anwendung fragt wieder
+# nach dem Passwort. Bereits ausgestellte Tokens anderer Apps laufen regulaer
+# aus; nur neue Anmeldungen sind betroffen.
+#
+# Die Eintraege patchen nur das eine Feld: Der Importer aktualisiert ein
+# ueber identifiers gefundenes Objekt partiell (siehe Kommentar in
+# blueprint-app-metadata.yml) — client_id/secret, Redirect-URIs, Scopes und
+# Signing-Key bleiben unberuehrt.
+# =============================================================================
+
+version: 1
+metadata:
+  name: Hornung - Wallos Single Logout
+  labels:
+    blueprints.goauthentik.io/instantiate: "true"
+
+entries:
+  # Prod (abo.hornung-bn.de). Der Provider-Name stammt aus der Anlage-Zeit
+  # und heisst "Provider for Abos", nicht "Provider for wallos" — bei einer
+  # Umbenennung in der UI MUSS dieser identifier mitziehen, sonst legt der
+  # Blueprint einen zweiten, kaputten Provider an.
+  - identifiers:
+      name: Provider for Abos
+    model: authentik_providers_oauth2.oauth2provider
+    attrs:
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-invalidation-flow]]
+
+  # Test (test.hornung-bn.de)
+  - identifiers:
+      name: Provider for wallos-test
+    model: authentik_providers_oauth2.oauth2provider
+    attrs:
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-invalidation-flow]]
