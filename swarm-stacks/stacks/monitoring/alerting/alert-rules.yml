@@ -628,9 +628,15 @@ groups:
     execErrState: OK
     labels:
       severity: critical
+      # E-Mail als garantierter Weg (Route notify=email-urgent in
+      # notification-policies.yml, continue:true → zusaetzlich der
+      # Telegram-Versuch). Ein Waechter, der NUR ueber den Kanal meldet,
+      # den er ueberwacht, ist keiner — Vorfall 26.–28.08.2026: zwei Tage
+      # parse_mode-400, alle Zustellungen tot, der Waechter feuerte ins Leere.
+      notify: email-urgent
     annotations:
       summary: "{{ $value }} fehlgeschlagene Telegram-Zustellungen in 15 Minuten"
-      description: "Solange das anhaelt, erreicht KEIN Alarm mehr sein Ziel. Bot-Token und Chat-ID pruefen (Docker-Secrets grafana_telegram_bot_token / _chat_id) sowie den ausgehenden Weg zu api.telegram.org."
+      description: "Solange das anhaelt, erreicht kaum ein Alarm sein Ziel — diese Meldung kommt deshalb per E-Mail (homelab@). Bot-Token und Chat-ID pruefen (Docker-Secrets grafana_telegram_bot_token / _chat_id), den ausgehenden Weg zu api.telegram.org, und im Grafana-Log nach 'failed to send telegram' suchen. Bei 400 Bad Request zuerst an parse_mode/Sonderzeichen denken (26.-28.08.2026: '<' im Alarmtext + HTML-Fallback)."
 
       # --- Regeln stehen auf NoData ---
       # Genau der Fehler vom 2026-08-24, der 18 von 64 Regeln dauerhaft falsch

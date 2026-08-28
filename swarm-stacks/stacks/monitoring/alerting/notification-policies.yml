@@ -42,6 +42,25 @@ policies:
       # severity — so bleibt die Dringlichkeit unabhaengig vom Zustellweg
       # beschreibbar. Steht VOR den severity-Routen, weil continue:false gilt und
       # die erste passende Route gewinnt.
+      # Waechter ueber die Telegram-Zustellung selbst: darf nicht NUR ueber
+      # Telegram laufen (Vorfall 26.–28.08.2026: parse_mode-HTML-400 → zwei
+      # Tage stiller Totalausfall, und der Waechter feuerte in den toten
+      # Kanal). continue:true — die Mail ist der garantierte Weg, danach
+      # faellt der Alert weiter in die severity=critical-Route und versucht
+      # Telegram ZUSAETZLICH (bei partiellem Ausfall kommt er dort noch an).
+      # Eigene Route statt notify=email: deren 720h-Takt ist fuer
+      # Monatsskala-Befunde — ein toter Alarmkanal soll taeglich erinnern,
+      # bis er repariert ist.
+      - receiver: email-homelab
+        matchers:
+          - notify = email-urgent
+        group_by:
+          - grafana_folder
+        group_wait: 1m
+        group_interval: 15m
+        repeat_interval: 24h
+        continue: true
+
       - receiver: email-homelab
         matchers:
           - notify = email
