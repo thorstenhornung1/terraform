@@ -75,10 +75,15 @@ services:
       LANG: de_DE.UTF-8
       LC_ALL: de_DE.UTF-8
       TZ: Europe/Berlin
-      # belegparser 0.5.x LLM backend — uses existing LMStudio host on
-      # VLAN 2 (OpenAI-API-compatible). Routing VLAN 4 → VLAN 2 is set
-      # at UDM-Pro. Feature-flagged so the consumer can degrade to
-      # rule-based parsing when LLM is unreachable / disabled.
+      # belegparser 0.5.x LLM backend — Ollama auf dem Mac Studio (VLAN 2,
+      # OpenAI-kompatibles /v1; dieselbe Instanz wie LightRAG, phi4 + bge-m3
+      # via KEEP_ALIVE=-1 / MAX_LOADED_MODELS=2 gepinnt). Routing
+      # VLAN 4 → VLAN 2 is set at UDM-Pro. Feature-flagged so the consumer
+      # can degrade to rule-based parsing when LLM is unreachable / disabled.
+      #
+      # 2026-08-30: LM Studio (:1234, Modellname "phi-4") abgelöst — der Mac
+      # Studio serviert lokal nur noch Ollama (:11434). Modellname ist jetzt
+      # der Ollama-Tag "phi4" (ohne Bindestrich); ein falscher Name gibt 404.
       #
       # ARCHITEKTUR-INVARIANTE: belegparser ist eine STATELESS library
       # — LLM-Calls sind transient, KEINE Persistenz. Es darf KEIN
@@ -92,9 +97,10 @@ services:
       # vars (no-op for the current v2.8.x image).
       BELEGPARSER_LLM_ENABLED: "true"
       BELEGPARSER_LLM_PROVIDER: openai
-      BELEGPARSER_LLM_MODEL: phi-4
-      BELEGPARSER_LLM_API_URL: "http://192.168.2.236:1234/v1"
-      BELEGPARSER_LLM_API_KEY: "lm-studio"
+      BELEGPARSER_LLM_MODEL: phi4
+      BELEGPARSER_LLM_API_URL: "http://192.168.2.236:11434/v1"
+      # Ollama prüft keinen Key — beliebiger nicht-leerer Wert genügt dem Client.
+      BELEGPARSER_LLM_API_KEY: "ollama"
     volumes:
       # Receipts, attachments, generated PDFs — persistent on CephFS
       - /mnt/cephfs/swarm-state/stack-reisekosten/uploads:/app/uploads
