@@ -58,7 +58,12 @@ services:
     # prep/openarchiver/REVERT-RUNBOOK.md. Die lokale Spalte
     # email_attachments.extraction_status bleibt als harmloses Orphan stehen.
     # Nach Deploy: einmaliger Voll-Reindex (hasAttachments/fromName-Felder).
-    image: logiclabshq/open-archiver:v0.5.2
+    # v0.5.2 -> v0.6.0 (Wartungsfenster 2026-08-30, Phase A): keine Breaking
+    # Changes, neue Env-Vars alle optional; bringt Indexing-Robustheit
+    # (Batch-Verkleinerung, Memory-Guard, Worker-Restart) + Orphan-Index-
+    # Cleanup. Entrypoint-Kontrakt (docker-entrypoint.sh, pnpm
+    # docker-start:oss, db:migrate) im v0.6.0-Tree verifiziert unveraendert.
+    image: logiclabshq/open-archiver:v0.6.0
     hostname: open-archiver
     # Eigener Wrapper lädt Docker-Secrets in ENV (die App kennt keine *_FILE-
     # Konvention), dann exec auf das image-eigene Entrypoint, das pnpm db:migrate
@@ -217,7 +222,12 @@ services:
   # aktualisiert (kein paralleler 2. Writer auf data.ms). Bei Index-Korruption
   # ist kein Datenverlust: re-index aus der DB/den Mails (s. README).
   openarchiver-meili:
-    image: getmeili/meilisearch:v1.15
+    # v1.15 -> v1.53.1 (Phase B 2026-08-30): Dumpless-Upgrade via --upgrade-db
+    # (stabil seit 1.51; data.ms stammt von 1.15 >= 1.12 -> Ein-Sprung ok).
+    # RBD-Snapshot pre-v153 liegt (Upgrade ist NICHT atomar). Upstream pinnt
+    # selbst v1.38 — 1.53 ist bewusst jenseits des upstream-getesteten Rahmens
+    # (SDK ^0.51 ist API-abwaertskompatibel, Risiko-Check 2026-08-30).
+    image: getmeili/meilisearch:v1.53.1
     hostname: openarchiver-meili
     # Master-Key aus Docker-Secret lesen ($$ → $ zur Laufzeit; Pattern wie
     # pg-backup-stack.yml). production-mode erzwingt den Key.
@@ -225,6 +235,10 @@ services:
     command:
       # --db-path zeigt auf ein Unterverzeichnis (nicht den Mount-Root), sonst
       # verwirrt das ext4-lost+found Meilisearch ("failed to infer DB version").
+      # data.ms wurde am 2026-08-30 via --upgrade-db (temporaer gesetzt) von
+      # v1.15.2 auf v1.53.1 konvertiert (upgradeDatabase-Task succeeded;
+      # RBD-Snapshot pre-v153 als Rollback-Anker). Das Flag gehoert NICHT
+      # dauerhaft hierher — sonst upgraded jeder Image-Bump die DB implizit.
       - 'exec meilisearch --master-key "$$(cat /run/secrets/openarchiver_meili_master_key)" --env production --db-path /meili_data/data.ms --http-addr 0.0.0.0:7700'
     secrets:
       - openarchiver_meili_master_key
@@ -317,7 +331,12 @@ services:
       update_config:
         parallelism: 1
         delay: 10s
-        order: start-first
+        # stop-first PFLICHT (2026-08-30): geteiltes CephFS-/data mit
+        # appendonly-AOF — bei start-first liest die neue Instanz das
+        # incr-AOF, waehrend die alte schreibt ("Bad file format" -> Exit 1).
+        # Exakt der immich-redis-Incident vom selben Tag; Single-Writer-
+        # Datenpfad = stop-first (wie meili/flock-Regel).
+        order: stop-first
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
