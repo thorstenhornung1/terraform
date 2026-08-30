@@ -517,7 +517,11 @@ services:
   #   Das Passwort kommt per file://-Praefix direkt aus dem Docker Secret —
   #   UnPoller unterstuetzt das nativ, es braucht keinen Entrypoint-Wrapper.
   unpoller:
-    image: ghcr.io/unpoller/unpoller:v4.0.1
+    # v4.0.1 -> v5.1.0 (Audit 30.08.): Major ist fuer uns verhaltensneutral —
+    # der 60s-Hintergrund-Refresh existiert seit v3.5, alle 16 von uns
+    # genutzten unpoller_*-Metriken + Join-Labels (PoE-Dashboard) bleiben
+    # identisch (Compare v4.0.1...v5.1.0: nur unifi-Lib-Bump + Protect-Opt-in).
+    image: ghcr.io/unpoller/unpoller:v5.1.0
     hostname: unpoller
     environment:
       UP_UNIFI_DEFAULT_URL: "https://192.168.2.1"
@@ -701,7 +705,10 @@ services:
   # DNS-Wunsch (nur durch Menschen): loki.hornung-bn.de → 192.168.4.40/41/42.
 
   alloy:
-    image: grafana/alloy:v1.18.1
+    # 1.18.1 -> 1.19.2 (Audit 30.08.): Breaking Changes von 1.19.0 betreffen
+    # nur prometheus.operator.* (K8s) und otelcol.* — unsere alloy-config.conf
+    # nutzt ausschliesslich loki.source.syslog/loki.relabel/loki.write.
+    image: grafana/alloy:v1.19.2
     hostname: alloy
     command:
       - run

@@ -8,7 +8,11 @@ version: "3.8"
 
 services:
   docker-socket-proxy:
-    image: tecnativa/docker-socket-proxy:v0.4.2
+    # v0.4.2 -> v0.5.0 (Audit 30.08.): Diff = HAProxy-Base 3.2.4->3.4.2,
+    # zwei NEUE default-aus ACLs (ALLOW_PAUSE/UNPAUSE), BIND_CONFIG-Override
+    # (bei uns ungesetzt -> alter Default). Unsere Flags unveraendert gueltig.
+    # Consumer: Traefik-Swarm-Provider + swarm-exporter — nach Deploy pruefen.
+    image: tecnativa/docker-socket-proxy:v0.5.0
     environment:
       CONTAINERS: "1"
       SERVICES: "1"
