@@ -75,7 +75,7 @@ services:
       LANG: de_DE.UTF-8
       LC_ALL: de_DE.UTF-8
       TZ: Europe/Berlin
-      # belegparser 0.5.x LLM backend — Ollama auf dem Mac Studio (VLAN 2,
+      # belegparser LLM backend — Ollama auf dem Mac Studio (VLAN 2,
       # OpenAI-kompatibles /v1; dieselbe Instanz wie LightRAG, phi4 + bge-m3
       # via KEEP_ALIVE=-1 / MAX_LOADED_MODELS=2 gepinnt). Routing
       # VLAN 4 → VLAN 2 is set at UDM-Pro. Feature-flagged so the consumer
@@ -92,15 +92,26 @@ services:
       # User-Material (Belege/PDFs der aufrufenden App), nicht LLM-State.
       # Maximal Debug-Output landet in container-local /tmp (ephemer).
       #
-      # Wired by swarm-stacks#54; consumed by RKA#222 after wheel-bump
-      # to belegparser 0.5.x. Until then, existing code ignores these
-      # vars (no-op for the current v2.8.x image).
+      # Env-Contract seit belegparser 0.8.x: Die LIBRARY liest diese Vars
+      # SELBST aus der Prozess-Umgebung (BELEGPARSER_LLM_ENDPOINT/_MODEL/
+      # _API_KEY/_TIMEOUT). Die frueheren _API_URL/_PROVIDER waren tote
+      # Vars — die Library hat sie nie gelesen — und sind entfernt
+      # (2026-08-30, Contract-Fix RKA PR #398). Wirksam wird der LLM-
+      # Fallback erst mit dem Image-Release nach PR #398: bis v2.11.0
+      # fehlte das openai-Paket im Image (stiller [LLM_UNAVAILABLE]-Skip).
       BELEGPARSER_LLM_ENABLED: "true"
-      BELEGPARSER_LLM_PROVIDER: openai
+      BELEGPARSER_LLM_ENDPOINT: "http://192.168.2.236:11434/v1"
       BELEGPARSER_LLM_MODEL: phi4
-      BELEGPARSER_LLM_API_URL: "http://192.168.2.236:11434/v1"
-      # Ollama prüft keinen Key — beliebiger nicht-leerer Wert genügt dem Client.
+      # Ollama prueft keinen Key — aber NIE auf Leerstring setzen (openai>=2
+      # wirft dann bereits im Client-Konstruktor). Nicht-leerer Dummy genuegt.
       BELEGPARSER_LLM_API_KEY: "ollama"
+      # PER-REQUEST-Timeout des openai-Clients (NICHT Gesamt-Parse: der
+      # ~55-s-Nachweis-Lauf verteilte sich auf mehrere Requests und lief
+      # bereits mit dem 30-s-Default durch). 90 s gibt langsamen Einzel-
+      # Requests Headroom (phi4 auf der mit LightRAG geteilten M1-GPU),
+      # bleibt aber unter dem Gunicorn-Timeout (120 s, gthread) — sauberes
+      # [LLM_CALL_FAILED]-Degrade statt hartem Worker-Kill.
+      BELEGPARSER_LLM_TIMEOUT: "90"
     volumes:
       # Receipts, attachments, generated PDFs — persistent on CephFS
       - /mnt/cephfs/swarm-state/stack-reisekosten/uploads:/app/uploads
