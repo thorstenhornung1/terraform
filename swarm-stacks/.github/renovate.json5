@@ -1,0 +1,79 @@
+// =============================================================================
+// Renovate — Image-Tag-Updates fuer die Stack-YAMLs (stacks/**/*-stack.yml)
+// =============================================================================
+// Schliesst die in dependabot.yml dokumentierte Luecke: Dependabot scannt nur
+// Dockerfile-FROM-Zeilen und GitHub-Actions, NICHT die image:-Tags der
+// Compose-/Stack-Dateien. Renovate uebernimmt genau diese; Dependabot bleibt
+// unveraendert fuer Actions + Dockerfiles zustaendig (keine Doppel-PRs, da
+// disjunkte Manager).
+//
+// Ausfuehrung: self-hosted via .github/workflows/renovate.yml (Cron Montag
+// frueh, versetzt zu Dependabot am Mittwoch) — kein Mend-App-Zugriff noetig.
+// Flow: Renovate-PR -> Review -> Merge auf main -> deploy-stacks.yml deployt.
+// Rollback = git revert. Das Dependency-Dashboard-Issue ist die staendige
+// "Was ist outdated?"-Uebersicht.
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+    ':timezone(Europe/Berlin)',
+    ':semanticCommits',
+    ':semanticCommitTypeAll(chore)',
+  ],
+  // NUR der docker-compose-Manager — alles andere (pip, gha, dockerfile)
+  // gehoert Dependabot bzw. den Sibling-Repos.
+  enabledManagers: ['docker-compose'],
+  'docker-compose': {
+    // Unsere Stacks heissen einheitlich *-stack.yml; dns-external.yml,
+    // Dashboards (JSON) und prometheus-scrape.yml sind KEINE Compose-Dateien.
+    managerFilePatterns: ['/^stacks/.*-stack\\.ya?ml$/'],
+  },
+  dependencyDashboard: true,
+  labels: ['dependencies', 'renovate'],
+  prConcurrentLimit: 5,
+  prHourlyLimit: 3,
+  packageRules: [
+    {
+      description: 'Eigene Images: bumpt die release-please/notify-Bot-Pipeline — Renovate haelt die Finger davon',
+      matchPackageNames: ['ghcr.io/thorstenhornung1/**'],
+      enabled: false,
+    },
+    {
+      description: 'Taiga: :latest-Pins bewusst (Upstream im Wartungsmodus, Exit-Strategie offen)',
+      matchPackageNames: ['taigaio/**'],
+      enabled: false,
+    },
+    {
+      description: 'LightRAG: Digest bewusst gepinnt (Embedding-/Schema-Lock, pgvector-Index) — Upgrade ist ein Projektentscheid, kein Dep-Bump (erster Lauf schlug blind latest vor, PR #134)',
+      matchPackageNames: ['ghcr.io/hkuds/lightrag'],
+      enabled: false,
+    },
+    {
+      description: 'n8n: 2.37.x ist der next-Kanal — Docker-Tags unterscheiden stable/next nicht. 10 Tage Reifezeit heisst praktisch: latest ist nachgezogen (erster Lauf schlug 2.37.4 vor, PR #135)',
+      matchPackageNames: ['docker.n8n.io/n8nio/n8n'],
+      minimumReleaseAge: '10 days',
+    },
+    {
+      description: 'Meilisearch: Index gehoert Open Archiver — Versionssprung braucht --upgrade-db + Reindex auf dem meili-Node, nie automatisch',
+      matchPackageNames: ['getmeili/meilisearch'],
+      dependencyDashboardApproval: true,
+    },
+    {
+      description: 'Majors nur nach explizitem Haken im Dependency Dashboard (Breaking-Review Pflicht)',
+      matchUpdateTypes: ['major'],
+      dependencyDashboardApproval: true,
+      labels: ['dependencies', 'renovate', 'major'],
+    },
+    {
+      description: 'Monitoring-Stack als ein Wochen-PR buendeln',
+      matchFileNames: ['stacks/monitoring/**'],
+      matchUpdateTypes: ['minor', 'patch', 'digest'],
+      groupName: 'monitoring-stack',
+    },
+    {
+      description: 'Floating-Tags auf Digests pinnen — systematisches Gegenmittel zum "CVE-Fix ist da, aber niemand re-pullt"-Problem (Valkey-Vorfall 2026-08-30)',
+      matchPackageNames: ['valkey/valkey', 'haproxy', 'nginx'],
+      pinDigests: true,
+    },
+  ],
+}

@@ -57,7 +57,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          fetch-depth: 2  # Need parent commit for diff
+          # Volle Historie: Der Diff laeuft ueber die gesamte Push-Range
+          # (event.before..sha), nicht nur den letzten Commit — mit depth 2
+          # waere die Basis eines Mehr-Commit-Pushes nicht im Clone.
+          fetch-depth: 0
 
       - name: Connect to Tailscale
         # Skipped on the self-hosted homelab runner — it is already inside
@@ -193,7 +196,17 @@ jobs:
             echo "trigger=manual" >> "$GITHUB_OUTPUT"
             echo "Manual dispatch — will redeploy all configured stacks"
           else
-            CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'stacks/' || true)
+            # Push-RANGE diffen, nicht nur den letzten Commit: Ein Push mit
+            # mehreren Commits deployte sonst nur die Stacks des LETZTEN
+            # Commits (Vorfall 2026-08-30: vaultwarden+taiga blieben stehen,
+            # nur wallos [Commit 3/3] wurde deployt).
+            BEFORE="${{ github.event.before }}"
+            if [ -n "$BEFORE" ] && git cat-file -e "$BEFORE" 2>/dev/null; then
+              CHANGED=$(git diff --name-only "$BEFORE" HEAD -- 'stacks/' || true)
+            else
+              # Force-Push / unbekannte Basis: konservativer Fallback
+              CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'stacks/' || true)
+            fi
             echo "changed<<EOF" >> "$GITHUB_OUTPUT"
             echo "$CHANGED" >> "$GITHUB_OUTPUT"
             echo "EOF" >> "$GITHUB_OUTPUT"

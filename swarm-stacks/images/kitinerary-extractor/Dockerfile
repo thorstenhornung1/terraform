@@ -13,26 +13,27 @@
 # --security-opt=no-new-privileges).
 # =============================================================================
 
-# Pin: multi-arch Index-Digest von debian:bookworm-slim (2026-05-18 Build).
-# Refresh: docker buildx imagetools inspect debian:bookworm-slim --format '{{.Manifest.Digest}}'
+# Pin: multi-arch Index-Digest von debian:trixie-slim (abgerufen 2026-08-30).
+# Refresh: docker buildx imagetools inspect debian:trixie-slim --format '{{.Manifest.Digest}}'
 # Im GitOps wird dieser Pin periodisch (z.B. monatlich) refreshed.
-FROM debian:bookworm-slim@sha256:96e378d7e6531ac9a15ad505478fcc2e69f371b10f5cdf87857c4b8188404716
+# bookworm -> trixie (2026-08-30, belegparser e201eb0): kitinerary 22.12.3
+# (KF5, Dez 2022) -> 24.12.3 (KF6) — zwei Jahre neuere Extraktor-Skripte
+# fuer die Lodging-EML-Parser (booking.com/Hotels/DB-Layouts 2023/24).
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 
 # Reproduzierbares apt-install: keine recommends, keine suggests, keine cache.
-# Debian-Paket heisst `libkpimitinerary-bin` (verifiziert 2026-05-30 gegen
-# bookworm-Paketindex: das ehemals vermutete `kitinerary-extractor`-Paket
-# existiert in bookworm nicht). Das Paket liefert das Binary nach
-# /usr/lib/x86_64-linux-gnu/libexec/kf5/kitinerary-extractor -- da KF5
+# Trixie-Paket heisst `libkitinerary-bin` (KF6-Rename; verifiziert 2026-08-30
+# gegen den trixie-Paketindex — in bookworm hiess es `libkpimitinerary-bin`).
+# Das Paket liefert das Binary nach
+# /usr/lib/x86_64-linux-gnu/libexec/kf6/kitinerary-extractor -- da das
 # libexec absichtlich NICHT im PATH ist, setzen wir einen Symlink in
 # /usr/local/bin damit ENTRYPOINT + Caller-Aufrufe wie gewohnt kurz bleiben.
-# In trixie heisst das Paket `libkitinerary-bin` (KF6-Rename) -- bei
-# Base-Image-Bump auf trixie hier mit anpassen.
 RUN set -eux \
     && apt-get update \
     && apt-get install -y --no-install-recommends --no-install-suggests \
-        libkpimitinerary-bin \
+        libkitinerary-bin \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
-    && ln -s /usr/lib/x86_64-linux-gnu/libexec/kf5/kitinerary-extractor \
+    && ln -s /usr/lib/x86_64-linux-gnu/libexec/kf6/kitinerary-extractor \
              /usr/local/bin/kitinerary-extractor \
     && useradd --system --no-create-home --shell /usr/sbin/nologin kitinerary
 

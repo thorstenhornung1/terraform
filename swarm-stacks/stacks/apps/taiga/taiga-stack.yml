@@ -100,7 +100,7 @@ services:
           memory: 1G
         reservations:
           cpus: '0.2'
-          memory: 256M
+          memory: 512M
       restart_policy:
         condition: any
         delay: 10s
@@ -195,7 +195,7 @@ services:
           memory: 1G
         reservations:
           cpus: '0.2'
-          memory: 256M
+          memory: 64M
       restart_policy:
         condition: any
         delay: 10s
@@ -390,8 +390,11 @@ services:
   # ===========================================================================
   # RABBITMQ (Internal Message Broker)
   # ===========================================================================
+  # Redeploy-Trigger 2026-08-30 (2. Anlauf): Der 4.3.5-Bump kam nie an —
+  # CI-Range-Bug (27adb7b), Dispatch brach an immich ab, und der Range-Run
+  # 33328904719 scheiterte am immich-redis-AOF (inzwischen repariert).
   rabbitmq:
-    image: rabbitmq:4.3.4-alpine
+    image: rabbitmq:4.3.5-alpine
     hostname: taiga-rabbitmq
     networks:
       taiga-internal:

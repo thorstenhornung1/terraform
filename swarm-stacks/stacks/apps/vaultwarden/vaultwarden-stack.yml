@@ -20,8 +20,12 @@
 version: '3.8'
 
 services:
+  # Redeploy-Trigger 2026-08-30: Der 1.37.2-Bump (2dd3a2b) kam nie in
+  # Produktion an — der CI-Diff sah bei Mehr-Commit-Pushes nur den letzten
+  # Commit (gefixt in 27adb7b), und die Dispatch-Reconciliation brach an
+  # immich ab. Diese Kommentarzeile stoesst den Deploy erneut an.
   vaultwarden:
-    image: vaultwarden/server:1.37.1
+    image: vaultwarden/server:1.37.2
     hostname: vaultwarden
     networks:
       - traefik_public

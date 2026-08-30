@@ -37,7 +37,7 @@ version: '3.8'
 
 services:
   wallos:
-    image: bellamy/wallos:5.4.4
+    image: bellamy/wallos:5.4.5
     hostname: wallos
     networks:
       - traefik_public
@@ -203,7 +203,7 @@ services:
   # mit. Kein Fremd-Image, kein `apk add` zur Laufzeit (das bräuchte Internet
   # bei jedem Neustart und wäre der fragilste Teil der Backup-Kette).
   wallos-backup:
-    image: bellamy/wallos:5.4.4
+    image: bellamy/wallos:5.4.5
     hostname: wallos-backup
     # startup.sh MUSS umgangen werden — sonst liefe hier ein zweiter nginx +
     # crond auf derselben SQLite-Datei.

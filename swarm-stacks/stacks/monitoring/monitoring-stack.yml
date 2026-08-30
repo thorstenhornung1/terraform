@@ -50,7 +50,7 @@ services:
   # Port 8428 published for Proxmox metric ingestion from outside Swarm.
 
   victoriametrics:
-    image: victoriametrics/victoria-metrics:v1.149.0
+    image: victoriametrics/victoria-metrics:v1.150.0
     hostname: victoriametrics
     command:
       - -storageDataPath=/victoria-metrics-data
@@ -108,7 +108,7 @@ services:
   # WAL buffer on CephFS ensures no data loss during VM restarts.
 
   vmagent:
-    image: victoriametrics/vmagent:v1.149.0
+    image: victoriametrics/vmagent:v1.150.0
     hostname: vmagent
     command:
       - -promscrape.config=/etc/vmagent/prometheus-scrape.yml
@@ -220,7 +220,7 @@ services:
     # UI-Dashboards in grafana.db vorher pruefen, siehe prep/job7-grafana/TESTPLAN).
     # VOR Deploy: grafana.db-Backup bei gestopptem Container (RBD /mnt/rbd/grafana),
     # Downgrade 12->11 ist NUR via Backup-Restore moeglich (irreversible Schema-Migration).
-    image: grafana/grafana:12.4.8
+    image: grafana/grafana:12.4.9
     hostname: grafana
     entrypoint: ["/bin/sh", "/etc/grafana/grafana-entrypoint.sh"]
     environment:
@@ -638,7 +638,7 @@ services:
   # RAM-Placement: infra-2 hat nur 3,6 GiB → infra_node != 2.
 
   loki:
-    image: grafana/loki:3.7.6
+    image: grafana/loki:3.7.7
     hostname: loki
     command:
       - -config.file=/etc/loki/loki-config.yml

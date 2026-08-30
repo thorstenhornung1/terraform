@@ -237,7 +237,15 @@ services:
       update_config:
         parallelism: 1
         delay: 10s
-        order: start-first
+        # stop-first PFLICHT (2026-08-30): /data ist ein geteiltes CephFS-
+        # Verzeichnis mit appendonly-AOF. Bei start-first liest die NEUE
+        # Instanz das incr-AOF, waehrend die ALTE noch hineinschreibt —
+        # "Bad file format reading the append only file" -> Exit 1 ->
+        # Update paused (auf allen 3 Nodes reproduziert; dass Updates
+        # frueher durchliefen, war Timing-Glueck bei ruhendem Tail).
+        # Gleiche Klasse wie die flock-Regel: Single-Writer-Datenpfad
+        # vertraegt keine zwei Instanzen.
+        order: stop-first
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
