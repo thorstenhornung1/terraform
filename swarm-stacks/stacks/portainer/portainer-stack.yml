@@ -22,7 +22,7 @@ services:
   # The agent provides Docker API access from each node to the central server.
   # Memory footprint: ~20MB per node
   agent:
-    image: portainer/agent:2.39.5
+    image: portainer/agent:2.39.7
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/data/docker/volumes:/var/lib/docker/volumes  # data-root=/srv/data/docker (Node-Disk-Layout); Legacy-Pfad fehlt auf infra-3, war auf infra-1/2 leer
@@ -52,7 +52,7 @@ services:
   # Central management server with web UI.
   # BoltDB stored on CephFS — available on all 3 infra nodes simultaneously.
   portainer:
-    image: portainer/portainer-ce:2.39.5
+    image: portainer/portainer-ce:2.39.7
     command: -H tcp://tasks.agent:9001 --tlsskipverify
     ports:
       - "9443:9443"   # HTTPS Web UI
@@ -93,7 +93,7 @@ services:
           memory: 512M
         reservations:
           cpus: '0.25'
-          memory: 256M
+          memory: 64M
       update_config:
         parallelism: 1
         delay: 10s

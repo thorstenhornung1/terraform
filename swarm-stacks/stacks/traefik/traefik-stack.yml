@@ -38,7 +38,9 @@ services:
         condition: on-failure
 
   traefik:
-    image: traefik:v3.6.25
+    # v3.6 ist seit 2026-08-16 EOL (kein Security-Support mehr) — 3.7 ist
+    # der gepflegte Minor-Zweig; 3.6.25 -> 3.7.12 schliesst 7 Advisories.
+    image: traefik:v3.7.12
     secrets:
       - traefik_dns_api_token
       - traefik_dashboard_auth

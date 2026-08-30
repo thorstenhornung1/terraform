@@ -46,6 +46,17 @@ http:
         scheme: https
         permanent: true
 
+    # Generische HTTP->HTTPS-Middleware, referenziert als https-redirect@file
+    # aus Stack-Labels (reisekosten, reisekosten-steuer). Sie existierte NIE
+    # in Git — sie lag als handangelegte Datei im alten CephFS-dynamic-
+    # Verzeichnis und ging beim Zertifikats-Umbau 2026-08-23 verloren
+    # (Port-80-Router liefen seither auf 404, von HSTS kaschiert; sichtbar
+    # geworden beim Traefik-3.7-Neustart am 2026-08-30). Ab jetzt versioniert.
+    https-redirect:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
   services:
     dns-webui:
       loadBalancer:

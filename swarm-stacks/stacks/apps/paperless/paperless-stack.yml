@@ -201,7 +201,7 @@ services:
           # infra-2 0,41 GB, infra-3 4,76 GB. Gewinnt ein Node spaeter
           # Kapazitaet, wird er automatisch wieder Kandidat.
           cpus: '0.5'
-          memory: 2560M
+          memory: 1536M
       restart_policy:
         condition: any
         delay: 10s
@@ -284,7 +284,12 @@ services:
       start_period: 30s
 
   gotenberg:
-    image: gotenberg/gotenberg:8.17
+    # 8.17 -> 8.36.0 (Update-Audit 2026-08-30): 19 Minors mit dichter
+    # Security-Historie (SSRF-Haertung 8.32, LibreOffice-Local-File-Read
+    # 8.34, Zip-Slip 8.35, WebSocket-Outbound-Bypass 8.36). Die SSRF-
+    # Default-Aenderung 8.31/8.32 ist hier unkritisch — chromium-allow-list
+    # ist bereits auf file:///tmp/.* beschraenkt.
+    image: gotenberg/gotenberg:8.36.0
     hostname: gotenberg
     command:
       - "gotenberg"
@@ -305,7 +310,7 @@ services:
           memory: 1G
         reservations:
           cpus: '0.1'
-          memory: 256M
+          memory: 64M
       restart_policy:
         condition: any
         delay: 5s
