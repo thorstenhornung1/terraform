@@ -2,6 +2,11 @@
 # ============================================================================
 # postgres-prod VM Cloud-Init — Standalone PostgreSQL 16 + pgvector
 # ============================================================================
+# ssh_deletekeys false (2026-07-19): PVE ändert die cloud-init instance-id bei
+# Config-Änderungen -> voller cloud-init-Re-Run beim nächsten Boot -> Default
+# ssh_deletekeys=true ROTIERTE die Host-Keys bei jedem solchen Boot (zwei
+# Host-Key-Warnungen in einer Woche). Keys bleiben jetzt stabil.
+ssh_deletekeys: false
 # Patroni-Ablösung: eine PG-VM auf tank (ZFS) + Proxmox-HA. KEIN Docker.
 # Standard-Pattern: APT-Proxy, LDAP/SSSD, rsyslog→Loki, qemu-guest-agent.
 # DB-User/-Daten + feingranulares pg_hba kommen beim Cutover (pro App).
@@ -275,7 +280,16 @@ runcmd:
   # Voraussetzung: Synology-NFS-Export /volume1/backup-postgres für diese VM-IP (Map all users to admin).
   - mkdir -p /mnt/pg-backup /var/spool/pgbackrest /var/log/pgbackrest
   - chown postgres:postgres /var/spool/pgbackrest /var/log/pgbackrest
-  - grep -q /mnt/pg-backup /etc/fstab || echo "192.168.2.3:/volume1/backup-postgres /mnt/pg-backup nfs4 _netdev,nofail,x-systemd.device-timeout=30,soft,timeo=100,retrans=3,noatime 0 0" >> /etc/fstab
+  # x-systemd.automount (Haertung nach Incident 2026-08-31): "nofail" liess
+  # einen Boot STILL ohne den Mount durchlaufen -> archive-push failte ab da
+  # bei JEDEM WAL-Segment -> Postgres hortete 18 GB WAL bis zum Disk-full-
+  # Ausfall (der Archiver-Fehler war der einzige, stumme Zeuge). Mit
+  # automount mountet der erste Zugriff (archive-push/Backup-Timer) das
+  # Repo selbst nach — die Landmine kann nicht mehr scharf werden.
+  # ZUSATZ-PFLICHT nach VM-Rebuild: einmalig "pgbackrest --stanza=main
+  # stanza-create" als postgres ausfuehren — ohne Stanza archiviert NIE
+  # etwas (pg_stat_archiver.archived_count MUSS nach Minuten steigen!).
+  - grep -q /mnt/pg-backup /etc/fstab || echo "192.168.2.3:/volume1/backup-postgres /mnt/pg-backup nfs4 _netdev,nofail,x-systemd.automount,x-systemd.device-timeout=30,soft,timeo=100,retrans=3,noatime 0 0" >> /etc/fstab
   - systemctl daemon-reload
   - mount /mnt/pg-backup || true
   - mkdir -p /mnt/pg-backup/repo || true

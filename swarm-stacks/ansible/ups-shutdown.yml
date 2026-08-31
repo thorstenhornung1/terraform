@@ -143,7 +143,13 @@
           POLLFREQ 5
           POLLFREQALERT 5
           HOSTSYNC 15
-          DEADTIME 15
+          # DEADTIME 15 -> 300 (Incident 2026-08-31): Ein ~85s-Netz-Blip zum
+          # NUT-Master (Switch/Synology kurz weg) liess upsmon nach DEADTIME
+          # den Node herunterfahren — NUR pve02 traf es, der unsaubere Reboot
+          # riss mon+MDS mit (CephFS-Eviction-Kaskade). 300 s ueberlebt
+          # Switch-Reboots/Blips; echte Stromausfaelle meldet der Master per
+          # FSD ueber die (per USV versorgte) Netzstrecke weiterhin sofort.
+          DEADTIME 300
           RBWARNTIME 43200
           NOCOMMWARNTIME 300
           FINALDELAY 5

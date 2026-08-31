@@ -1449,6 +1449,82 @@ groups:
   interval: 60s
   rules:
 
+      # --- postgres-prod Root-Disk (Incident 2026-08-31: 18-GB-WAL-Stau durch
+      #     nie-initialisiertes pgbackrest-Archiving fuellte die 38-GB-Platte
+      #     zu 100% -> PG tot -> ALLE PG-Apps im Crashloop. Die Metrik war die
+      #     ganze Zeit da (job postgres-prod, node_exporter) — es fehlte NUR
+      #     diese Regel. Query liefert gesund Werte -> noData=Alerting ok. ---
+  - uid: postgres-prod-disk-low
+    title: postgres-prod Root-Disk wird knapp
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 900
+        to: 0
+      datasourceUid: victoriametrics
+      model:
+        expr: |
+          min_over_time(node_filesystem_avail_bytes{job="postgres-prod",mountpoint="/",fstype="ext4"}[10m])
+        instant: true
+        refId: A
+    - refId: C
+      relativeTimeRange:
+        from: 900
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: A
+        conditions:
+        - evaluator:
+            type: lt
+            params: [8589934592]             # 8 GiB
+        refId: C
+    for: 15m
+    noDataState: Alerting
+    execErrState: Alerting
+    labels:
+      severity: warning
+    annotations:
+      summary: "postgres-prod: unter 8 GB frei auf / — WAL-Stau pruefen"
+      description: "Erste Pruefung IMMER: WAL-Stau? 'qm guest exec 4600 -- su - postgres -c \"psql -c \\\"SELECT archived_count, failed_count, last_failed_wal FROM pg_stat_archiver;\\\"\"' und 'du -sh /var/lib/postgresql/16/main/pg_wal'. failed_count steigend + archived stagnierend = archive_command kaputt -> Postgres hortet JEDES Segment bis zum Vollstand (Incident 2026-08-31, 18 GB). Danach: Log-/Basegroesse. noData = Exporter/VM-Problem, ebenfalls ansehen."
+  - uid: postgres-prod-disk-critical
+    title: postgres-prod Root-Disk kritisch
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 900
+        to: 0
+      datasourceUid: victoriametrics
+      model:
+        expr: |
+          min_over_time(node_filesystem_avail_bytes{job="postgres-prod",mountpoint="/",fstype="ext4"}[10m])
+        instant: true
+        refId: A
+    - refId: C
+      relativeTimeRange:
+        from: 900
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: A
+        conditions:
+        - evaluator:
+            type: lt
+            params: [3221225472]             # 3 GiB
+        refId: C
+    for: 5m
+    noDataState: Alerting
+    execErrState: Alerting
+    labels:
+      severity: critical
+    annotations:
+      summary: "postgres-prod: unter 3 GB frei — PG stirbt bei 0, sofort handeln"
+      description: "Sofort Platz schaffen (apt-get clean, journalctl --vacuum-size=100M) und WAL-Ursache fixen — bei kaputtem Archiving als Notbremse: ALTER SYSTEM SET archive_command='/bin/true' + pg_reload_conf() + CHECKPOINT (gibt gehortete Segmente frei; Runbook = Incident 2026-08-31). Läuft die Platte auf 0, crasht PostgreSQL und reisst alle PG-Apps in den Crashloop."
+
       # --- postgres-prod postmaster restart-loop (Crash-Loop; portiert aus alter PostgreSQL-HA-Gruppe 2026-07-06) ---
   - uid: postgres-prod-crash-loop
     title: postgres-prod postmaster restart loop
