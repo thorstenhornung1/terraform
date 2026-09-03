@@ -42,8 +42,16 @@ entries:
       invalidation_flow: !Find [authentik_flows.flow, [slug, default-invalidation-flow]]
 
   # Test (test.hornung-bn.de)
+  # 2026-09-03: Back-Channel-Logout aktiviert (Testplan 7.4, nur Test-Provider).
+  # Authentik POSTet bei Session-Ende (Logout-Flow, Admin-Session-Kill,
+  # Konto-Deaktivierung) ein signiertes logout_token an die logout_uri.
+  # Wallos prueft Signatur/iss/aud/iat<=300s und verlangt sub oder sid
+  # (includes/oidc/backchannel.php) — sid kommt aus dem ID-Token und ist nur
+  # gesetzt, wenn das Token an eine Browser-Session gebunden ist.
   - identifiers:
       name: Provider for wallos-test
     model: authentik_providers_oauth2.oauth2provider
     attrs:
       invalidation_flow: !Find [authentik_flows.flow, [slug, default-invalidation-flow]]
+      logout_uri: https://test.hornung-bn.de/backchannel-logout.php
+      logout_method: backchannel

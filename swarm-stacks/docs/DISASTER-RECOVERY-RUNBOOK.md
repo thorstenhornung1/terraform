@@ -836,13 +836,12 @@ der Immich-Integration für Details.
 
 ### Problem: Uptime-Kuma kommt nicht hoch
 
-Known Tech-Debt. DB-Schema-Migration von v1→v10 crasht silently auf der
-fresh-v1-DB von 2026-02-21. Beide Feb-Backup-DBs ebenfalls corrupt.
-
-Lösungsoptionen:
-- `sqlite3 .recover` auf die 621M-Backup-DB probieren
-- Fresh v2-DB starten, Monitore neu anlegen
-- v1-Image (1.23.16) pinnen und Live-Upgrade-Pfad planen
+**Stillgelegt 2026-09-03** — durch Grafana/VictoriaMetrics ersetzt (das
+Blackbox-Target war bereits am 2026-06-30 abgerüstet). Stack `uptime_kuma`
+entfernt, Daten archiviert unter
+`/mnt/cephfs/swarm-state/stack-uptime-kuma.archived-20260903/`.
+Historie und Diagnose: swarm-stacks#158 (Crash-Loop auf halb migrierter
+v1-DB — dritte SQLite-auf-CephFS-Korruption; auch die Feb-Backups corrupt).
 
 ### Problem: Kein Snapshot im PBS mehr auffindbar
 
