@@ -20,6 +20,8 @@ from taiga.auth.services import send_register_email
 from taiga.auth.services import make_auth_response_data, get_membership_by_token
 from taiga.auth.signals import user_registered as user_registered_signal
 
+import logging
+
 from . import connector
 
 PUBLIC_REGISTER_ENABLED = getattr(settings, "PUBLIC_REGISTER_ENABLED", False)
@@ -28,6 +30,9 @@ PUBLIC_REGISTER_ENABLED = getattr(settings, "PUBLIC_REGISTER_ENABLED", False)
 # begrenzt; PUBLIC_REGISTER_ENABLED wuerde auch die offene Passwort-
 # Registrierung aktivieren (swarm-stacks#164).
 OPENID_AUTO_REGISTER = getattr(settings, "OPENID_AUTO_REGISTER", False)
+# Begruessungsmail bei OIDC-Auto-Registrierung abschaltbar: Bei zentral
+# provisionierten Konten ist die Taiga-Willkommensmail meist unerwuenscht.
+OPENID_SEND_WELCOME_EMAIL = getattr(settings, "OPENID_SEND_WELCOME_EMAIL", True)
 
 
 @tx.atomic
@@ -65,7 +70,17 @@ def openid_register(
                     user=user, key="openid", value=openid_id, extra={}
                 )
 
-                send_register_email(user)
+                try:
+                    if OPENID_SEND_WELCOME_EMAIL:
+                        send_register_email(user)
+                except Exception:
+                    # Ein fehlgeschlagener Willkommens-Mail-Versand darf die
+                    # frisch angelegte Registrierung nicht zurueckrollen
+                    # (swarm-stacks#164) — nur loggen, weiterlaufen.
+                    logging.getLogger(__name__).exception(
+                        "openid auto-register: welcome email failed for "
+                        "user id=%s", user.id
+                    )
                 user_registered_signal.send(sender=user.__class__, user=user)
             else:
                 raise exc.IntegrityError(

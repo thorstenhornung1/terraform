@@ -67,6 +67,12 @@ services:
       EMAIL_PORT: "587"
       EMAIL_USE_TLS: "False"
       EMAIL_USE_SSL: "False"
+      # Leere Credentials PFLICHT: Das interne Relay kennt kein SMTP-AUTH,
+      # und die Image-Defaults ('user'/'password' in settings/config.py)
+      # erzwingen sonst einen login()-Versuch -> SMTPNotSupportedError,
+      # der u. a. die OIDC-Auto-Registrierung zurueckrollte (#164).
+      EMAIL_HOST_USER: ""
+      EMAIL_HOST_PASSWORD: ""
       DEFAULT_FROM_EMAIL: "homelab@hornung-bn.de"
       # RabbitMQ (stack-internal)
       RABBITMQ_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
@@ -81,6 +87,8 @@ services:
       # Plugin OIDC-Logins jetzt selbst (OPENID_AUTO_REGISTER); die oeffentliche
       # Passwort-Registrierung bleibt bewusst geschlossen.
       OPENID_AUTO_REGISTER: "true"
+      # Begruessungsmail aktiv (Default); fuer Testfenster auf "false" stellbar
+      OPENID_SEND_WELCOME_EMAIL: "true"
       # OpenID Connect (robrotheram plugin)
       # All OIDC endpoints use external HTTPS URL via Traefik.
       # Host header in connector.py auto-derives from AUTHORIZE_URL (redundant but harmless).
@@ -165,6 +173,12 @@ services:
       EMAIL_PORT: "587"
       EMAIL_USE_TLS: "False"
       EMAIL_USE_SSL: "False"
+      # Leere Credentials PFLICHT: Das interne Relay kennt kein SMTP-AUTH,
+      # und die Image-Defaults ('user'/'password' in settings/config.py)
+      # erzwingen sonst einen login()-Versuch -> SMTPNotSupportedError,
+      # der u. a. die OIDC-Auto-Registrierung zurueckrollte (#164).
+      EMAIL_HOST_USER: ""
+      EMAIL_HOST_PASSWORD: ""
       DEFAULT_FROM_EMAIL: "homelab@hornung-bn.de"
       # RabbitMQ
       RABBITMQ_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
@@ -176,6 +190,8 @@ services:
       ENABLE_TELEMETRY: "false"
       # Registration: siehe Kommentar bei taiga-back (OIDC-Auto-Provisionierung)
       OPENID_AUTO_REGISTER: "true"
+      # Begruessungsmail aktiv (Default); fuer Testfenster auf "false" stellbar
+      OPENID_SEND_WELCOME_EMAIL: "true"
       # Celery: allow running as root in container (Celery 5.x safety check)
       C_FORCE_ROOT: "true"
       # OpenID Connect (internal overlay URLs — see taiga-back comment)
