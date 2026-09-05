@@ -127,12 +127,23 @@ entries:
     model: authentik_providers_oauth2.scopemapping
     attrs:
       expression: |
-        return {
+        claims = {
             "name": request.user.name,
             "given_name": request.user.name,
             "preferred_username": request.user.username,
             "nickname": request.user.username,
             "groups": [group.name for group in request.user.groups.all()],
             "locale": request.user.attributes.get("settings", {}).get("locale"),
-            "picture": request.user.avatar,
         }
+        # picture NUR am userinfo-Endpunkt ausliefern: Die Upload-data-URI
+        # (~160 KB) landete sonst in access_token UND id_token — der
+        # 216-KB-Bearer-Header riss jeden userinfo-Abruf mit
+        # CURLE_SEND_ERROR (Vorfall 2026-09-05). Im userinfo-BODY sind
+        # 160 KB dagegen unkritisch, und die SPEC nennt userinfo ohnehin
+        # als primaere Referenz fuer picture.
+        try:
+            if "userinfo" in request.http_request.path:
+                claims["picture"] = request.user.avatar
+        except Exception:
+            pass
+        return claims
