@@ -127,14 +127,27 @@ entries:
     model: authentik_providers_oauth2.scopemapping
     attrs:
       expression: |
+        # given_name/family_name: Authentik kennt nur den vollen Namen.
+        # Heuristik letztes-Wort-ist-Nachname (rsplit), uebersteuert durch
+        # explizite User-Attribute given_name/family_name fuer Sonderfaelle.
+        # Fix 2026-09-05: given_name war zuvor der VOLLE Name — seit dem
+        # 5.13.0-Profil-Sync landete "Thorsten Hornung" im Vornamen-Feld.
+        # Leere Werte werden weggelassen (fehlender Claim ueberschreibt
+        # in Wallos nichts — deren 5.13.0-Regel).
+        voller_name = request.user.name or request.user.username
+        teile = voller_name.rsplit(" ", 1)
+        given = request.user.attributes.get("given_name") or teile[0]
+        family = request.user.attributes.get("family_name") or (teile[1] if len(teile) > 1 else "")
         claims = {
-            "name": request.user.name,
-            "given_name": request.user.name,
+            "name": voller_name,
+            "given_name": given,
             "preferred_username": request.user.username,
             "nickname": request.user.username,
             "groups": [group.name for group in request.user.groups.all()],
             "locale": request.user.attributes.get("settings", {}).get("locale"),
         }
+        if family:
+            claims["family_name"] = family
         # picture NUR am userinfo-Endpunkt ausliefern: Die Upload-data-URI
         # (~160 KB) landete sonst in access_token UND id_token — der
         # 216-KB-Bearer-Header riss jeden userinfo-Abruf mit

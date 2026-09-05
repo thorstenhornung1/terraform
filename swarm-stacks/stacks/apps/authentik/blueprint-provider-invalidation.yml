@@ -55,3 +55,13 @@ entries:
       invalidation_flow: !Find [authentik_flows.flow, [slug, default-invalidation-flow]]
       logout_uri: https://test.hornung-bn.de/backchannel-logout.php
       logout_method: backchannel
+      # 2026-09-05: offline_access-Mapping ergaenzt — ohne die Bindung
+      # ignoriert Authentik den angeforderten offline_access-Scope STILL
+      # und stellt kein Refresh-Token aus (Wallos 5.13.0 speicherte
+      # rt_len=0, der #144-Refresh-Flow lief nie an). M2M-Falle: Diese
+      # Liste ERSETZT die Bindungen — sie muss immer VOLLSTAENDIG sein.
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "Hornung: OpenID 'email' (verified aus Attribut)"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "Hornung: OpenID 'profile' (mit locale)"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'offline_access'"]]
