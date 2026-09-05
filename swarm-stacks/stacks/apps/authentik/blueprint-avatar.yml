@@ -48,12 +48,15 @@
 #   'avatar'/profile.avatar haengt an keiner Stage und bleibt unangetastet.
 #   BEWUSST ohne gravatar (Datenschutz): kein Mail-Hash an Drittanbieter.
 #
-# WARUM URL-TEXTFELD UND KEIN DATEI-UPLOAD
-#   Ein file-Prompt legt das Bild base64-kodiert ins User-Attribut, und
-#   request.user.avatar reicht den Wert 1:1 in den picture-Claim weiter —
-#   das id_token wuerde um Hunderte KB wachsen. Eine URL bleibt klein.
-#   (Der Media-Upload-Weg der UI ist hier ohnehin defekt, siehe
-#   blueprint-app-metadata.yml: /data/media ist Symlink, kein Mountpoint.)
+# DATEI-UPLOAD STATT URL (Betreiber-Entscheidung 2026-09-05)
+#   Der file-Prompt legt das Bild base64-kodiert ins User-Attribut — das
+#   umgeht den defekten Media-Pfad der UI (/data/media ist Symlink, kein
+#   Mountpoint, siehe blueprint-app-metadata.yml) vollstaendig.
+#   BEWUSSTER TRADEOFF: request.user.avatar reicht die data-URI 1:1 in den
+#   picture-Claim weiter; ein grosses Bild blaeht userinfo/id_token auf.
+#   Deshalb die deutliche Empfehlung im sub_text (kleines Bild, <100 KB).
+#   Der Betreiber hat das gegen die URL-Variante abgewogen und Upload
+#   gewaehlt (kein externer Hosting-Schritt fuer Familienmitglieder noetig).
 # =============================================================================
 
 version: 1
@@ -64,37 +67,33 @@ metadata:
 
 entries:
   # ---------------------------------------------------------------------------
-  # 1. Prompt-Feld: Bild-URL nach attributes.avatar
+  # 1. Prompt-Feld: Bild-Upload nach attributes.avatar
   # ---------------------------------------------------------------------------
   # field_key mit Punkt-Schreibweise wie beim Standard-Feld
   # attributes.settings.locale: Die User-Write-Stage des Flows
   # (default-user-settings-write) schreibt den Wert als verschachtelten
   # Attribut-Pfad, uebrige Attribute (email_verified etc.) bleiben erhalten.
   #
-  # initial_value (NICHT placeholder!) zeigt beim Oeffnen der Einstellungen
-  # den aktuellen Wert an — placeholder waere nur der graue Hinweistext,
-  # siehe die Verwechslungs-Warnung in blueprint-email-verification.yml.
-  # Das try/except-Muster stammt aus den vier Standard-Prompts des Flows.
+  # BEWUSST ohne initial_value: Bei einem file-Feld waere der aktuelle Wert
+  # die komplette data-URI — sie ins Formular-HTML zu rendern kostet bei
+  # jedem Oeffnen der Einstellungen Hunderte KB. Ein leeres Upload-Feld
+  # laesst den bestehenden Wert unangetastet (User-Write-Stage ueberschreibt
+  # nur uebermittelte Felder).
   - identifiers:
       name: hornung-field-avatar
     id: field-avatar
     model: authentik_stages_prompt.prompt
     attrs:
       field_key: attributes.avatar
-      label: Profilbild (URL)
-      type: text
+      label: Profilbild
+      type: file
       required: false
-      placeholder: "https://…-Bild-URL; leer = Initialen"
       sub_text: >-
-        URL zu einem eigenen Profilbild (https://…). Leer lassen =
-        automatisch generierte Initialen.
+        Eigenes Profilbild hochladen — bitte ein kleines Bild verwenden
+        (unter ~100 KB, z. B. 256×256): Es wird direkt im Konto gespeichert
+        und bei jeder Anmeldung mit uebertragen. Leer lassen = automatisch
+        generierte Initialen.
       order: 204
-      initial_value: |
-        try:
-            return user.attributes.get("avatar", "")
-        except:
-            return ''
-      initial_value_expression: true
 
   # ---------------------------------------------------------------------------
   # 2. Prompt-Stage des default-user-settings-flow: Feld anhaengen
