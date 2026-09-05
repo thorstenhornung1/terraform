@@ -12,3 +12,4 @@ if ENABLE_OPENID:
     OPENID_FILTER = os.getenv('OPENID_FILTER')
     OPENID_FILTER_FIELD = os.getenv('OPENID_FILTER_FIELD')
     OPENID_ADMIN_GROUP = os.getenv('OPENID_ADMIN_GROUP')
+    OPENID_AUTO_REGISTER = os.getenv('OPENID_AUTO_REGISTER', 'false').lower() == 'true'

@@ -76,8 +76,11 @@ services:
       EVENTS_PUSH_BACKEND_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
       # Telemetry
       ENABLE_TELEMETRY: "false"
-      # Registration: backend must allow it for OIDC auto-create
-      PUBLIC_REGISTER_ENABLED: "true"
+      # Registration: PUBLIC_REGISTER_ENABLED war tote Konfig — das Image wertet
+      # die Variable nie aus (swarm-stacks#164). Stattdessen provisioniert das
+      # Plugin OIDC-Logins jetzt selbst (OPENID_AUTO_REGISTER); die oeffentliche
+      # Passwort-Registrierung bleibt bewusst geschlossen.
+      OPENID_AUTO_REGISTER: "true"
       # OpenID Connect (robrotheram plugin)
       # All OIDC endpoints use external HTTPS URL via Traefik.
       # Host header in connector.py auto-derives from AUTHORIZE_URL (redundant but harmless).
@@ -171,8 +174,8 @@ services:
       EVENTS_PUSH_BACKEND_URL: "amqp://taiga:taiga@taiga-rabbitmq:5672/taiga"
       # Telemetry
       ENABLE_TELEMETRY: "false"
-      # Registration
-      PUBLIC_REGISTER_ENABLED: "true"
+      # Registration: siehe Kommentar bei taiga-back (OIDC-Auto-Provisionierung)
+      OPENID_AUTO_REGISTER: "true"
       # Celery: allow running as root in container (Celery 5.x safety check)
       C_FORCE_ROOT: "true"
       # OpenID Connect (internal overlay URLs — see taiga-back comment)
@@ -333,7 +336,7 @@ services:
   # TAIGA GATEWAY (Nginx Reverse Proxy)
   # ===========================================================================
   taiga-gateway:
-    image: nginx:1.30-alpine
+    image: nginx:1.31-alpine@sha256:72ba65eb42c10344912a84ff42408db7d34f2feb642204570ab8fc5ffd29f1d3
     hostname: taiga-gateway
     networks:
       - taiga-internal

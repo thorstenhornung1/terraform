@@ -23,6 +23,11 @@ from taiga.auth.signals import user_registered as user_registered_signal
 from . import connector
 
 PUBLIC_REGISTER_ENABLED = getattr(settings, "PUBLIC_REGISTER_ENABLED", False)
+# Auto-Provisionierung NUR fuer OIDC-Logins, unabhaengig von der oeffentlichen
+# Registrierung: Der Zugang ist bereits durch die Authentik-App-Gruppen
+# begrenzt; PUBLIC_REGISTER_ENABLED wuerde auch die offene Passwort-
+# Registrierung aktivieren (swarm-stacks#164).
+OPENID_AUTO_REGISTER = getattr(settings, "OPENID_AUTO_REGISTER", False)
 
 
 @tx.atomic
@@ -48,7 +53,7 @@ def openid_register(
                 user=user, key="openid", value=openid_id, extra={}
             )
         except user_model.DoesNotExist:
-            if PUBLIC_REGISTER_ENABLED:
+            if PUBLIC_REGISTER_ENABLED or OPENID_AUTO_REGISTER:
                 # Create a new user
                 username_unique = slugify_uniquely(
                     username, user_model, slugfield="username"
