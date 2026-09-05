@@ -1,0 +1,139 @@
+# =============================================================================
+# Authentik-Blueprint: Benutzer-Avatar via attributes.avatar (OIDC `picture`)
+# =============================================================================
+# SPEC 2026-09: Benutzerbilder standardkonform ueber den OIDC-Claim `picture`
+# ausliefern; Benutzer pflegen ihr Bild selbst in den User-Settings.
+#
+# WAS HIER DRIN IST — UND WAS BEWUSST NICHT
+#   1. Ein neues Prompt-Feld (field_key attributes.avatar) fuer den
+#      default-user-settings-flow: Text-Feld fuer eine Bild-URL, optional.
+#      Leer gelassen greift der Initialen-Fallback — avatars.py prueft
+#      `if avatar:`; ein leerer String faellt sauber zum naechsten Modus durch.
+#   2. Die fields-Liste der bestehenden Prompt-Stage default-user-settings,
+#      KOMPLETT ausgeschrieben: Der Blueprint-Import ERSETZT M2M-Listen, er
+#      ergaenzt sie nicht (dieselbe Falle wie property_mappings, siehe Kopf
+#      von blueprint-email-verification.yml). Die vier Standard-Prompts
+#      werden per !Find referenziert. Konsequenz: Ein spaeter in der UI
+#      angehaengtes Feld fliegt beim naechsten Import wieder raus — neue
+#      Felder gehoeren in DIESE Liste.
+#   3. `picture` fuer wallos-test: Dieser eine Provider nutzt ein EIGENES
+#      profile-Mapping (UI-angelegt, bisher nicht in Git) statt des
+#      Standard-Mappings. Das Standard-Mapping ZUSAETZLICH zu binden haette
+#      zwei Mappings mit scope_name=profile erzeugt (redundant, und die
+#      Merge-Reihenfolge der Claims ist Zufall) — stattdessen ergaenzt der
+#      Eintrag unten die Expression um `picture` und stellt das Objekt damit
+#      erstmals unter GitOps.
+#
+# NICHT enthalten — braucht es nicht:
+#   Ein picture-Mapping fuer die uebrigen acht OAuth2-Provider. Das
+#   eingebaute "authentik default OAuth Mapping: OpenID 'profile'" (managed
+#   goauthentik.io/providers/oauth2/scope-profile) liefert
+#   `"picture": request.user.avatar` bereits, und alle acht haben es
+#   gebunden (DB-verifiziert 2026-09-05: Immich, mailarchiver,
+#   paperless-oidc, Provider for Abos, Provider for Frigate Admin,
+#   Provider for Steuer, reisekosten-provider, Taiga OIDC).
+#
+# NICHT enthalten — geht deklarativ nicht:
+#   Die Instanz-Einstellung Avatars auf "attributes.avatar,initials".
+#   Das Settings-Modell (authentik_tenants.tenant) steht nicht im
+#   Blueprint-Schema (goauthentik.io/blueprints/schema.json kennt nur
+#   authentik_brands.brand, kein tenant-Modell), und die fruehere
+#   Umgebungsvariable AUTHENTIK_AVATARS existiert seit dem Umzug der
+#   Settings in die DB (2024.2) nicht mehr — sie zu setzen waere ein
+#   stiller No-Op. Es bleibt eine EINMALIGE UI-Aktion:
+#     Admin-Interface -> System -> Settings -> Avatars =
+#     "attributes.avatar,initials"
+#   Stand vorher: "attributes.profile.avatar,initials" — Ueberbleibsel eines
+#   frueheren Datei-Upload-Versuchs. Der dazu verwaiste Prompt
+#   'avatar'/profile.avatar haengt an keiner Stage und bleibt unangetastet.
+#   BEWUSST ohne gravatar (Datenschutz): kein Mail-Hash an Drittanbieter.
+#
+# WARUM URL-TEXTFELD UND KEIN DATEI-UPLOAD
+#   Ein file-Prompt legt das Bild base64-kodiert ins User-Attribut, und
+#   request.user.avatar reicht den Wert 1:1 in den picture-Claim weiter —
+#   das id_token wuerde um Hunderte KB wachsen. Eine URL bleibt klein.
+#   (Der Media-Upload-Weg der UI ist hier ohnehin defekt, siehe
+#   blueprint-app-metadata.yml: /data/media ist Symlink, kein Mountpoint.)
+# =============================================================================
+
+version: 1
+metadata:
+  name: Hornung - Benutzer-Avatar (OIDC picture)
+  labels:
+    blueprints.goauthentik.io/instantiate: "true"
+
+entries:
+  # ---------------------------------------------------------------------------
+  # 1. Prompt-Feld: Bild-URL nach attributes.avatar
+  # ---------------------------------------------------------------------------
+  # field_key mit Punkt-Schreibweise wie beim Standard-Feld
+  # attributes.settings.locale: Die User-Write-Stage des Flows
+  # (default-user-settings-write) schreibt den Wert als verschachtelten
+  # Attribut-Pfad, uebrige Attribute (email_verified etc.) bleiben erhalten.
+  #
+  # initial_value (NICHT placeholder!) zeigt beim Oeffnen der Einstellungen
+  # den aktuellen Wert an — placeholder waere nur der graue Hinweistext,
+  # siehe die Verwechslungs-Warnung in blueprint-email-verification.yml.
+  # Das try/except-Muster stammt aus den vier Standard-Prompts des Flows.
+  - identifiers:
+      name: hornung-field-avatar
+    id: field-avatar
+    model: authentik_stages_prompt.prompt
+    attrs:
+      field_key: attributes.avatar
+      label: Profilbild (URL)
+      type: text
+      required: false
+      placeholder: "https://…-Bild-URL; leer = Initialen"
+      sub_text: >-
+        URL zu einem eigenen Profilbild (https://…). Leer lassen =
+        automatisch generierte Initialen.
+      order: 204
+      initial_value: |
+        try:
+            return user.attributes.get("avatar", "")
+        except:
+            return ''
+      initial_value_expression: true
+
+  # ---------------------------------------------------------------------------
+  # 2. Prompt-Stage des default-user-settings-flow: Feld anhaengen
+  # ---------------------------------------------------------------------------
+  # Partieller Import ueber identifiers=name — aber die fields-Liste selbst
+  # wird als Ganzes gesetzt (M2M, s. Kopf). Reihenfolge im Formular kommt aus
+  # prompt.order: 200 username, 201 name, 202 email, 203 locale, 204 avatar.
+  - identifiers:
+      name: default-user-settings
+    model: authentik_stages_prompt.promptstage
+    attrs:
+      fields:
+        - !Find [authentik_stages_prompt.prompt, [name, default-user-settings-field-username]]
+        - !Find [authentik_stages_prompt.prompt, [name, default-user-settings-field-name]]
+        - !Find [authentik_stages_prompt.prompt, [name, default-user-settings-field-email]]
+        - !Find [authentik_stages_prompt.prompt, [name, default-user-settings-field-locale]]
+        - !KeyOf field-avatar
+
+  # ---------------------------------------------------------------------------
+  # 3. wallos-test: picture im eigenen profile-Mapping ergaenzen
+  # ---------------------------------------------------------------------------
+  # ⚠️ Der Name ist der UI-Anlage-Name — bei einer Umbenennung in der UI MUSS
+  # dieser identifier mitziehen, sonst legt der Blueprint ein zweites Mapping
+  # an (das zwar an keinem Provider haengt, aber Muell hinterlaesst; gleiche
+  # Warnung wie in blueprint-provider-invalidation.yml).
+  # Partieller Import: scope_name (profile) und die Provider-Bindung bleiben
+  # unberuehrt, nur die Expression wird ersetzt — identisch zur bisherigen,
+  # plus `picture`.
+  - identifiers:
+      name: "Hornung: OpenID 'profile' (mit locale)"
+    model: authentik_providers_oauth2.scopemapping
+    attrs:
+      expression: |
+        return {
+            "name": request.user.name,
+            "given_name": request.user.name,
+            "preferred_username": request.user.username,
+            "nickname": request.user.username,
+            "groups": [group.name for group in request.user.groups.all()],
+            "locale": request.user.attributes.get("settings", {}).get("locale"),
+            "picture": request.user.avatar,
+        }

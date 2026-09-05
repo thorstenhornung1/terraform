@@ -25,7 +25,7 @@ version: '3.8'
 
 services:
   authentik-server:
-    image: ghcr.io/goauthentik/server:2026.8.0
+    image: ghcr.io/goauthentik/server:2026.8.1
     command: server
     hostname: authentik-server
     environment:
@@ -74,6 +74,9 @@ services:
         mode: 0444
       - source: blueprint_provider_invalidation_${BLUEPRINT_PROVIDER_INVALIDATION_HASH:-latest}
         target: /blueprints/custom/provider-invalidation.yaml
+        mode: 0444
+      - source: blueprint_avatar_${BLUEPRINT_AVATAR_HASH:-latest}
+        target: /blueprints/custom/avatar.yaml
         mode: 0444
     secrets:
       - authentik_db_password
@@ -147,7 +150,7 @@ services:
       start_period: 600s
 
   authentik-worker:
-    image: ghcr.io/goauthentik/server:2026.8.0
+    image: ghcr.io/goauthentik/server:2026.8.1
     command: worker
     hostname: authentik-worker
     environment:
@@ -195,6 +198,9 @@ services:
       - source: blueprint_provider_invalidation_${BLUEPRINT_PROVIDER_INVALIDATION_HASH:-latest}
         target: /blueprints/custom/provider-invalidation.yaml
         mode: 0444
+      - source: blueprint_avatar_${BLUEPRINT_AVATAR_HASH:-latest}
+        target: /blueprints/custom/avatar.yaml
+        mode: 0444
     secrets:
       - authentik_db_password
       - authentik_secret_key
@@ -229,7 +235,7 @@ services:
         monitor: 120s
 
   authentik-ldap-outpost:
-    image: ghcr.io/goauthentik/ldap:2026.8.0
+    image: ghcr.io/goauthentik/ldap:2026.8.1
     hostname: authentik-ldap-outpost
     environment:
       AUTHENTIK_HOST: "http://authentik-server:9000"
@@ -306,6 +312,8 @@ configs:
     file: ./blueprint-app-metadata.yml
   blueprint_provider_invalidation_${BLUEPRINT_PROVIDER_INVALIDATION_HASH:-latest}:
     file: ./blueprint-provider-invalidation.yml
+  blueprint_avatar_${BLUEPRINT_AVATAR_HASH:-latest}:
+    file: ./blueprint-avatar.yml
 
 # =============================================================================
 # SECRETS
