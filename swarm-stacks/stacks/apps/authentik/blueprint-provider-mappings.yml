@@ -1,0 +1,168 @@
+# =============================================================================
+# Authentik-Blueprint: Ein profile-Mapping fuer alle OAuth2-Provider
+# =============================================================================
+# Anlass 2026-09-05 ("Token-Bombe"): Das eingebaute Standard-Mapping
+# "authentik default OAuth Mapping: OpenID 'profile'" liefert
+# `picture = request.user.avatar` in ALLE Tokens — access_token UND id_token.
+# Seit Benutzer ihr Profilbild als base64-data-URI hochladen (siehe
+# blueprint-avatar.yml), waechst jedes Token um ~160 KB; der resultierende
+# ~216-KB-Bearer-Header riss den userinfo-Abruf mit CURLE_SEND_ERROR
+# (live passiert am 05.09. bei Wallos).
+#
+# Fix: Alle acht Provider, die bisher das Standard-profile-Mapping banden,
+# binden jetzt "Hornung: OpenID 'profile' (mit locale)". Dessen Expression
+# (Quelle: blueprint-avatar.yml, Eintrag 3) liefert picture NUR am
+# userinfo-Endpunkt (request.http_request.path-Weiche) — dort ist die
+# data-URI im Response-BODY unkritisch, und die OIDC-Spec nennt userinfo
+# ohnehin als primaere Referenz fuer picture. Zusaetzlich: rsplit-Heuristik
+# fuer given_name/family_name (mit Attribut-Override), locale und groups.
+#
+# ⚠️ DER MAPPING-NAME IST HISTORISCH: "(mit locale)" stammt aus der
+# UI-Anlage fuer wallos-test. Das Mapping ist jetzt DAS Instanz-weite
+# profile-Mapping. BEWUSST NICHT umbenannt — blueprint-avatar.yml (Eintrag 3)
+# und diese Datei matchen per identifiers auf den Namen; eine Umbenennung
+# in der UI ohne synchrone Anpassung BEIDER Dateien legt beim naechsten
+# Import ein Duplikat an (dieselbe Falle wie in
+# blueprint-provider-invalidation.yml dokumentiert).
+#
+# ⚠️ M2M-ERSETZUNGS-FALLE: attrs.property_mappings ERSETZT die komplette
+# Bindungsliste des Providers, es ergaenzt sie NICHT (gleiche Falle wie die
+# fields-Liste in blueprint-avatar.yml). Jede Liste unten ist deshalb die
+# VOLLSTAENDIGE Ist-Aufnahme aus der DB (2026-09-06), mit genau EINER
+# Aenderung: Standard-profile -> Hornung-profile. Wer einem Provider in der
+# UI ein Mapping anhaengt, verliert es beim naechsten Import — neue
+# Bindungen gehoeren in DIESE Datei.
+#
+# MINIMALINVASIV — was BEWUSST NICHT passiert:
+#   - Das Hornung-email-Mapping ("verified aus Attribut") wird NICHT auf
+#     weitere Provider ausgerollt (email_verified-Historie, siehe
+#     feedback_authentik_email_verified_false) — es bleibt exakt dort, wo
+#     es schon war (Abos, wallos-test).
+#   - "OIDC Groups" (paperless, Taiga), "Application Entitlements" und
+#     "Proxy outpost" (Frigate Admin) bleiben unveraendert gebunden.
+#   - Das managed Standard-Mapping selbst bleibt unangetastet — es wird
+#     nur nirgends mehr gebunden.
+#   - "Provider for wallos-test" fehlt hier ABSICHTLICH: Seine
+#     property_mappings pflegt blueprint-provider-invalidation.yml
+#     bereits vollstaendig (inkl. offline_access).
+#   - "Reisekosten SCIM" ist ein SCIM-Provider (kein OAuth2) — nicht Teil
+#     dieser Datei.
+#
+# Hinweis: "Provider for Abos" wird ZUSAETZLICH von
+# blueprint-provider-invalidation.yml gepatcht (invalidation_flow). Beide
+# Eintraege sind partielle Importe auf disjunkte Felder — das ist ok.
+#
+# ⚠️ PROVIDER-NAMEN = identifiers: Alle Namen stammen aus der Anlage-Zeit
+# ("Provider for Abos", "paperless-oidc", ...). Eine Umbenennung in der UI
+# MUSS hier mitgezogen werden, sonst legt der Blueprint einen zweiten,
+# kaputten Provider an.
+# =============================================================================
+
+version: 1
+metadata:
+  name: Hornung - Provider profile-Mappings (Konsolidierung)
+  labels:
+    blueprints.goauthentik.io/instantiate: "true"
+
+entries:
+  # ---------------------------------------------------------------------------
+  # 1. Die acht Provider: profile-Bindung auf das Hornung-Mapping tauschen
+  # ---------------------------------------------------------------------------
+  - identifiers:
+      name: Immich
+    model: authentik_providers_oauth2.oauth2provider
+    attrs:
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "Hornung: OpenID 'profile' (mit locale)"]]
+
+  - identifiers:
+      name: mailarchiver
+    model: authentik_providers_oauth2.oauth2provider
+    attrs:
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "Hornung: OpenID 'profile' (mit locale)"]]
+
+  - identifiers:
+      name: paperless-oidc
+    model: authentik_providers_oauth2.oauth2provider
+    attrs:
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "Hornung: OpenID 'profile' (mit locale)"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "OIDC Groups"]]
+
+  # Prod-Wallos (abo.hornung-bn.de) — bindet als einziger hier bereits das
+  # Hornung-email-Mapping; das bleibt so.
+  - identifiers:
+      name: Provider for Abos
+    model: authentik_providers_oauth2.oauth2provider
+    attrs:
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "Hornung: OpenID 'email' (verified aus Attribut)"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "Hornung: OpenID 'profile' (mit locale)"]]
+
+  # Frigate haengt hinter dem Proxy-Outpost — Entitlements- und
+  # ak_proxy-Mapping ("Proxy outpost", managed
+  # goauthentik.io/providers/proxy/scope-proxy) MUESSEN mit in der Liste
+  # stehen, sonst bricht die ForwardAuth-Kette.
+  - identifiers:
+      name: Provider for Frigate Admin
+    model: authentik_providers_oauth2.oauth2provider
+    attrs:
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "Hornung: OpenID 'profile' (mit locale)"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: Application Entitlements"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: Proxy outpost"]]
+
+  - identifiers:
+      name: Provider for Steuer
+    model: authentik_providers_oauth2.oauth2provider
+    attrs:
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "Hornung: OpenID 'profile' (mit locale)"]]
+
+  - identifiers:
+      name: reisekosten-provider
+    model: authentik_providers_oauth2.oauth2provider
+    attrs:
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "Hornung: OpenID 'profile' (mit locale)"]]
+
+  - identifiers:
+      name: Taiga OIDC
+    model: authentik_providers_oauth2.oauth2provider
+    attrs:
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "Hornung: OpenID 'profile' (mit locale)"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "OIDC Groups"]]
+
+  # ---------------------------------------------------------------------------
+  # 2. Altlast: verwaister Prompt aus dem alten Datei-Upload-Versuch entfernen
+  # ---------------------------------------------------------------------------
+  # DB-verifiziert 2026-09-06: Der Prompt 'avatar' (field_key profile.avatar)
+  # haengt an KEINER Stage (0 Bindungen in promptstage_fields) — Ueberbleibsel
+  # des Versuchs, der auch die Settings-Zeichenkette
+  # "attributes.profile.avatar,initials" hinterliess (siehe
+  # blueprint-avatar.yml). Es gibt nur DIESEN einen Waisen; der aktive
+  # Prompt 'hornung-field-avatar' (attributes.avatar) haengt am
+  # default-user-settings-Flow und bleibt unberuehrt. Beide identifiers
+  # (name UND field_key) als doppelte Sicherung gegen Fehlgriffe.
+  - identifiers:
+      name: avatar
+      field_key: profile.avatar
+    model: authentik_stages_prompt.prompt
+    state: absent
