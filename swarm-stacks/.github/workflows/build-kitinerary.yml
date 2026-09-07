@@ -28,10 +28,10 @@ on:
       - 'images/kitinerary-extractor/**'
       - '.github/workflows/build-kitinerary.yml'
   schedule:
-    # Tuesday 05:00 UTC — different day from build-pbs-client (Monday) and
-    # build-patroni-postgres (varies) to stagger runner load across the week,
-    # and after the Monday Debian security advisory cadence so the base
-    # image typically has any new CVE patches.
+    # Tuesday 05:00 UTC — different day from build-pbs-client (Monday) to
+    # stagger runner load across the week, and after the Monday Debian
+    # security advisory cadence so the base image typically has any new
+    # CVE patches.
     - cron: '0 5 * * 2'
   workflow_dispatch:
 
@@ -81,11 +81,12 @@ jobs:
           context: images/kitinerary-extractor
           file: images/kitinerary-extractor/Dockerfile
           # Pin micro-arch to x86-64-v3 (Haswell+) so the produced image
-          # runs on homelab Intel i5 CPUs (no AVX-512). Matches the policy
-          # established in swarm-stacks#9 / #12 — see build-patroni-postgres
-          # for the original incident context. kitinerary itself is a
-          # straight Debian package install (no -march=native compile),
-          # so this pin is preventative, not load-bearing.
+          # runs on homelab Intel i5 CPUs (no AVX-512). Policy from
+          # swarm-stacks#9 / #12: a `-march=native` compile picks up AVX-512
+          # on the build runner and then SIGILLs on the older Swarm nodes.
+          # kitinerary itself is a straight Debian package install (no
+          # -march=native compile), so this pin is preventative, not
+          # load-bearing.
           platforms: linux/amd64/v3
           push: true
           tags: ${{ steps.meta.outputs.tags }}

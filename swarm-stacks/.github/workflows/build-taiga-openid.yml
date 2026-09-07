@@ -20,7 +20,8 @@ on:
       - 'images/taiga-openid/**'
       - '.github/workflows/build-taiga-openid.yml'
   schedule:
-    # Weekly rebuild every Monday at 07:00 UTC (after patroni build at 04:00)
+    # Weekly rebuild every Monday at 07:00 UTC (staggered against the
+    # other custom-image builds so they never share the single runner)
     - cron: '0 7 * * 1'
   workflow_dispatch:
 

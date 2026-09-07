@@ -20,8 +20,8 @@
 #     GHCR tags directly. Dependabot does NOT natively scan compose YAML
 #     for image updates — only Dockerfile FROM lines. Renovate would, but
 #     these tags are typically Release-pinned versions (v2.8.2, phi-4,
-#     postgres-ha custom builds) that we want to bump deliberately, NOT
-#     auto-bump. Acceptable gap.
+#     custom builds) that we want to bump deliberately, NOT auto-bump.
+#     Acceptable gap.
 #
 # Sibling repos:
 #   Reisekostenabrechnung — dependabot.yml + dependabot-relock.yml (lock-resync)
@@ -74,18 +74,19 @@ updates:
 
   # ---------------------------------------------------------------------------
   # Custom Docker images built in this repo. 5 Dockerfiles spread across
-  # /images/* and /stacks/{infrastructure,apps}/*/Dockerfile. Each lives
-  # in a different ecosystem-root, so `directories:` (plural) lists all
-  # of them — one weekly group-PR per Dockerfile keeps the review
-  # surface small.
+  # /images/* and /stacks/apps/*/Dockerfile. Each lives in a different
+  # ecosystem-root, so `directories:` (plural) lists all of them — one
+  # weekly group-PR per Dockerfile keeps the review surface small.
   #
   # Why these 5 specifically:
   #   - pbs-backup-client            — Proxmox-Backup client wrapper
-  #   - postgres-ha/docker           — Patroni-Postgres custom build
-  #     (must stay -march=x86-64-v3 to avoid the AVX-512 SIGILL trap,
-  #      see swarm-stacks #9 / #12)
-  #   - samba                        — Samba w/ Authentik LDAP sidecar
   #   - taiga-openid/back, /front    — Custom Taiga OIDC build (PG16)
+  #   - kitinerary-extractor         — KItinerary travel-document parser
+  #   - samba                        — Samba w/ Authentik LDAP sidecar
+  #
+  # Native-code builds here must stay on -march=x86-64-v3 — `native` picks
+  # up AVX-512 on the runner and SIGILLs on the older Swarm nodes
+  # (swarm-stacks #9 / #12).
   #
   # Why NOT compose-files (stacks/**/*.yml):
   #   - Dependabot `docker` ecosystem only scans Dockerfile FROM lines,
@@ -98,7 +99,6 @@ updates:
       - "/images/taiga-openid/back"
       - "/images/taiga-openid/front"
       - "/images/kitinerary-extractor"
-      - "/stacks/infrastructure/postgres-ha/docker"
       - "/stacks/apps/samba"
     target-branch: "main"
     schedule:
